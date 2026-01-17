@@ -1,0 +1,29 @@
+# Binaries
+bin/
+*.exe
+
+# Dependencies
+node_modules/
+
+# Build artifacts
+plugin/main.js
+plugin/main.js.map
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.pem
+*.key
+certs/
+
+# Test data
+test-vault/

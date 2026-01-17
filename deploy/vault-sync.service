@@ -1,0 +1,27 @@
+[Unit]
+Description=Vault Sync Server
+After=network.target
+
+[Service]
+Type=simple
+User=sombra
+Group=sombra
+WorkingDirectory=/opt/vault-sync
+ExecStart=/opt/vault-sync/vault-sync
+Restart=always
+RestartSec=5
+
+# Environment
+Environment=VAULT_SYNC_PORT=8443
+Environment=VAULT_SYNC_STORAGE=/opt/sombra/obsidian-vault
+EnvironmentFile=/opt/vault-sync/.env
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/sombra/obsidian-vault
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
