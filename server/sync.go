@@ -137,14 +137,50 @@ func (s *SyncManager) handleConflict(deviceID string, clientVersion *FileChangeP
 
 	switch s.conflictResolution {
 	case "last_write_wins":
-		// Accept client version (last write wins)
+		// Get server file mtime to compare
+		serverInfo, err := s.storage.GetFileInfo(clientVersion.Path)
+		if err != nil {
+			log.Printf("Failed to get server file info for %s: %v", clientVersion.Path, err)
+			return
+		}
+
+		// Compare mtimes - only accept client version if it's actually newer
+		if clientVersion.MTime <= serverInfo.ModTime {
+			log.Printf("Conflict resolved (server wins - newer mtime %d > %d): %s",
+				serverInfo.ModTime, clientVersion.MTime, clientVersion.Path)
+
+			// Send server version back to client
+			serverContent, err := s.storage.ReadFile(clientVersion.Path)
+			if err != nil {
+				log.Printf("Failed to read server file: %v", err)
+				return
+			}
+
+			serverVersion := &FileChangePayload{
+				Path:    clientVersion.Path,
+				Content: base64.StdEncoding.EncodeToString(serverContent),
+				MTime:   serverInfo.ModTime,
+				Hash:    serverHash,
+			}
+
+			// Send updated version to the client that had old data
+			s.hub.SendTo(deviceID, ServerMessage{
+				Type:         "file_changed",
+				OriginDevice: "server",
+				Payload:      serverVersion,
+			})
+			return
+		}
+
+		// Client version is newer - accept it
 		content, _ := base64.StdEncoding.DecodeString(clientVersion.Content)
 		if err := s.storage.WriteFile(clientVersion.Path, content, clientVersion.MTime); err != nil {
 			log.Printf("Failed to resolve conflict for %s: %v", clientVersion.Path, err)
 			return
 		}
 
-		log.Printf("Conflict resolved (last_write_wins): %s", clientVersion.Path)
+		log.Printf("Conflict resolved (client wins - newer mtime %d > %d): %s",
+			clientVersion.MTime, serverInfo.ModTime, clientVersion.Path)
 
 		// Broadcast to other devices
 		s.hub.Broadcast(deviceID, ServerMessage{
