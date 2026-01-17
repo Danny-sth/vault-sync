@@ -27,3 +27,4 @@ certs/
 
 # Test data
 test-vault/
+server/vault-sync
