@@ -65,6 +65,8 @@ func (s *SyncManager) HandleMessage(deviceID string, msg *SyncMessage) {
 		s.handleFileDelete(deviceID, msg)
 	case "request_full_sync":
 		s.sendFullSync(deviceID)
+	case "request_file":
+		s.handleRequestFile(deviceID, msg)
 	case "ping":
 		s.hub.SendTo(deviceID, ServerMessage{Type: "pong"})
 	default:
@@ -232,6 +234,39 @@ func (s *SyncManager) sendFullSync(deviceID string) {
 		Type: "full_sync",
 		Payload: FullSyncPayload{
 			Files: files,
+		},
+	})
+}
+
+func (s *SyncManager) handleRequestFile(deviceID string, msg *SyncMessage) {
+	payload, ok := s.extractFileDeletePayload(msg.Payload) // Same structure - just path
+	if !ok {
+		log.Printf("Invalid request_file payload from %s", deviceID)
+		return
+	}
+
+	content, err := s.storage.ReadFile(payload.Path)
+	if err != nil {
+		log.Printf("Failed to read file %s for %s: %v", payload.Path, deviceID, err)
+		return
+	}
+
+	fileInfo, err := s.storage.GetFileInfo(payload.Path)
+	if err != nil {
+		log.Printf("Failed to get file info %s for %s: %v", payload.Path, deviceID, err)
+		return
+	}
+
+	log.Printf("Sending file %s to %s (%d bytes)", payload.Path, deviceID, len(content))
+
+	s.hub.SendTo(deviceID, ServerMessage{
+		Type:         "file_changed",
+		OriginDevice: "server",
+		Payload: &FileChangePayload{
+			Path:    payload.Path,
+			Content: base64.StdEncoding.EncodeToString(content),
+			MTime:   fileInfo.ModTime,
+			Hash:    fileInfo.Hash,
 		},
 	})
 }
