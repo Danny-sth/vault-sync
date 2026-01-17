@@ -3,10 +3,14 @@ import { VaultSyncSettings } from "./settings";
 
 // Message types
 export interface SyncMessage {
-  type: "file_change" | "file_delete" | "request_full_sync" | "ping";
+  type: "file_change" | "file_delete" | "request_full_sync" | "request_file" | "ping";
   deviceId: string;
   timestamp: number;
-  payload: FileChangePayload | FileDeletePayload | null;
+  payload: FileChangePayload | FileDeletePayload | RequestFilePayload | null;
+}
+
+export interface RequestFilePayload {
+  path: string;
 }
 
 export interface FileChangePayload {
@@ -151,6 +155,15 @@ export class SyncManager {
       deviceId: this.settings.deviceId,
       timestamp: Date.now(),
       payload: null,
+    });
+  }
+
+  private requestFile(path: string): void {
+    this.send({
+      type: "request_file",
+      deviceId: this.settings.deviceId,
+      timestamp: Date.now(),
+      payload: { path: path },
     });
   }
 
@@ -319,13 +332,17 @@ export class SyncManager {
       localFileMap.set(file.path, file);
     }
 
+    let filesToDownload = 0;
+    let filesToUpload = 0;
+
     // Process server files
     for (const serverFile of payload.files) {
       const localFile = localFileMap.get(serverFile.path);
 
       if (!localFile) {
-        // File exists on server but not locally - will be sent on next server broadcast
-        // We could request it here, but for MVP, rely on real-time sync
+        // File exists on server but not locally - request it
+        this.requestFile(serverFile.path);
+        filesToDownload++;
         continue;
       }
 
@@ -334,9 +351,17 @@ export class SyncManager {
       const localHash = await this.hashContent(content);
       this.localHashes.set(serverFile.path, localHash);
 
-      // If hashes differ, local is newer (send to server)
+      // If hashes differ, compare mtime to decide direction
       if (localHash !== serverFile.hash) {
-        await this.sendFileChange(localFile);
+        if (localFile.stat.mtime > serverFile.mtime) {
+          // Local is newer - send to server
+          await this.sendFileChange(localFile);
+          filesToUpload++;
+        } else {
+          // Server is newer - request from server
+          this.requestFile(serverFile.path);
+          filesToDownload++;
+        }
       }
     }
 
@@ -344,10 +369,12 @@ export class SyncManager {
     for (const [path, file] of localFileMap) {
       if (!serverFiles.has(path) && !path.startsWith(".")) {
         await this.sendFileChange(file);
+        filesToUpload++;
       }
     }
 
-    new Notice("Vault Sync: Sync complete");
+    console.log(`Vault Sync: Requesting ${filesToDownload} files, uploading ${filesToUpload} files`);
+    new Notice(`Vault Sync: Downloading ${filesToDownload}, uploading ${filesToUpload}`);
   }
 
   private handleConflict(payload: ConflictPayload): void {
