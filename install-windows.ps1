@@ -33,7 +33,7 @@ if (-not (Test-Path "$vaultPath\.obsidian")) {
 Write-Host "Vault: $vaultPath" -ForegroundColor Green
 
 # Создать папку плагина
-$pluginDir = "$vaultPath\.obsidian\plugins\vault-sync"
+$pluginDir = "$vaultPath\.obsidian\plugins\vault-sync-realtime"
 New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
 
 # Скачать файлы
@@ -62,12 +62,12 @@ $config | Out-File -Encoding utf8 "$pluginDir\data.json"
 $communityPluginsPath = "$vaultPath\.obsidian\community-plugins.json"
 if (Test-Path $communityPluginsPath) {
     $plugins = Get-Content $communityPluginsPath | ConvertFrom-Json
-    if ($plugins -notcontains "vault-sync") {
-        $plugins += "vault-sync"
+    if ($plugins -notcontains "vault-sync-realtime") {
+        $plugins += "vault-sync-realtime"
         $plugins | ConvertTo-Json | Out-File -Encoding utf8 $communityPluginsPath
     }
 } else {
-    '["vault-sync"]' | Out-File -Encoding utf8 $communityPluginsPath
+    '["vault-sync-realtime"]' | Out-File -Encoding utf8 $communityPluginsPath
 }
 
 Write-Host ""
