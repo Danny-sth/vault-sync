@@ -127,6 +127,35 @@ For secure WebSocket (`wss://`):
    ```
 3. Update plugin URL to `wss://...`
 
+## Roadmap
+
+### Phase 1 - MVP (Done)
+- [x] WebSocket server (Go)
+- [x] File create/modify/delete sync
+- [x] Multi-device broadcast
+- [x] Last-write-wins conflict resolution
+- [x] Obsidian plugin (desktop + mobile)
+- [x] Token authentication
+- [x] Linux/Android/Windows installers
+- [x] CI/CD pipeline
+
+### Phase 2 - UX Improvements
+- [ ] Manual conflict resolution UI (modal in Obsidian)
+- [ ] Selective sync (ignore patterns like `.git/`, `node_modules/`)
+- [ ] Sync status indicator in Obsidian status bar
+- [ ] Connection health monitoring
+
+### Phase 3 - Security & Performance
+- [ ] E2E encryption (client-side encryption before sync)
+- [ ] File history/versioning
+- [ ] Delta sync (send only changes, not full file)
+- [ ] TLS via Caddy (auto HTTPS)
+
+### Phase 4 - Advanced
+- [ ] Web UI for server monitoring
+- [ ] Multiple vault support
+- [ ] Shared vaults between users
+
 ## License
 
 MIT
