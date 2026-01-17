@@ -1,0 +1,9 @@
+{
+  "serverUrl": "ws://90.156.230.49:8443/ws",
+  "token": "1fc6ab61063cd3e81f82a062acc36555a7b9fa4d70022030ff3f2e7353ef9dd7",
+  "deviceId": "android-phone",
+  "deviceName": "Android Phone",
+  "autoConnect": true,
+  "syncOnStart": true,
+  "debounceMs": 500
+}
