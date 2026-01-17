@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  vault-sync:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "8443:8443"
+    environment:
+      - VAULT_SYNC_TOKEN=${VAULT_SYNC_TOKEN}
+      - VAULT_SYNC_PORT=8443
+      - VAULT_SYNC_STORAGE=/data/vault
+    volumes:
+      - vault-data:/data/vault
+      - ./certs:/etc/vault-sync:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8443/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  vault-data:
