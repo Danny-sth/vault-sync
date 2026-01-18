@@ -3,10 +3,10 @@ import { VaultSyncSettings } from "./settings";
 
 // Message types
 export interface SyncMessage {
-  type: "file_change" | "file_delete" | "request_full_sync" | "request_file" | "ping";
+  type: "file_change" | "file_delete" | "file_move" | "request_full_sync" | "request_file" | "ping";
   deviceId: string;
   timestamp: number;
-  payload: FileChangePayload | FileDeletePayload | RequestFilePayload | null;
+  payload: FileChangePayload | FileDeletePayload | FileMovePayload | RequestFilePayload | null;
 }
 
 export interface RequestFilePayload {
@@ -25,8 +25,16 @@ export interface FileDeletePayload {
   path: string;
 }
 
+export interface FileMovePayload {
+  oldPath: string;
+  newPath: string;
+  content: string; // Base64 encoded
+  mtime: number;
+  hash: string;
+}
+
 export interface ServerMessage {
-  type: "file_changed" | "file_deleted" | "full_sync" | "conflict" | "pong";
+  type: "file_changed" | "file_deleted" | "file_moved" | "full_sync" | "conflict" | "pong";
   originDevice: string;
   payload: unknown;
 }
@@ -239,6 +247,56 @@ export class SyncManager {
     });
   }
 
+  async queueFileMove(file: TFile, oldPath: string): Promise<void> {
+    if (this.isProcessingRemote) return;
+
+    // Cancel any pending operations for both paths
+    const existingOld = this.pendingChanges.get(oldPath);
+    if (existingOld) clearTimeout(existingOld);
+    const existingNew = this.pendingChanges.get(file.path);
+    if (existingNew) clearTimeout(existingNew);
+
+    this.pendingChanges.set(
+      file.path,
+      setTimeout(async () => {
+        await this.sendFileMove(file, oldPath);
+        this.pendingChanges.delete(file.path);
+      }, this.settings.debounceMs)
+    );
+  }
+
+  private async sendFileMove(file: TFile, oldPath: string): Promise<void> {
+    if (!this.isConnected()) return;
+
+    try {
+      const content = await this.app.vault.read(file);
+      const hash = await this.hashContent(content);
+
+      // Update hash cache
+      this.localHashes.delete(oldPath);
+      this.localHashes.set(file.path, hash);
+
+      const payload: FileMovePayload = {
+        oldPath: oldPath,
+        newPath: file.path,
+        content: this.encodeBase64(content),
+        mtime: file.stat.mtime,
+        hash: hash,
+      };
+
+      this.send({
+        type: "file_move",
+        deviceId: this.settings.deviceId,
+        timestamp: Date.now(),
+        payload: payload,
+      });
+
+      console.log(`Vault Sync: Sent file move ${oldPath} -> ${file.path}`);
+    } catch (e) {
+      console.error(`Vault Sync: Failed to send file move for ${file.path}:`, e);
+    }
+  }
+
   private send(msg: SyncMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
@@ -255,6 +313,9 @@ export class SyncManager {
         break;
       case "file_deleted":
         await this.handleRemoteFileDelete(msg.payload as FileDeletePayload);
+        break;
+      case "file_moved":
+        await this.handleRemoteFileMove(msg.payload as FileMovePayload);
         break;
       case "full_sync":
         await this.handleFullSync(msg.payload as FullSyncPayload);
@@ -315,6 +376,46 @@ export class SyncManager {
       }
     } catch (e) {
       console.error(`Vault Sync: Failed to delete ${payload.path}:`, e);
+    } finally {
+      this.isProcessingRemote = false;
+    }
+  }
+
+  private async handleRemoteFileMove(payload: FileMovePayload): Promise<void> {
+    this.isProcessingRemote = true;
+
+    try {
+      const content = this.decodeBase64(payload.content);
+
+      // Delete old file if exists
+      const oldFile = this.app.vault.getAbstractFileByPath(payload.oldPath);
+      if (oldFile) {
+        await this.app.vault.delete(oldFile);
+        this.localHashes.delete(payload.oldPath);
+      }
+
+      // Ensure directory exists for new path
+      const dir = payload.newPath.substring(0, payload.newPath.lastIndexOf("/"));
+      if (dir) {
+        const existingFolder = this.app.vault.getAbstractFileByPath(dir);
+        if (!existingFolder) {
+          await this.app.vault.createFolder(dir);
+        }
+      }
+
+      // Create new file
+      const existingNew = this.app.vault.getAbstractFileByPath(payload.newPath);
+      if (existingNew instanceof TFile) {
+        await this.app.vault.modify(existingNew, content);
+      } else {
+        await this.app.vault.create(payload.newPath, content);
+      }
+
+      this.localHashes.set(payload.newPath, payload.hash);
+      console.log(`Vault Sync: Applied remote move ${payload.oldPath} -> ${payload.newPath}`);
+    } catch (e) {
+      console.error(`Vault Sync: Failed to apply remote move:`, e);
+      new Notice(`Vault Sync: Failed to move ${payload.oldPath}`);
     } finally {
       this.isProcessingRemote = false;
     }

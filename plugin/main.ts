@@ -73,8 +73,8 @@ export default class VaultSyncPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("rename", (file: TAbstractFile, oldPath: string) => {
         if (file instanceof TFile) {
-          this.syncManager?.queueFileDelete(oldPath);
-          this.syncManager?.queueFileChange(file);
+          // Use atomic file_move instead of separate delete + change
+          this.syncManager?.queueFileMove(file, oldPath);
         }
       })
     );
