@@ -25,6 +25,14 @@ type FileDeletePayload struct {
 	Path string `json:"path"`
 }
 
+type FileMovePayload struct {
+	OldPath string `json:"oldPath"`
+	NewPath string `json:"newPath"`
+	Content string `json:"content"` // Base64 encoded
+	MTime   int64  `json:"mtime"`
+	Hash    string `json:"hash"`
+}
+
 // Server -> Client messages
 type ServerMessage struct {
 	Type         string      `json:"type"`
@@ -63,6 +71,8 @@ func (s *SyncManager) HandleMessage(deviceID string, msg *SyncMessage) {
 		s.handleFileChange(deviceID, msg)
 	case "file_delete":
 		s.handleFileDelete(deviceID, msg)
+	case "file_move":
+		s.handleFileMove(deviceID, msg)
 	case "request_full_sync":
 		s.sendFullSync(deviceID)
 	case "request_file":
@@ -129,6 +139,42 @@ func (s *SyncManager) handleFileDelete(deviceID string, msg *SyncMessage) {
 	// Broadcast to other devices
 	s.hub.Broadcast(deviceID, ServerMessage{
 		Type:         "file_deleted",
+		OriginDevice: deviceID,
+		Payload:      payload,
+	})
+}
+
+func (s *SyncManager) handleFileMove(deviceID string, msg *SyncMessage) {
+	payload, ok := s.extractFileMovePayload(msg.Payload)
+	if !ok {
+		log.Printf("Invalid file_move payload from %s", deviceID)
+		return
+	}
+
+	// Decode content
+	content, err := base64.StdEncoding.DecodeString(payload.Content)
+	if err != nil {
+		log.Printf("Failed to decode content from %s: %v", deviceID, err)
+		return
+	}
+
+	// Delete old file first
+	if err := s.storage.DeleteFile(payload.OldPath); err != nil {
+		log.Printf("Failed to delete old file %s during move: %v", payload.OldPath, err)
+		// Continue anyway - file might not exist on server
+	}
+
+	// Write new file
+	if err := s.storage.WriteFile(payload.NewPath, content, payload.MTime); err != nil {
+		log.Printf("Failed to write new file %s during move: %v", payload.NewPath, err)
+		return
+	}
+
+	log.Printf("File moved: %s -> %s (from %s)", payload.OldPath, payload.NewPath, deviceID)
+
+	// Broadcast to other devices
+	s.hub.Broadcast(deviceID, ServerMessage{
+		Type:         "file_moved",
 		OriginDevice: deviceID,
 		Payload:      payload,
 	})
@@ -327,6 +373,47 @@ func (s *SyncManager) extractFileDeletePayload(payload interface{}) (*FileDelete
 		result.Path = path
 	} else {
 		return nil, false
+	}
+
+	return result, true
+}
+
+func (s *SyncManager) extractFileMovePayload(payload interface{}) (*FileMovePayload, bool) {
+	if payload == nil {
+		return nil, false
+	}
+
+	data, ok := payload.(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+
+	result := &FileMovePayload{}
+
+	if oldPath, ok := data["oldPath"].(string); ok {
+		result.OldPath = oldPath
+	} else {
+		return nil, false
+	}
+
+	if newPath, ok := data["newPath"].(string); ok {
+		result.NewPath = newPath
+	} else {
+		return nil, false
+	}
+
+	if content, ok := data["content"].(string); ok {
+		result.Content = content
+	} else {
+		return nil, false
+	}
+
+	if mtime, ok := data["mtime"].(float64); ok {
+		result.MTime = int64(mtime)
+	}
+
+	if hash, ok := data["hash"].(string); ok {
+		result.Hash = hash
 	}
 
 	return result, true
