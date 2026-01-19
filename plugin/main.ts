@@ -49,7 +49,7 @@ export default class VaultSyncPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("modify", (file) => {
         if (file instanceof TFile) {
-          this.syncManager?.queueFileChange(file);
+          void this.syncManager?.queueFileChange(file);
         }
       })
     );
@@ -57,7 +57,7 @@ export default class VaultSyncPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("create", (file) => {
         if (file instanceof TFile) {
-          this.syncManager?.queueFileChange(file);
+          void this.syncManager?.queueFileChange(file);
         }
       })
     );
@@ -65,7 +65,7 @@ export default class VaultSyncPlugin extends Plugin {
     this.registerEvent(
       this.app.vault.on("delete", (file) => {
         if (file instanceof TFile) {
-          this.syncManager?.queueFileDelete(file.path);
+          void this.syncManager?.queueFileDelete(file.path);
         }
       })
     );
@@ -74,7 +74,7 @@ export default class VaultSyncPlugin extends Plugin {
       this.app.vault.on("rename", (file: TAbstractFile, oldPath: string) => {
         if (file instanceof TFile) {
           // Use atomic file_move instead of separate delete + change
-          this.syncManager?.queueFileMove(file, oldPath);
+          void this.syncManager?.queueFileMove(file, oldPath);
         }
       })
     );

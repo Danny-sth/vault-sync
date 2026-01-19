@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Platform, PluginSettingTab, Setting } from "obsidian";
 import VaultSyncPlugin from "./main";
 
 export interface VaultSyncSettings {
@@ -26,14 +26,13 @@ function generateDeviceId(): string {
 }
 
 function getPlatformName(): string {
-  const platform = navigator.platform.toLowerCase();
-  if (platform.includes("win")) return "Windows";
-  if (platform.includes("mac")) return "Mac";
-  if (platform.includes("linux")) return "Linux";
-  if (platform.includes("android") || /android/i.test(navigator.userAgent))
-    return "Android";
-  if (platform.includes("iphone") || platform.includes("ipad")) return "iOS";
-  return "Unknown";
+  if (Platform.isWin) return "Windows";
+  if (Platform.isMacOS) return "Mac";
+  if (Platform.isLinux) return "Linux";
+  if (Platform.isAndroidApp) return "Android";
+  if (Platform.isIosApp) return "iOS";
+  if (Platform.isMobile) return "Mobile";
+  return "Desktop";
 }
 
 export class VaultSyncSettingTab extends PluginSettingTab {
@@ -48,13 +47,13 @@ export class VaultSyncSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "Vault Sync Settings" });
+    new Setting(containerEl).setName("Vault sync settings").setHeading();
 
     // Connection settings
-    containerEl.createEl("h3", { text: "Connection" });
+    new Setting(containerEl).setName("Connection").setHeading();
 
     new Setting(containerEl)
-      .setName("Server URL")
+      .setName("Server url")
       .setDesc("WebSocket server address (wss://...)")
       .addText((text) =>
         text
@@ -67,7 +66,7 @@ export class VaultSyncSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Authentication Token")
+      .setName("Authentication token")
       .setDesc("Token for authenticating with the server")
       .addText((text) => {
         text
@@ -81,10 +80,10 @@ export class VaultSyncSettingTab extends PluginSettingTab {
       });
 
     // Device settings
-    containerEl.createEl("h3", { text: "Device" });
+    new Setting(containerEl).setName("Device").setHeading();
 
     new Setting(containerEl)
-      .setName("Device Name")
+      .setName("Device name")
       .setDesc("Friendly name for this device")
       .addText((text) =>
         text
@@ -97,17 +96,17 @@ export class VaultSyncSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Device ID")
+      .setName("Device id")
       .setDesc("Unique identifier for this device (auto-generated)")
       .addText((text) => {
         text.setValue(this.plugin.settings.deviceId).setDisabled(true);
       });
 
     // Sync settings
-    containerEl.createEl("h3", { text: "Sync Behavior" });
+    new Setting(containerEl).setName("Sync behavior").setHeading();
 
     new Setting(containerEl)
-      .setName("Auto Connect")
+      .setName("Auto connect")
       .setDesc("Automatically connect to server on startup")
       .addToggle((toggle) =>
         toggle
@@ -119,7 +118,7 @@ export class VaultSyncSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Sync on Start")
+      .setName("Sync on start")
       .setDesc("Request full sync when connecting")
       .addToggle((toggle) =>
         toggle
@@ -147,15 +146,15 @@ export class VaultSyncSettingTab extends PluginSettingTab {
       );
 
     // Actions
-    containerEl.createEl("h3", { text: "Actions" });
+    new Setting(containerEl).setName("Actions").setHeading();
 
     new Setting(containerEl)
-      .setName("Connection Status")
+      .setName("Connection status")
       .setDesc(this.plugin.isConnected() ? "Connected" : "Disconnected")
       .addButton((button) =>
         button
           .setButtonText(this.plugin.isConnected() ? "Disconnect" : "Connect")
-          .onClick(async () => {
+          .onClick(() => {
             if (this.plugin.isConnected()) {
               this.plugin.disconnect();
             } else {
@@ -167,13 +166,13 @@ export class VaultSyncSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Full Sync")
+      .setName("Full sync")
       .setDesc("Request full sync from server")
       .addButton((button) =>
         button
-          .setButtonText("Sync Now")
+          .setButtonText("Sync now")
           .setDisabled(!this.plugin.isConnected())
-          .onClick(async () => {
+          .onClick(() => {
             this.plugin.requestFullSync();
           })
       );
