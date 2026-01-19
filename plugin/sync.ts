@@ -466,11 +466,21 @@ export class SyncManager {
       }
     }
 
-    // Send files that exist locally but not on server
+    // Handle files that exist locally but not on server
     for (const [path, file] of localFileMap) {
       if (!serverFiles.has(path) && !path.startsWith(".")) {
-        await this.sendFileChange(file);
-        filesToUpload++;
+        // Server is source of truth - delete local files that don't exist on server
+        // This prevents "resurrection" of deleted files after reconnect
+        this.isProcessingRemote = true;
+        try {
+          await this.app.vault.delete(file);
+          this.localHashes.delete(path);
+          console.log(`Vault Sync: Deleted local-only file ${path} (not on server)`);
+        } catch (e) {
+          console.error(`Vault Sync: Failed to delete ${path}:`, e);
+        } finally {
+          this.isProcessingRemote = false;
+        }
       }
     }
 
