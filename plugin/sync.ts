@@ -491,17 +491,31 @@ export class SyncManager {
         }
       }
 
-      // Upload local-only files (that weren't identified as moved)
+      // Local-only files: check if moved or should be deleted
+      // Server is source of truth!
+      let filesDeleted = 0;
       for (const file of localOnlyFiles) {
         const hash = this.localHashes.get(file.path);
-        if (!hash || !serverHashToPath.has(hash)) {
-          void this.sendFileChange(file);
-          filesToUpload++;
+        if (hash && serverHashToPath.has(hash)) {
+          // This is a moved file - keep it, server path will be deleted above
+          console.debug(`Vault sync: Keeping moved file: ${file.path}`);
+        } else {
+          // File doesn't exist on server - DELETE locally
+          console.debug(`Vault sync: Deleting local file not on server: ${file.path}`);
+          this.isProcessingRemote = true;
+          try {
+            await this.app.vault.delete(file);
+            filesDeleted++;
+          } catch (e) {
+            console.error(`Vault sync: Failed to delete ${file.path}:`, e);
+          } finally {
+            this.isProcessingRemote = false;
+          }
         }
       }
 
-      console.debug(`Vault sync: ↓${filesToDownload} ↑${filesToUpload} 🔄${filesMoved}`);
-      new Notice(`Vault sync: ↓${filesToDownload} ↑${filesToUpload} 🔄${filesMoved}`);
+      console.debug(`Vault sync: ↓${filesToDownload} 🗑${filesDeleted} 🔄${filesMoved}`);
+      new Notice(`Vault sync: ↓${filesToDownload} 🗑${filesDeleted} 🔄${filesMoved}`);
     } catch (e) {
       console.error("Vault sync: Full sync error:", e);
       new Notice("Vault sync: Sync failed");
