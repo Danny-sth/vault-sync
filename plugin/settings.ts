@@ -51,7 +51,7 @@ export class VaultSyncSettingTab extends PluginSettingTab {
     new Setting(containerEl).setName("Connection").setHeading();
 
     new Setting(containerEl)
-      .setName("Server url")
+      .setName("Server URL")
       .setDesc("WebSocket server address (wss://...)")
       .addText((text) =>
         text
@@ -94,7 +94,7 @@ export class VaultSyncSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Device id")
+      .setName("Device ID")
       .setDesc("Unique identifier for this device (auto-generated)")
       .addText((text) => {
         text.setValue(this.plugin.settings.deviceId).setDisabled(true);
