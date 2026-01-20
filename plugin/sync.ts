@@ -439,24 +439,34 @@ export class SyncManager {
         localFileMap.set(file.path, file);
       }
 
-      // Find local files NOT on server (candidates for move detection)
+      // Compute hashes for ALL local files (needed for move detection)
+      // Use cached hashes when available
+      const localHashToFile = new Map<string, TFile>();
+      let hashCount = 0;
+      for (const file of localFiles) {
+        try {
+          let hash = this.localHashes.get(file.path);
+          if (!hash) {
+            const content = await this.app.vault.read(file);
+            hash = await this.hashContent(content);
+            this.localHashes.set(file.path, hash);
+          }
+          localHashToFile.set(hash, file);
+          hashCount++;
+          // Yield every 50 files to prevent UI freeze on mobile
+          if (hashCount % 50 === 0) {
+            await new Promise(resolve => setTimeout(resolve, 0));
+          }
+        } catch (e) {
+          console.debug(`Vault sync: Could not hash ${file.path}`);
+        }
+      }
+
+      // Find local files NOT on server
       const localOnlyFiles: TFile[] = [];
       for (const [path, file] of localFileMap) {
         if (!serverFiles.has(path)) {
           localOnlyFiles.push(file);
-        }
-      }
-
-      // Pre-compute hashes ONLY for local-only files (small set)
-      const localHashToFile = new Map<string, TFile>();
-      for (const file of localOnlyFiles) {
-        try {
-          const content = await this.app.vault.read(file);
-          const hash = await this.hashContent(content);
-          this.localHashes.set(file.path, hash);
-          localHashToFile.set(hash, file);
-        } catch (e) {
-          console.debug(`Vault sync: Could not hash ${file.path}`);
         }
       }
 
