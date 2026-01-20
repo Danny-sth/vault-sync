@@ -422,89 +422,90 @@ export class SyncManager {
   }
 
   private async handleFullSync(payload: FullSyncPayload): Promise<void> {
-    new Notice(`Vault sync: Syncing ${payload.files.length} files...`);
+    try {
+      new Notice(`Vault sync: Syncing ${payload.files.length} files...`);
 
-    const serverFiles = new Set(payload.files.map((f) => f.path));
-    const serverHashToPath = new Map<string, string>();
-    for (const f of payload.files) {
-      serverHashToPath.set(f.hash, f.path);
-    }
-
-    // Build local file list and hash map
-    const localFiles = this.app.vault.getFiles();
-    const localFileMap = new Map<string, TFile>();
-    const localHashToFile = new Map<string, TFile>();
-
-    for (const file of localFiles) {
-      localFileMap.set(file.path, file);
-      // Pre-compute hashes for move detection
-      if (!file.path.startsWith(".")) {
-        const content = await this.app.vault.read(file);
-        const hash = await this.hashContent(content);
-        this.localHashes.set(file.path, hash);
-        localHashToFile.set(hash, file);
+      const serverFiles = new Map<string, FileInfo>();
+      const serverHashToPath = new Map<string, string>();
+      for (const f of payload.files) {
+        serverFiles.set(f.path, f);
+        serverHashToPath.set(f.hash, f.path);
       }
-    }
 
-    let filesToDownload = 0;
-    let filesToUpload = 0;
-    let filesDeleted = 0;
+      // Build local file map
+      const localFiles = this.app.vault.getFiles().filter(f => !f.path.startsWith("."));
+      const localFileMap = new Map<string, TFile>();
+      for (const file of localFiles) {
+        localFileMap.set(file.path, file);
+      }
 
-    // Process server files
-    for (const serverFile of payload.files) {
-      const localFile = localFileMap.get(serverFile.path);
-
-      if (!localFile) {
-        // File exists on server but not locally
-        // Check if it was moved (same hash exists at different path)
-        const movedFile = localHashToFile.get(serverFile.hash);
-        if (movedFile && movedFile.path !== serverFile.path) {
-          // File was moved locally - delete old path on server
-          console.debug(`Vault sync: Detected move: ${serverFile.path} -> ${movedFile.path}`);
-          this.sendFileDelete(serverFile.path);
-          filesDeleted++;
-          continue;
+      // Find local files NOT on server (candidates for move detection)
+      const localOnlyFiles: TFile[] = [];
+      for (const [path, file] of localFileMap) {
+        if (!serverFiles.has(path)) {
+          localOnlyFiles.push(file);
         }
-
-        // Truly missing file - request it
-        this.requestFile(serverFile.path);
-        filesToDownload++;
-        continue;
       }
 
-      const localHash = this.localHashes.get(serverFile.path);
+      // Pre-compute hashes ONLY for local-only files (small set)
+      const localHashToFile = new Map<string, TFile>();
+      for (const file of localOnlyFiles) {
+        try {
+          const content = await this.app.vault.read(file);
+          const hash = await this.hashContent(content);
+          this.localHashes.set(file.path, hash);
+          localHashToFile.set(hash, file);
+        } catch (e) {
+          console.debug(`Vault sync: Could not hash ${file.path}`);
+        }
+      }
 
-      // If hashes differ, compare mtime to decide direction
-      if (localHash !== serverFile.hash) {
-        if (localFile.stat.mtime > serverFile.mtime) {
-          // Local is newer - send to server
-          await this.sendFileChange(localFile);
-          filesToUpload++;
+      let filesToDownload = 0;
+      let filesToUpload = 0;
+      let filesMoved = 0;
+
+      // Files on server - check if we need to download or if it was moved
+      for (const [serverPath, serverFile] of serverFiles) {
+        const localFile = localFileMap.get(serverPath);
+
+        if (!localFile) {
+          // Check if file was moved (same hash exists locally at different path)
+          const movedFile = localHashToFile.get(serverFile.hash);
+          if (movedFile) {
+            console.debug(`Vault sync: Detected move: ${serverPath} -> ${movedFile.path}`);
+            this.sendFileDelete(serverPath);
+            filesMoved++;
+          } else {
+            this.requestFile(serverPath);
+            filesToDownload++;
+          }
         } else {
-          // Server is newer - request from server
-          this.requestFile(serverFile.path);
-          filesToDownload++;
+          // File exists at same path - check mtime
+          if (localFile.stat.mtime > serverFile.mtime) {
+            void this.sendFileChange(localFile);
+            filesToUpload++;
+          } else if (localFile.stat.mtime < serverFile.mtime) {
+            this.requestFile(serverPath);
+            filesToDownload++;
+          }
         }
       }
-    }
 
-    // Handle files that exist locally but not on server
-    for (const [path, file] of localFileMap) {
-      if (!serverFiles.has(path) && !path.startsWith(".")) {
-        // Check if this file exists on server at different path (was moved FROM server path)
-        const localHash = this.localHashes.get(path);
-        if (localHash && serverHashToPath.has(localHash)) {
-          // Already handled above as delete of old path
-          continue;
+      // Upload local-only files (that weren't identified as moved)
+      for (const file of localOnlyFiles) {
+        const hash = this.localHashes.get(file.path);
+        if (!hash || !serverHashToPath.has(hash)) {
+          void this.sendFileChange(file);
+          filesToUpload++;
         }
-        // New local file - upload to server
-        await this.sendFileChange(file);
-        filesToUpload++;
       }
-    }
 
-    console.debug(`Vault sync: Downloaded ${filesToDownload}, uploaded ${filesToUpload}, moved ${filesDeleted}`);
-    new Notice(`Vault sync: ↓${filesToDownload} ↑${filesToUpload} 🔄${filesDeleted}`);
+      console.debug(`Vault sync: ↓${filesToDownload} ↑${filesToUpload} 🔄${filesMoved}`);
+      new Notice(`Vault sync: ↓${filesToDownload} ↑${filesToUpload} 🔄${filesMoved}`);
+    } catch (e) {
+      console.error("Vault sync: Full sync error:", e);
+      new Notice("Vault sync: Sync failed");
+    }
   }
 
   private handleConflict(payload: ConflictPayload): void {
