@@ -506,12 +506,16 @@ export class SyncManager {
       let filesDeleted = 0;
       for (const file of localOnlyFiles) {
         const hash = this.localHashes.get(file.path);
-        if (hash && serverHashToPath.has(hash)) {
-          // This is a moved file - keep it, server path will be deleted above
-          console.debug(`Vault sync: Keeping moved file: ${file.path}`);
+        const serverPath = hash ? serverHashToPath.get(hash) : null;
+
+        if (serverPath && !localFileMap.has(serverPath)) {
+          // File was moved: exists on server at different path, but that path doesn't exist locally
+          // Keep this file, server's old path will be deleted
+          console.debug(`Vault sync: Keeping moved file: ${file.path} (server has at ${serverPath})`);
         } else {
-          // File doesn't exist on server - DELETE locally
-          console.debug(`Vault sync: Deleting local file not on server: ${file.path}`);
+          // Either: file doesn't exist on server at all, OR
+          // server has it at different path BUT we also have it at that path (duplicate!)
+          console.debug(`Vault sync: Deleting local file: ${file.path}`);
           this.isProcessingRemote = true;
           try {
             await this.app.vault.delete(file);
