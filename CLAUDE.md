@@ -87,10 +87,10 @@ vault-sync/
 ```typescript
 // Client → Server
 interface SyncMessage {
-  type: 'file_change' | 'file_delete' | 'request_full_sync' | 'ping';
+  type: 'file_change' | 'file_delete' | 'file_move' | 'request_full_sync' | 'request_file' | 'ping';
   deviceId: string;
   timestamp: number;
-  payload: FileChange | FileDelete | null;
+  payload: FileChange | FileDelete | FileMove | RequestFile | null;
 }
 
 interface FileChange {
@@ -104,9 +104,21 @@ interface FileDelete {
   path: string;
 }
 
+interface FileMove {
+  oldPath: string;
+  newPath: string;
+  content: string;        // Base64 encoded
+  mtime: number;
+  hash: string;
+}
+
+interface RequestFile {
+  path: string;
+}
+
 // Server → Client
 interface ServerMessage {
-  type: 'file_changed' | 'file_deleted' | 'full_sync' | 'conflict' | 'pong';
+  type: 'file_changed' | 'file_deleted' | 'file_moved' | 'full_sync' | 'conflict' | 'pong';
   originDevice: string;   // Who made the change
   payload: any;
 }
@@ -214,11 +226,11 @@ func (s *Server) handleFileChange(origin string, change FileChange) {
 
 ```json
 {
-  "id": "vault-sync",
+  "id": "vault-sync-realtime",
   "name": "Vault Sync",
-  "version": "0.1.0",
+  "version": "0.1.6",
   "minAppVersion": "1.0.0",
-  "description": "Real-time vault sync via WebSocket",
+  "description": "Real-time vault sync via WebSocket.",
   "author": "Danny",
   "isDesktopOnly": false
 }
@@ -405,17 +417,19 @@ sudo systemctl start vault-sync
 
 ## MVP Scope
 
-### Phase 1 (MVP)
+### Phase 1 (MVP) - Done
 - [x] WebSocket server (Go)
 - [x] File create/modify/delete sync
+- [x] File move/rename detection (hash-based)
 - [x] Multi-device broadcast
 - [x] Last-write-wins conflicts
-- [x] Obsidian plugin (desktop)
+- [x] Obsidian plugin (desktop + mobile)
 - [x] Basic auth (token)
 - [x] TLS
+- [x] Linux/Android/Windows installers
+- [x] CI/CD pipeline
 
-### Phase 2
-- [ ] Android support (Obsidian Mobile)
+### Phase 2 - UX Improvements
 - [ ] Manual conflict resolution UI
 - [ ] Selective sync (ignore patterns)
 - [ ] Sync status indicator

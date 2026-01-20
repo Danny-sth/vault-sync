@@ -27,7 +27,8 @@ Real-time Obsidian vault synchronization via WebSocket.
 ```
 
 - **Edit on any device** → Plugin sends to server → Server broadcasts to others
-- **Conflict resolution**: Last-write-wins (by default)
+- **Move/rename files** via file manager or Obsidian → Automatically detected and synced
+- **Conflict resolution**: Last-write-wins (by mtime)
 - **Sombra** reads synced `.md` files directly from disk
 
 ## Setup
@@ -101,8 +102,8 @@ In Obsidian: Settings → Vault Sync:
 
 To release a new plugin version:
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.7
+git push origin v0.1.7
 ```
 
 ## Development
@@ -132,6 +133,7 @@ For secure WebSocket (`wss://`):
 ### Phase 1 - MVP (Done)
 - [x] WebSocket server (Go)
 - [x] File create/modify/delete sync
+- [x] File move/rename detection (via hash comparison)
 - [x] Multi-device broadcast
 - [x] Last-write-wins conflict resolution
 - [x] Obsidian plugin (desktop + mobile)
