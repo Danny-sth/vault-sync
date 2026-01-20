@@ -47,9 +47,7 @@ export class VaultSyncSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    new Setting(containerEl).setName("Vault sync settings").setHeading();
-
-    // Connection settings
+    // Connection
     new Setting(containerEl).setName("Connection").setHeading();
 
     new Setting(containerEl)
@@ -87,7 +85,7 @@ export class VaultSyncSettingTab extends PluginSettingTab {
       .setDesc("Friendly name for this device")
       .addText((text) =>
         text
-          .setPlaceholder("My Device")
+          .setPlaceholder("My device")
           .setValue(this.plugin.settings.deviceName)
           .onChange(async (value) => {
             this.plugin.settings.deviceName = value;
