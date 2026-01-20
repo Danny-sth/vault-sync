@@ -1,7 +1,7 @@
 {
   "id": "vault-sync-realtime",
   "name": "Vault Sync",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "minAppVersion": "1.0.0",
   "description": "Real-time vault sync via WebSocket.",
   "author": "Danny",
