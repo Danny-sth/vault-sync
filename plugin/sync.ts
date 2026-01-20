@@ -89,7 +89,7 @@ export class SyncManager {
     }
 
     if (!this.settings.serverUrl || !this.settings.token) {
-      new Notice("Vault sync: Server url and token are required");
+      new Notice("Vault sync: Server URL and token are required");
       return;
     }
 
