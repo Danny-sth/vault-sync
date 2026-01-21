@@ -89,7 +89,7 @@ export class SyncManager {
     }
 
     if (!this.settings.serverUrl || !this.settings.token) {
-      new Notice("Vault sync: Server URL and token are required");
+      new Notice("Vault sync: server URL and token are required");
       return;
     }
 
@@ -100,13 +100,13 @@ export class SyncManager {
     try {
       this.ws = new WebSocket(url.toString());
     } catch (e) {
-      new Notice(`Vault sync: Failed to create WebSocket: ${e}`);
+      new Notice(`Vault sync: failed to create WebSocket: ${e}`);
       return;
     }
 
     this.ws.onopen = () => {
       this.reconnectAttempts = 0;
-      new Notice("Vault sync: Connected");
+      new Notice("Vault sync: connected");
       this.onConnectionChange?.(true);
 
       if (this.settings.syncOnStart) {
@@ -120,10 +120,10 @@ export class SyncManager {
       if (!event.wasClean && this.reconnectAttempts < this.maxReconnectAttempts) {
         const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
         this.reconnectAttempts++;
-        new Notice(`Vault sync: Reconnecting in ${delay / 1000}s...`);
+        new Notice(`Vault sync: reconnecting in ${delay / 1000}s...`);
         this.reconnectTimeout = setTimeout(() => this.connect(), delay);
       } else if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-        new Notice("Vault sync: Max reconnect attempts reached");
+        new Notice("Vault sync: max reconnect attempts reached");
       }
     };
 
@@ -153,7 +153,7 @@ export class SyncManager {
       this.ws = null;
     }
 
-    new Notice("Vault sync: Disconnected");
+    new Notice("Vault sync: disconnected");
     this.onConnectionChange?.(false);
   }
 
@@ -358,7 +358,7 @@ export class SyncManager {
       console.debug(`Vault sync: Applied remote change to ${path}`);
     } catch (e) {
       console.error(`Vault Sync: Failed to apply remote change:`, e);
-      new Notice(`Vault sync: Failed to sync ${payload.path}`);
+      new Notice(`Vault sync: failed to sync ${payload.path}`);
     } finally {
       this.isProcessingRemote = false;
     }
@@ -415,7 +415,7 @@ export class SyncManager {
       console.debug(`Vault sync: Applied remote move ${payload.oldPath} -> ${payload.newPath}`);
     } catch (e) {
       console.error(`Vault Sync: Failed to apply remote move:`, e);
-      new Notice(`Vault sync: Failed to move ${payload.oldPath}`);
+      new Notice(`Vault sync: failed to move ${payload.oldPath}`);
     } finally {
       this.isProcessingRemote = false;
     }
@@ -423,7 +423,7 @@ export class SyncManager {
 
   private async handleFullSync(payload: FullSyncPayload): Promise<void> {
     try {
-      new Notice(`Vault sync: Syncing ${payload.files.length} files...`);
+      new Notice(`Vault sync: syncing ${payload.files.length} files...`);
 
       const serverFiles = new Map<string, FileInfo>();
       const serverHashToPath = new Map<string, string>();
@@ -532,14 +532,14 @@ export class SyncManager {
       new Notice(`Vault sync: ↓${filesToDownload} 🗑${filesDeleted} 🔄${filesMoved}`);
     } catch (e) {
       console.error("Vault sync: Full sync error:", e);
-      new Notice("Vault sync: Sync failed");
+      new Notice("Vault sync: sync failed");
     }
   }
 
   private handleConflict(payload: ConflictPayload): void {
     // For MVP, just notify the user
     new Notice(
-      `Vault sync: Conflict detected in ${payload.path}. Server version was used.`
+      `Vault sync: conflict detected in ${payload.path}. Server version was used.`
     );
     console.warn("Vault Sync conflict:", payload);
   }
