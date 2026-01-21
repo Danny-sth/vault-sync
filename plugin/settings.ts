@@ -52,7 +52,7 @@ export class VaultSyncSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Server URL")
-      .setDesc("WebSocket server address (wss://...)")
+      .setDesc("Address of the sync server")
       .addText((text) =>
         text
           .setPlaceholder("wss://example.com:8443/ws")
