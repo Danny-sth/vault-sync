@@ -173,32 +173,8 @@ func (s *SyncManager) handleFileChange(deviceID string, msg *SyncMessage) {
 		return
 	}
 
-	// Check for conflicts and validate content
+	// Check for conflicts
 	existingHash := s.storage.GetFileHash(payload.Path)
-
-	// CRITICAL: Reject empty content to prevent data loss
-	// Only accept truly empty files if they were previously non-empty
-	if len(content) == 0 && existingHash != "" {
-		log.Printf("WARNING: Rejecting empty content for %s (existing hash: %s, from %s)",
-			payload.Path, existingHash[:8], deviceID)
-
-		// Send server version back to client
-		serverContent, err := s.storage.ReadFile(payload.Path)
-		if err == nil {
-			serverVersion := &FileChangePayload{
-				Path:    payload.Path,
-				Content: base64.StdEncoding.EncodeToString(serverContent),
-				MTime:   payload.MTime,
-				Hash:    existingHash,
-			}
-			s.hub.SendTo(deviceID, ServerMessage{
-				Type:         "file_changed",
-				OriginDevice: "server",
-				Payload:      serverVersion,
-			})
-		}
-		return
-	}
 	if existingHash != "" && payload.PreviousHash != "" && existingHash != payload.PreviousHash {
 		// Conflict detected
 		s.handleConflict(deviceID, payload, existingHash)
