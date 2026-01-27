@@ -585,6 +585,17 @@ export class SyncManager {
           filesToUpload++;
         } else {
           // File doesn't exist on server at all - UPLOAD IT (server may have lost files)
+          // BUT: Check for suspiciously empty files (0 bytes for file types that should have content)
+          if (file.stat.size === 0 && this.shouldHaveContent(file.path)) {
+            console.warn(
+              `Vault sync: SKIPPING upload of suspicious empty file: ${file.path} (0 bytes). ` +
+              `This file type should have content. If empty is correct, delete and recreate it.`
+            );
+            new Notice(
+              `Vault sync: Skipped empty file ${file.path} (suspicious corruption detected)`
+            );
+            continue;
+          }
           console.debug(`Vault sync: Uploading local-only file: ${file.path}`);
           void this.sendFileChange(file);
           filesToUpload++;
@@ -632,5 +643,11 @@ export class SyncManager {
       bytes[i] = binary.charCodeAt(i);
     }
     return new TextDecoder().decode(bytes);
+  }
+
+  private shouldHaveContent(path: string): boolean {
+    // File types that should typically have content (not legitimately empty)
+    const contentExtensions = [".md", ".txt", ".json", ".xml", ".html", ".css", ".js", ".ts", ".py", ".java", ".go"];
+    return contentExtensions.some((ext) => path.toLowerCase().endsWith(ext));
   }
 }
