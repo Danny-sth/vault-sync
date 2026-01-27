@@ -3,14 +3,16 @@ package main
 import (
 	"encoding/base64"
 	"log"
+	"sync"
 )
 
 // Client -> Server messages
 type SyncMessage struct {
-	Type      string      `json:"type"`
-	DeviceID  string      `json:"deviceId"`
-	Timestamp int64       `json:"timestamp"`
-	Payload   interface{} `json:"payload"`
+	Type        string            `json:"type"`
+	DeviceID    string            `json:"deviceId"`
+	Timestamp   int64             `json:"timestamp"`
+	VectorClock map[string]int64  `json:"vectorClock"`
+	Payload     interface{}       `json:"payload"`
 }
 
 type FileChangePayload struct {
@@ -41,7 +43,9 @@ type ServerMessage struct {
 }
 
 type FullSyncPayload struct {
-	Files []*FileInfo `json:"files"`
+	Files       []*FileInfo   `json:"files"`
+	Tombstones  []*Tombstone  `json:"tombstones"`
+	VectorClock map[string]int64 `json:"vectorClock"`
 }
 
 type ConflictPayload struct {
@@ -55,6 +59,8 @@ type SyncManager struct {
 	storage            *Storage
 	hub                *Hub
 	conflictResolution string
+	vectorClock        map[string]int64
+	mu                 sync.RWMutex
 }
 
 func NewSyncManager(storage *Storage, hub *Hub, conflictResolution string) *SyncManager {
@@ -62,10 +68,79 @@ func NewSyncManager(storage *Storage, hub *Hub, conflictResolution string) *Sync
 		storage:            storage,
 		hub:                hub,
 		conflictResolution: conflictResolution,
+		vectorClock:        make(map[string]int64),
 	}
 }
 
+// Vector clock operations
+func (s *SyncManager) updateVectorClock(deviceID string, clientClock map[string]int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Merge client's vector clock with server's
+	for device, clock := range clientClock {
+		if clock > s.vectorClock[device] {
+			s.vectorClock[device] = clock
+		}
+	}
+
+	// Increment for this device
+	s.vectorClock[deviceID]++
+}
+
+func (s *SyncManager) getVectorClock() map[string]int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make(map[string]int64)
+	for k, v := range s.vectorClock {
+		result[k] = v
+	}
+	return result
+}
+
+func compareVectorClocks(a, b map[string]int64) string {
+	if a == nil || b == nil {
+		return "unknown"
+	}
+
+	aGreater := false
+	bGreater := false
+
+	allDevices := make(map[string]bool)
+	for device := range a {
+		allDevices[device] = true
+	}
+	for device := range b {
+		allDevices[device] = true
+	}
+
+	for device := range allDevices {
+		aVal := a[device]
+		bVal := b[device]
+
+		if aVal > bVal {
+			aGreater = true
+		}
+		if bVal > aVal {
+			bGreater = true
+		}
+	}
+
+	if aGreater && !bGreater {
+		return "after" // a is newer
+	}
+	if bGreater && !aGreater {
+		return "before" // b is newer
+	}
+	return "concurrent" // conflict
+}
+
 func (s *SyncManager) HandleMessage(deviceID string, msg *SyncMessage) {
+	// Update vector clock
+	if msg.VectorClock != nil {
+		s.updateVectorClock(deviceID, msg.VectorClock)
+	}
 	switch msg.Type {
 	case "file_change":
 		s.handleFileChange(deviceID, msg)
@@ -153,12 +228,17 @@ func (s *SyncManager) handleFileDelete(deviceID string, msg *SyncMessage) {
 		return
 	}
 
+	// Delete physical file
 	if err := s.storage.DeleteFile(payload.Path); err != nil {
 		log.Printf("Failed to delete file %s: %v", payload.Path, err)
-		return
+		// Continue anyway - file might not exist
 	}
 
-	log.Printf("File deleted: %s (from %s)", payload.Path, deviceID)
+	// Create tombstone with current vector clock
+	currentClock := s.getVectorClock()
+	s.storage.CreateTombstone(payload.Path, deviceID, currentClock)
+
+	log.Printf("File deleted: %s (from %s), tombstone created", payload.Path, deviceID)
 
 	// Broadcast to other devices
 	s.hub.Broadcast(deviceID, ServerMessage{
@@ -298,12 +378,17 @@ func (s *SyncManager) sendFullSync(deviceID string) {
 		return
 	}
 
-	log.Printf("Sending full sync to %s: %d files", deviceID, len(files))
+	tombstones := s.storage.ListTombstones()
+	vectorClock := s.getVectorClock()
+
+	log.Printf("Sending full sync to %s: %d files, %d tombstones", deviceID, len(files), len(tombstones))
 
 	s.hub.SendTo(deviceID, ServerMessage{
 		Type: "full_sync",
 		Payload: FullSyncPayload{
-			Files: files,
+			Files:       files,
+			Tombstones:  tombstones,
+			VectorClock: vectorClock,
 		},
 	})
 }

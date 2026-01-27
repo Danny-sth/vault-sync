@@ -6,6 +6,7 @@ export interface SyncMessage {
   type: "file_change" | "file_delete" | "file_move" | "request_full_sync" | "request_file" | "ping";
   deviceId: string;
   timestamp: number;
+  vectorClock: Record<string, number>;
   payload: FileChangePayload | FileDeletePayload | FileMovePayload | RequestFilePayload | null;
 }
 
@@ -48,6 +49,16 @@ export interface FileInfo {
 
 export interface FullSyncPayload {
   files: FileInfo[];
+  tombstones: Tombstone[];
+  vectorClock: Record<string, number>;
+}
+
+export interface Tombstone {
+  path: string;
+  deletedAt: number;
+  deletedBy: string;
+  vectorClock: Record<string, number>;
+  ttl: number;
 }
 
 export interface ConflictPayload {
@@ -63,6 +74,7 @@ export class SyncManager {
   private ws: WebSocket | null = null;
   private pendingChanges: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private localHashes: Map<string, string> = new Map();
+  private vectorClock: Map<string, number> = new Map();
   private isProcessingRemote = false;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
@@ -73,6 +85,29 @@ export class SyncManager {
   constructor(app: App, settings: VaultSyncSettings) {
     this.app = app;
     this.settings = settings;
+    // Initialize vector clock with own device
+    this.vectorClock.set(settings.deviceId, 0);
+  }
+
+  // Vector clock operations
+  private incrementVectorClock(): void {
+    const current = this.vectorClock.get(this.settings.deviceId) || 0;
+    this.vectorClock.set(this.settings.deviceId, current + 1);
+  }
+
+  private mergeVectorClock(remoteClock: Record<string, number>): void {
+    for (const [device, clock] of Object.entries(remoteClock)) {
+      const local = this.vectorClock.get(device) || 0;
+      this.vectorClock.set(device, Math.max(local, clock));
+    }
+  }
+
+  private getVectorClockObject(): Record<string, number> {
+    const result: Record<string, number> = {};
+    this.vectorClock.forEach((value, key) => {
+      result[key] = value;
+    });
+    return result;
   }
 
   updateSettings(settings: VaultSyncSettings) {
@@ -158,19 +193,23 @@ export class SyncManager {
   }
 
   requestFullSync(): void {
+    this.incrementVectorClock();
     this.send({
       type: "request_full_sync",
       deviceId: this.settings.deviceId,
       timestamp: Date.now(),
+      vectorClock: this.getVectorClockObject(),
       payload: null,
     });
   }
 
   private requestFile(path: string): void {
+    this.incrementVectorClock();
     this.send({
       type: "request_file",
       deviceId: this.settings.deviceId,
       timestamp: Date.now(),
+      vectorClock: this.getVectorClockObject(),
       payload: { path: path },
     });
   }
@@ -223,10 +262,12 @@ export class SyncManager {
         previousHash: previousHash,
       };
 
+      this.incrementVectorClock();
       this.send({
         type: "file_change",
         deviceId: this.settings.deviceId,
         timestamp: Date.now(),
+        vectorClock: this.getVectorClockObject(),
         payload: payload,
       });
     } catch (e) {
@@ -239,10 +280,12 @@ export class SyncManager {
 
     this.localHashes.delete(path);
 
+    this.incrementVectorClock();
     this.send({
       type: "file_delete",
       deviceId: this.settings.deviceId,
       timestamp: Date.now(),
+      vectorClock: this.getVectorClockObject(),
       payload: { path: path },
     });
   }
@@ -284,10 +327,12 @@ export class SyncManager {
         hash: hash,
       };
 
+      this.incrementVectorClock();
       this.send({
         type: "file_move",
         deviceId: this.settings.deviceId,
         timestamp: Date.now(),
+        vectorClock: this.getVectorClockObject(),
         payload: payload,
       });
 
@@ -423,7 +468,12 @@ export class SyncManager {
 
   private async handleFullSync(payload: FullSyncPayload): Promise<void> {
     try {
-      new Notice(`Vault sync: syncing ${payload.files.length} files...`);
+      // Merge server vector clock
+      if (payload.vectorClock) {
+        this.mergeVectorClock(payload.vectorClock);
+      }
+
+      new Notice(`Vault sync: syncing ${payload.files.length} files, ${payload.tombstones?.length || 0} tombstones...`);
 
       const serverFiles = new Map<string, FileInfo>();
       const serverHashToPath = new Map<string, string>();
@@ -501,29 +551,48 @@ export class SyncManager {
         }
       }
 
-      // Local-only files: upload to server (NEVER delete!)
-      // FIX: Changed from "server is source of truth" to "client is source of truth"
-      // Prevents catastrophic data loss when server loses files
+      // Process tombstones - delete files that were deleted on other devices
+      let filesDeleted = 0;
+      const tombstoneMap = new Map<string, Tombstone>();
+      for (const tomb of payload.tombstones || []) {
+        tombstoneMap.set(tomb.path, tomb);
+      }
+
+      // Local-only files: check tombstones, otherwise upload
       for (const file of localOnlyFiles) {
         const hash = this.localHashes.get(file.path);
         const serverPath = hash ? serverHashToPath.get(hash) : null;
+        const tombstone = tombstoneMap.get(file.path);
 
-        if (serverPath && !localFileMap.has(serverPath)) {
+        if (tombstone) {
+          // File was deleted on another device - delete locally
+          console.debug(`Vault sync: Deleting local file (tombstone): ${file.path}`);
+          this.isProcessingRemote = true;
+          try {
+            await this.app.vault.delete(file);
+            this.localHashes.delete(file.path);
+            filesDeleted++;
+          } catch (e) {
+            console.error(`Vault sync: Failed to delete ${file.path}:`, e);
+          } finally {
+            this.isProcessingRemote = false;
+          }
+        } else if (serverPath && !localFileMap.has(serverPath)) {
           // File was moved: exists on server at different path, but that path doesn't exist locally
           // Upload this file to server (it will delete its old path)
           console.debug(`Vault sync: Uploading moved file: ${file.path} (was at ${serverPath} on server)`);
           void this.sendFileChange(file);
           filesToUpload++;
         } else {
-          // File doesn't exist on server at all - UPLOAD IT
+          // File doesn't exist on server at all - UPLOAD IT (server may have lost files)
           console.debug(`Vault sync: Uploading local-only file: ${file.path}`);
           void this.sendFileChange(file);
           filesToUpload++;
         }
       }
 
-      console.debug(`Vault sync: ↓${filesToDownload} ↑${filesToUpload} 🔄${filesMoved}`);
-      new Notice(`Vault sync: ↓${filesToDownload} ↑${filesToUpload} 🔄${filesMoved}`);
+      console.debug(`Vault sync: ↓${filesToDownload} ↑${filesToUpload} 🔄${filesMoved} 🗑${filesDeleted}`);
+      new Notice(`Vault sync: ↓${filesToDownload} ↑${filesToUpload} 🔄${filesMoved} 🗑${filesDeleted}`);
     } catch (e) {
       console.error("Vault sync: Full sync error:", e);
       new Notice("Vault sync: sync failed");

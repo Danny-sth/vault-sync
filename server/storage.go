@@ -22,14 +22,24 @@ type Storage struct {
 	basePath      string
 	maxFileSizeMB int
 	hashes        map[string]string
+	tombstones    map[string]*Tombstone
 	mu            sync.RWMutex
 }
 
 type FileInfo struct {
-	Path    string `json:"path"`
-	Hash    string `json:"hash"`
-	Size    int64  `json:"size"`
-	ModTime int64  `json:"mtime"`
+	Path        string            `json:"path"`
+	Hash        string            `json:"hash"`
+	Size        int64             `json:"size"`
+	ModTime     int64             `json:"mtime"`
+	VectorClock map[string]int64  `json:"vectorClock,omitempty"`
+}
+
+type Tombstone struct {
+	Path        string            `json:"path"`
+	DeletedAt   int64             `json:"deletedAt"`
+	DeletedBy   string            `json:"deletedBy"`
+	VectorClock map[string]int64  `json:"vectorClock"`
+	TTL         int64             `json:"ttl"`
 }
 
 func NewStorage(basePath string, maxFileSizeMB int) (*Storage, error) {
@@ -46,6 +56,7 @@ func NewStorage(basePath string, maxFileSizeMB int) (*Storage, error) {
 		basePath:      absPath,
 		maxFileSizeMB: maxFileSizeMB,
 		hashes:        make(map[string]string),
+		tombstones:    make(map[string]*Tombstone),
 	}
 
 	// Build initial hash cache
@@ -289,4 +300,59 @@ func (s *Storage) cleanEmptyDirs(dir string) {
 		os.Remove(dir)
 		dir = filepath.Dir(dir)
 	}
+}
+
+// Tombstone management
+func (s *Storage) CreateTombstone(path, deviceID string, vectorClock map[string]int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().Unix()
+	s.tombstones[path] = &Tombstone{
+		Path:        path,
+		DeletedAt:   now,
+		DeletedBy:   deviceID,
+		VectorClock: vectorClock,
+		TTL:         now + (30 * 24 * 60 * 60), // 30 days
+	}
+}
+
+func (s *Storage) GetTombstone(path string) *Tombstone {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.tombstones[path]
+}
+
+func (s *Storage) DeleteTombstone(path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.tombstones, path)
+}
+
+func (s *Storage) ListTombstones() []*Tombstone {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]*Tombstone, 0, len(s.tombstones))
+	for _, tomb := range s.tombstones {
+		result = append(result, tomb)
+	}
+	return result
+}
+
+func (s *Storage) CleanupExpiredTombstones() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now().Unix()
+	count := 0
+
+	for path, tomb := range s.tombstones {
+		if tomb.TTL < now {
+			delete(s.tombstones, path)
+			count++
+		}
+	}
+
+	return count
 }
