@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"log"
+	"strings"
 	"sync"
 )
 
@@ -174,33 +175,49 @@ func (s *SyncManager) handleFileChange(deviceID string, msg *SyncMessage) {
 	}
 
 	// CRITICAL: Protect against empty content corruption
-	// If file previously had content, reject empty updates (unless intentional delete)
+	// NEVER allow empty .md/.txt files (they should ALWAYS have content)
 	if len(content) == 0 {
-		existingInfo, err := s.storage.GetFileInfo(payload.Path)
-		if err == nil && existingInfo.Size > 0 {
-			log.Printf("WARNING: Rejecting empty content for %s from %s (previous size: %d bytes). "+
-				"File previously had content. If deletion was intended, use file_delete instead.",
-				payload.Path, deviceID, existingInfo.Size)
+		pathLower := strings.ToLower(payload.Path)
 
-			// Send server version back to client to overwrite their corrupted empty file
-			serverContent, err := s.storage.ReadFile(payload.Path)
-			if err == nil {
-				serverVersion := &FileChangePayload{
-					Path:    payload.Path,
-					Content: base64.StdEncoding.EncodeToString(serverContent),
-					MTime:   existingInfo.ModTime,
-					Hash:    existingInfo.Hash,
+		// Exception: some files can legitimately be empty
+		isException := strings.HasSuffix(pathLower, "_index.md") ||
+			strings.Contains(pathLower, "/templates/") ||
+			strings.HasSuffix(pathLower, ".txt.md") // test files
+
+		// Check if this is a content file type that should never be empty
+		isContentFile := strings.HasSuffix(pathLower, ".md") ||
+			strings.HasSuffix(pathLower, ".txt")
+
+		if isContentFile && !isException {
+			log.Printf("CRITICAL: Rejecting empty .md/.txt file: %s from %s (size: 0 bytes). "+
+				"Content files must not be empty. Use file_delete if deletion was intended.",
+				payload.Path, deviceID)
+
+			// Try to send server version back if it exists
+			existingInfo, err := s.storage.GetFileInfo(payload.Path)
+			if err == nil && existingInfo.Size > 0 {
+				serverContent, err := s.storage.ReadFile(payload.Path)
+				if err == nil {
+					log.Printf("Sending existing server version of %s back to %s (%d bytes)",
+						payload.Path, deviceID, existingInfo.Size)
+					serverVersion := &FileChangePayload{
+						Path:    payload.Path,
+						Content: base64.StdEncoding.EncodeToString(serverContent),
+						MTime:   existingInfo.ModTime,
+						Hash:    existingInfo.Hash,
+					}
+					s.hub.SendTo(deviceID, ServerMessage{
+						Type:         "file_changed",
+						OriginDevice: "server",
+						Payload:      serverVersion,
+					})
 				}
-				s.hub.SendTo(deviceID, ServerMessage{
-					Type:         "file_changed",
-					OriginDevice: "server",
-					Payload:      serverVersion,
-				})
 			}
 			return
 		}
-		// If file is new or was always empty, allow empty content
-		log.Printf("Accepting empty content for %s from %s (new or always-empty file)", payload.Path, deviceID)
+
+		// For non-content files (images, etc.), allow empty if it's new
+		log.Printf("Accepting empty content for %s from %s (non-content file or exception)", payload.Path, deviceID)
 	}
 
 	// Check for conflicts

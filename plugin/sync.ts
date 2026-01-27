@@ -249,6 +249,25 @@ export class SyncManager {
 
     try {
       const content = await this.app.vault.read(file);
+
+      // CRITICAL: Never send empty .md/.txt files to server (corruption protection)
+      if (content.length === 0) {
+        const pathLower = file.path.toLowerCase();
+        const isException = pathLower.endsWith("_index.md") ||
+                           pathLower.includes("/templates/") ||
+                           pathLower.endsWith(".txt.md");
+        const isContentFile = pathLower.endsWith(".md") || pathLower.endsWith(".txt");
+
+        if (isContentFile && !isException) {
+          console.error(
+            `Vault sync: CRITICAL - refusing to send empty .md/.txt file: ${file.path}. ` +
+            `This indicates corruption. File will NOT be synced.`
+          );
+          new Notice(`Vault sync: Refusing to sync empty file ${file.path} (corruption detected)`);
+          return;
+        }
+      }
+
       const hash = await this.hashContent(content);
       const previousHash = this.localHashes.get(file.path);
 
