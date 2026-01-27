@@ -173,6 +173,36 @@ func (s *SyncManager) handleFileChange(deviceID string, msg *SyncMessage) {
 		return
 	}
 
+	// CRITICAL: Protect against empty content corruption
+	// If file previously had content, reject empty updates (unless intentional delete)
+	if len(content) == 0 {
+		existingInfo, err := s.storage.GetFileInfo(payload.Path)
+		if err == nil && existingInfo.Size > 0 {
+			log.Printf("WARNING: Rejecting empty content for %s from %s (previous size: %d bytes). "+
+				"File previously had content. If deletion was intended, use file_delete instead.",
+				payload.Path, deviceID, existingInfo.Size)
+
+			// Send server version back to client to overwrite their corrupted empty file
+			serverContent, err := s.storage.ReadFile(payload.Path)
+			if err == nil {
+				serverVersion := &FileChangePayload{
+					Path:    payload.Path,
+					Content: base64.StdEncoding.EncodeToString(serverContent),
+					MTime:   existingInfo.ModTime,
+					Hash:    existingInfo.Hash,
+				}
+				s.hub.SendTo(deviceID, ServerMessage{
+					Type:         "file_changed",
+					OriginDevice: "server",
+					Payload:      serverVersion,
+				})
+			}
+			return
+		}
+		// If file is new or was always empty, allow empty content
+		log.Printf("Accepting empty content for %s from %s (new or always-empty file)", payload.Path, deviceID)
+	}
+
 	// Check for conflicts
 	existingHash := s.storage.GetFileHash(payload.Path)
 	if existingHash != "" && payload.PreviousHash != "" && existingHash != payload.PreviousHash {
@@ -187,7 +217,7 @@ func (s *SyncManager) handleFileChange(deviceID string, msg *SyncMessage) {
 		return
 	}
 
-	log.Printf("File saved: %s (from %s)", payload.Path, deviceID)
+	log.Printf("File saved: %s (from %s, %d bytes)", payload.Path, deviceID, len(content))
 
 	// Broadcast to other devices
 	s.hub.Broadcast(deviceID, ServerMessage{
