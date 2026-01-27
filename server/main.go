@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 func main() {
@@ -42,6 +43,19 @@ func main() {
 
 	// Initialize sync manager
 	syncManager := NewSyncManager(storage, hub, config.Sync.ConflictResolution)
+
+	// Start tombstone cleanup goroutine (runs daily)
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			count := storage.CleanupExpiredTombstones()
+			if count > 0 {
+				log.Printf("Cleaned up %d expired tombstones", count)
+			}
+		}
+	}()
 
 	// Initialize WebSocket handler
 	wsHandler := NewWSHandler(hub, syncManager, auth, storage)
