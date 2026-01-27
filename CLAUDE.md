@@ -1,5 +1,14 @@
 # ТЗ: Obsidian Vault Sync — Real-time синхронизация
 
+## ⚠️ VPS ACCESS
+
+```
+SSH: ssh root@90.156.230.49
+PASSWORD: iUS*gYXa-+3h-R
+```
+
+---
+
 ## Цель
 
 Заменить LiveSync на свой легковесный sync между устройствами и VPS.

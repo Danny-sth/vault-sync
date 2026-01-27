@@ -501,35 +501,29 @@ export class SyncManager {
         }
       }
 
-      // Local-only files: check if moved or should be deleted
-      // Server is source of truth!
-      let filesDeleted = 0;
+      // Local-only files: upload to server (NEVER delete!)
+      // FIX: Changed from "server is source of truth" to "client is source of truth"
+      // Prevents catastrophic data loss when server loses files
       for (const file of localOnlyFiles) {
         const hash = this.localHashes.get(file.path);
         const serverPath = hash ? serverHashToPath.get(hash) : null;
 
         if (serverPath && !localFileMap.has(serverPath)) {
           // File was moved: exists on server at different path, but that path doesn't exist locally
-          // Keep this file, server's old path will be deleted
-          console.debug(`Vault sync: Keeping moved file: ${file.path} (server has at ${serverPath})`);
+          // Upload this file to server (it will delete its old path)
+          console.debug(`Vault sync: Uploading moved file: ${file.path} (was at ${serverPath} on server)`);
+          void this.sendFileChange(file);
+          filesToUpload++;
         } else {
-          // Either: file doesn't exist on server at all, OR
-          // server has it at different path BUT we also have it at that path (duplicate!)
-          console.debug(`Vault sync: Deleting local file: ${file.path}`);
-          this.isProcessingRemote = true;
-          try {
-            await this.app.vault.delete(file);
-            filesDeleted++;
-          } catch (e) {
-            console.error(`Vault sync: Failed to delete ${file.path}:`, e);
-          } finally {
-            this.isProcessingRemote = false;
-          }
+          // File doesn't exist on server at all - UPLOAD IT
+          console.debug(`Vault sync: Uploading local-only file: ${file.path}`);
+          void this.sendFileChange(file);
+          filesToUpload++;
         }
       }
 
-      console.debug(`Vault sync: ↓${filesToDownload} 🗑${filesDeleted} 🔄${filesMoved}`);
-      new Notice(`Vault sync: ↓${filesToDownload} 🗑${filesDeleted} 🔄${filesMoved}`);
+      console.debug(`Vault sync: ↓${filesToDownload} ↑${filesToUpload} 🔄${filesMoved}`);
+      new Notice(`Vault sync: ↓${filesToDownload} ↑${filesToUpload} 🔄${filesMoved}`);
     } catch (e) {
       console.error("Vault sync: Full sync error:", e);
       new Notice("Vault sync: sync failed");
