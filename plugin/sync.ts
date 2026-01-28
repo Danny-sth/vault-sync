@@ -526,7 +526,7 @@ export class SyncManager {
           if (hashCount % 50 === 0) {
             await new Promise(resolve => setTimeout(resolve, 0));
           }
-        } catch (e) {
+        } catch {
           console.debug(`Vault sync: Could not hash ${file.path}`);
         }
       }
