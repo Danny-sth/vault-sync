@@ -559,11 +559,26 @@ export class SyncManager {
             filesToDownload++;
           }
         } else {
-          // File exists at same path - check mtime
-          if (localFile.stat.mtime > serverFile.mtime) {
-            void this.sendFileChange(localFile);
-            filesToUpload++;
+          // File exists at same path - check hash and mtime
+          const localHash = this.localHashes.get(localFile.path);
+          const hashMismatch = localHash && localHash !== serverFile.hash;
+
+          if (hashMismatch) {
+            // Hashes differ - need to sync
+            // If server file is significantly larger, prefer server version (corruption protection)
+            if (serverFile.size > localFile.stat.size * 1.5 && serverFile.size > 100) {
+              console.log(`Vault sync: Server has larger version of ${serverPath} (${serverFile.size} vs ${localFile.stat.size}), downloading`);
+              this.requestFile(serverPath);
+              filesToDownload++;
+            } else if (localFile.stat.mtime > serverFile.mtime) {
+              void this.sendFileChange(localFile);
+              filesToUpload++;
+            } else {
+              this.requestFile(serverPath);
+              filesToDownload++;
+            }
           } else if (localFile.stat.mtime < serverFile.mtime) {
+            // Same hash but server is newer - still download (might have metadata)
             this.requestFile(serverPath);
             filesToDownload++;
           }
