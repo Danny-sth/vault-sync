@@ -567,7 +567,7 @@ export class SyncManager {
             // Hashes differ - need to sync
             // If server file is significantly larger, prefer server version (corruption protection)
             if (serverFile.size > localFile.stat.size * 1.5 && serverFile.size > 100) {
-              console.log(`Vault sync: Server has larger version of ${serverPath} (${serverFile.size} vs ${localFile.stat.size}), downloading`);
+              console.debug(`Vault sync: Server has larger version of ${serverPath} (${serverFile.size} vs ${localFile.stat.size}), downloading`);
               this.requestFile(serverPath);
               filesToDownload++;
             } else if (localFile.stat.mtime > serverFile.mtime) {
