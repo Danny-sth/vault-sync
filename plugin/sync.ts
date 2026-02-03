@@ -559,7 +559,17 @@ export class SyncManager {
             filesToDownload++;
           }
         } else {
-          // File exists at same path - check hash and mtime
+          // File exists at same path - check if we need to sync
+
+          // CRITICAL: If local file is empty but server has content, ALWAYS download
+          // This fixes corruption where local file became 0 bytes
+          if (localFile.stat.size === 0 && serverFile.size > 100) {
+            console.debug(`Vault sync: Local file ${serverPath} is empty but server has ${serverFile.size} bytes, downloading`);
+            this.requestFile(serverPath);
+            filesToDownload++;
+            continue;
+          }
+
           const localHash = this.localHashes.get(localFile.path);
           const hashMismatch = localHash && localHash !== serverFile.hash;
 
