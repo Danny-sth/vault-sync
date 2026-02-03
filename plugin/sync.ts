@@ -561,10 +561,17 @@ export class SyncManager {
         } else {
           // File exists at same path - check if we need to sync
 
-          // CRITICAL: If local file is empty but server has content, ALWAYS download
-          // This fixes corruption where local file became 0 bytes
-          if (localFile.stat.size === 0 && serverFile.size > 100) {
-            console.debug(`Vault sync: Local file ${serverPath} is empty but server has ${serverFile.size} bytes, downloading`);
+          // CRITICAL: If local file is much smaller than server, ALWAYS download
+          // This fixes corruption where local file became empty or truncated
+          // Check: local < 50 bytes AND server > 500 bytes = definitely corrupted
+          // OR: server is 10x larger than local = likely corrupted
+          const localSize = localFile.stat.size || 0;
+          const serverSize = serverFile.size || 0;
+          const likelyCorrupted = (localSize < 50 && serverSize > 500) ||
+                                  (serverSize > localSize * 10 && serverSize > 1000);
+
+          if (likelyCorrupted) {
+            console.debug(`Vault sync: Local file ${serverPath} likely corrupted (${localSize} vs ${serverSize} bytes), downloading`);
             this.requestFile(serverPath);
             filesToDownload++;
             continue;
@@ -631,13 +638,27 @@ export class SyncManager {
           // File doesn't exist on server at all - UPLOAD IT (server may have lost files)
           // BUT: Check for suspiciously empty files (0 bytes for file types that should have content)
           if (file.stat.size === 0 && this.shouldHaveContent(file.path)) {
-            console.warn(
-              `Vault sync: SKIPPING upload of suspicious empty file: ${file.path} (0 bytes). ` +
-              `This file type should have content. If empty is correct, delete and recreate it.`
-            );
-            new Notice(
-              `Vault sync: Skipped empty file ${file.path} (suspicious corruption detected)`
-            );
+            // CRITICAL FIX: Search for file by name on server (path might differ due to encoding)
+            const fileName = file.path.split("/").pop() || "";
+            let foundOnServer = false;
+            for (const [sPath, sFile] of serverFiles) {
+              if (sPath.endsWith("/" + fileName) || sPath === fileName) {
+                console.debug(`Vault sync: Found ${fileName} on server at ${sPath}, downloading to fix corruption`);
+                this.requestFile(sPath);
+                filesToDownload++;
+                foundOnServer = true;
+                break;
+              }
+            }
+            if (!foundOnServer) {
+              console.warn(
+                `Vault sync: SKIPPING upload of suspicious empty file: ${file.path} (0 bytes). ` +
+                `This file type should have content. If empty is correct, delete and recreate it.`
+              );
+              new Notice(
+                `Vault sync: Skipped empty file ${file.path} (suspicious corruption detected)`
+              );
+            }
             continue;
           }
           console.debug(`Vault sync: Uploading local-only file: ${file.path}`);
