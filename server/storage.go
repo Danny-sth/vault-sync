@@ -135,13 +135,24 @@ func (s *Storage) saveMetadata() error {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
 
+	// Deep copy maps while holding the lock to prevent concurrent modification
+	// during JSON marshalling
 	s.mu.RLock()
-	meta := PersistentMetadata{
-		Tombstones: s.tombstones,
-		KnownFiles: s.knownFiles,
-		UpdatedAt:  time.Now().Unix(),
+	tombstonesCopy := make(map[string]*Tombstone, len(s.tombstones))
+	for k, v := range s.tombstones {
+		tombstonesCopy[k] = v
+	}
+	knownFilesCopy := make(map[string]bool, len(s.knownFiles))
+	for k, v := range s.knownFiles {
+		knownFilesCopy[k] = v
 	}
 	s.mu.RUnlock()
+
+	meta := PersistentMetadata{
+		Tombstones: tombstonesCopy,
+		KnownFiles: knownFilesCopy,
+		UpdatedAt:  time.Now().Unix(),
+	}
 
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
