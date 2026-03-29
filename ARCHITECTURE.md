@@ -336,3 +336,48 @@ Both devices modify same file offline:
 **Phase 3 (Nice to have):**
 6. CRDT merge for text files
 7. Conflict UI for manual resolution
+
+---
+
+## Implementation Status (2026-03-29)
+
+### Completed Features
+
+**Tombstone Persistence:**
+- Tombstones saved to `.vault-sync-metadata.json` in vault directory
+- Persisted data: tombstones map, known files map, update timestamp
+- Loaded on server startup, saved on changes
+
+**Deleted File Detection:**
+- On startup, server compares known files with current filesystem
+- Files that existed before but are now gone → tombstone created
+- Prevents "lost files" from being re-uploaded on sync
+
+**Debounced Metadata Saver:**
+- Uses channel-based debouncing (100ms wait, coalesce rapid writes)
+- Deep copies maps before JSON marshal to prevent concurrent map access
+- Fixed race condition crash: "concurrent map iteration and map write"
+
+### Key Code Locations
+
+```go
+// storage.go - Persistence
+func (s *Storage) loadMetadata() error     // Load from disk
+func (s *Storage) saveMetadata() error     // Save to disk (mutex protected)
+func (s *Storage) triggerSave()            // Non-blocking save signal
+func (s *Storage) metadataSaver()          // Goroutine for debounced saves
+func (s *Storage) detectDeletedFiles()     // Startup deletion detection
+
+// sync.go - Sync logic
+func (s *SyncManager) handleRequestFile()  // Client requests missing file
+func (s *SyncManager) sendFullSync()       // Sends file list + tombstones
+```
+
+### Known Limitations
+
+1. Files created directly on VPS filesystem (not through sync) aren't broadcast
+   - They ARE included in full_sync file list
+   - Clients will download them on next reconnect
+
+2. Client must be connected to receive real-time updates
+   - Offline changes sync on reconnect via full_sync
