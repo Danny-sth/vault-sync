@@ -3,8 +3,10 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,11 +21,19 @@ var (
 )
 
 type Storage struct {
-	basePath      string
-	maxFileSizeMB int
-	hashes        map[string]string
-	tombstones    map[string]*Tombstone
-	mu            sync.RWMutex
+	basePath       string
+	maxFileSizeMB  int
+	hashes         map[string]string
+	tombstones     map[string]*Tombstone
+	knownFiles     map[string]bool // Track known files for deletion detection
+	metadataPath   string          // Path to store metadata (tombstones, known files)
+	mu             sync.RWMutex
+}
+
+type PersistentMetadata struct {
+	Tombstones map[string]*Tombstone `json:"tombstones"`
+	KnownFiles map[string]bool       `json:"knownFiles"`
+	UpdatedAt  int64                 `json:"updatedAt"`
 }
 
 type FileInfo struct {
@@ -52,11 +62,20 @@ func NewStorage(basePath string, maxFileSizeMB int) (*Storage, error) {
 		return nil, err
 	}
 
+	metadataPath := filepath.Join(absPath, ".vault-sync-metadata.json")
+
 	s := &Storage{
 		basePath:      absPath,
 		maxFileSizeMB: maxFileSizeMB,
 		hashes:        make(map[string]string),
 		tombstones:    make(map[string]*Tombstone),
+		knownFiles:    make(map[string]bool),
+		metadataPath:  metadataPath,
+	}
+
+	// Load persisted metadata (tombstones + known files)
+	if err := s.loadMetadata(); err != nil {
+		log.Printf("Warning: could not load metadata: %v (starting fresh)", err)
 	}
 
 	// Build initial hash cache
@@ -64,7 +83,125 @@ func NewStorage(basePath string, maxFileSizeMB int) (*Storage, error) {
 		return nil, err
 	}
 
+	// Detect files that were deleted while server was down
+	s.detectDeletedFiles()
+
+	// Save updated metadata
+	s.saveMetadata()
+
 	return s, nil
+}
+
+// loadMetadata loads tombstones and known files from disk
+func (s *Storage) loadMetadata() error {
+	data, err := os.ReadFile(s.metadataPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // First run, no metadata yet
+		}
+		return err
+	}
+
+	var meta PersistentMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if meta.Tombstones != nil {
+		s.tombstones = meta.Tombstones
+		log.Printf("Loaded %d tombstones from disk", len(s.tombstones))
+	}
+
+	if meta.KnownFiles != nil {
+		s.knownFiles = meta.KnownFiles
+		log.Printf("Loaded %d known files from disk", len(s.knownFiles))
+	}
+
+	return nil
+}
+
+// saveMetadata saves tombstones and known files to disk
+func (s *Storage) saveMetadata() error {
+	s.mu.RLock()
+	meta := PersistentMetadata{
+		Tombstones: s.tombstones,
+		KnownFiles: s.knownFiles,
+		UpdatedAt:  time.Now().Unix(),
+	}
+	s.mu.RUnlock()
+
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(s.metadataPath, data, 0644)
+}
+
+// detectDeletedFiles creates tombstones for files that existed before but are now gone
+func (s *Storage) detectDeletedFiles() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	currentFiles := make(map[string]bool)
+
+	// Scan current files
+	filepath.WalkDir(s.basePath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.IsDir() {
+			if strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if strings.HasPrefix(d.Name(), ".") {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(s.basePath, path)
+		if err != nil {
+			return nil
+		}
+		relPath = filepath.ToSlash(relPath)
+		currentFiles[relPath] = true
+
+		return nil
+	})
+
+	// Find files that were known but no longer exist
+	deletedCount := 0
+	now := time.Now().Unix()
+
+	for path := range s.knownFiles {
+		if !currentFiles[path] {
+			// File was deleted while server was down
+			if _, exists := s.tombstones[path]; !exists {
+				s.tombstones[path] = &Tombstone{
+					Path:        path,
+					DeletedAt:   now,
+					DeletedBy:   "server-scan",
+					VectorClock: nil,
+					TTL:         now + (30 * 24 * 60 * 60), // 30 days
+				}
+				deletedCount++
+				log.Printf("Detected deleted file (creating tombstone): %s", path)
+			}
+		}
+	}
+
+	// Update known files to current state
+	s.knownFiles = currentFiles
+
+	if deletedCount > 0 {
+		log.Printf("Created %d tombstones for files deleted while server was down", deletedCount)
+	}
 }
 
 func (s *Storage) validatePath(path string) (string, error) {
@@ -123,11 +260,17 @@ func (s *Storage) WriteFile(path string, content []byte, mtime int64) error {
 		}
 	}
 
-	// Update hash cache
+	// Update hash cache and known files
 	hash := s.computeHash(content)
 	s.mu.Lock()
 	s.hashes[path] = hash
+	s.knownFiles[path] = true
+	// Remove tombstone if file is recreated
+	delete(s.tombstones, path)
 	s.mu.Unlock()
+
+	// Persist metadata (async to avoid blocking)
+	go s.saveMetadata()
 
 	return nil
 }
@@ -151,10 +294,14 @@ func (s *Storage) DeleteFile(path string) error {
 		return err
 	}
 
-	// Remove from hash cache
+	// Remove from hash cache and known files
 	s.mu.Lock()
 	delete(s.hashes, path)
+	delete(s.knownFiles, path)
 	s.mu.Unlock()
+
+	// Persist metadata (async)
+	go s.saveMetadata()
 
 	// Try to remove empty parent directories
 	s.cleanEmptyDirs(filepath.Dir(fullPath))
@@ -305,8 +452,6 @@ func (s *Storage) cleanEmptyDirs(dir string) {
 // Tombstone management
 func (s *Storage) CreateTombstone(path, deviceID string, vectorClock map[string]int64) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	now := time.Now().Unix()
 	s.tombstones[path] = &Tombstone{
 		Path:        path,
@@ -315,6 +460,10 @@ func (s *Storage) CreateTombstone(path, deviceID string, vectorClock map[string]
 		VectorClock: vectorClock,
 		TTL:         now + (30 * 24 * 60 * 60), // 30 days
 	}
+	s.mu.Unlock()
+
+	// Persist metadata
+	go s.saveMetadata()
 }
 
 func (s *Storage) GetTombstone(path string) *Tombstone {
@@ -342,8 +491,6 @@ func (s *Storage) ListTombstones() []*Tombstone {
 
 func (s *Storage) CleanupExpiredTombstones() int {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	now := time.Now().Unix()
 	count := 0
 
@@ -352,6 +499,11 @@ func (s *Storage) CleanupExpiredTombstones() int {
 			delete(s.tombstones, path)
 			count++
 		}
+	}
+	s.mu.Unlock()
+
+	if count > 0 {
+		s.saveMetadata()
 	}
 
 	return count
