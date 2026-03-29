@@ -715,4 +715,78 @@ export class SyncManager {
     const contentExtensions = [".md", ".txt", ".json", ".xml", ".html", ".css", ".js", ".ts", ".py", ".java", ".go"];
     return contentExtensions.some((ext) => path.toLowerCase().endsWith(ext));
   }
+
+  // Case-insensitive path utilities
+  private normalizePath(path: string): string {
+    return path.toLowerCase();
+  }
+
+  private findLocalFileByPath(path: string, localFileMap: Map<string, TFile>): TFile | undefined {
+    // First try exact match
+    const exact = localFileMap.get(path);
+    if (exact) return exact;
+
+    // Then try case-insensitive
+    const normalizedTarget = this.normalizePath(path);
+    for (const [localPath, file] of localFileMap) {
+      if (this.normalizePath(localPath) === normalizedTarget) {
+        return file;
+      }
+    }
+    return undefined;
+  }
+
+  private findServerFileByPath(path: string, serverFiles: Map<string, FileInfo>): FileInfo | undefined {
+    // First try exact match
+    const exact = serverFiles.get(path);
+    if (exact) return exact;
+
+    // Then try case-insensitive
+    const normalizedTarget = this.normalizePath(path);
+    for (const [serverPath, file] of serverFiles) {
+      if (this.normalizePath(serverPath) === normalizedTarget) {
+        return file;
+      }
+    }
+    return undefined;
+  }
+
+  private findExistingFolderCaseInsensitive(targetPath: string): string | null {
+    // Walk up the path and find existing folders with possibly different case
+    const parts = targetPath.split("/");
+    let currentPath = "";
+
+    for (const part of parts) {
+      if (!part) continue;
+
+      const testPath = currentPath ? `${currentPath}/${part}` : part;
+      const existing = this.app.vault.getAbstractFileByPath(testPath);
+
+      if (existing) {
+        currentPath = existing.path;
+      } else {
+        // Try case-insensitive search in parent folder
+        const parentFiles = currentPath
+          ? this.app.vault.getAbstractFileByPath(currentPath)
+          : this.app.vault.getRoot();
+
+        if (parentFiles && 'children' in parentFiles) {
+          const normalizedPart = part.toLowerCase();
+          const found = (parentFiles.children as any[]).find(
+            (child: any) => child.name.toLowerCase() === normalizedPart
+          );
+          if (found) {
+            currentPath = found.path;
+          } else {
+            // Folder doesn't exist, return path up to here
+            return currentPath || null;
+          }
+        } else {
+          return currentPath || null;
+        }
+      }
+    }
+
+    return currentPath;
+  }
 }

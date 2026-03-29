@@ -28,6 +28,8 @@ type Storage struct {
 	knownFiles     map[string]bool // Track known files for deletion detection
 	metadataPath   string          // Path to store metadata (tombstones, known files)
 	mu             sync.RWMutex
+	saveChan       chan struct{}   // Channel to trigger debounced saves
+	saveMu         sync.Mutex      // Mutex to protect file writes
 }
 
 type PersistentMetadata struct {
@@ -71,7 +73,11 @@ func NewStorage(basePath string, maxFileSizeMB int) (*Storage, error) {
 		tombstones:    make(map[string]*Tombstone),
 		knownFiles:    make(map[string]bool),
 		metadataPath:  metadataPath,
+		saveChan:      make(chan struct{}, 1), // Buffered channel for non-blocking sends
 	}
+
+	// Start the debounced metadata saver goroutine
+	go s.metadataSaver()
 
 	// Load persisted metadata (tombstones + known files)
 	if err := s.loadMetadata(); err != nil {
@@ -125,6 +131,10 @@ func (s *Storage) loadMetadata() error {
 
 // saveMetadata saves tombstones and known files to disk
 func (s *Storage) saveMetadata() error {
+	// Protect file writes with mutex to prevent concurrent write races
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+
 	s.mu.RLock()
 	meta := PersistentMetadata{
 		Tombstones: s.tombstones,
@@ -139,6 +149,39 @@ func (s *Storage) saveMetadata() error {
 	}
 
 	return os.WriteFile(s.metadataPath, data, 0644)
+}
+
+// triggerSave signals the metadata saver to save (non-blocking, debounced)
+func (s *Storage) triggerSave() {
+	select {
+	case s.saveChan <- struct{}{}:
+		// Signal sent
+	default:
+		// Channel full, save already pending
+	}
+}
+
+// metadataSaver is a goroutine that handles debounced metadata saves
+func (s *Storage) metadataSaver() {
+	for range s.saveChan {
+		// Debounce: wait a bit to batch rapid changes
+		time.Sleep(100 * time.Millisecond)
+
+		// Drain any pending signals
+		for {
+			select {
+			case <-s.saveChan:
+				// Consume pending signal
+			default:
+				goto doSave
+			}
+		}
+
+	doSave:
+		if err := s.saveMetadata(); err != nil {
+			log.Printf("Error saving metadata: %v", err)
+		}
+	}
 }
 
 // detectDeletedFiles creates tombstones for files that existed before but are now gone
@@ -269,8 +312,8 @@ func (s *Storage) WriteFile(path string, content []byte, mtime int64) error {
 	delete(s.tombstones, path)
 	s.mu.Unlock()
 
-	// Persist metadata (async to avoid blocking)
-	go s.saveMetadata()
+	// Persist metadata (debounced)
+	s.triggerSave()
 
 	return nil
 }
@@ -300,8 +343,8 @@ func (s *Storage) DeleteFile(path string) error {
 	delete(s.knownFiles, path)
 	s.mu.Unlock()
 
-	// Persist metadata (async)
-	go s.saveMetadata()
+	// Persist metadata (debounced)
+	s.triggerSave()
 
 	// Try to remove empty parent directories
 	s.cleanEmptyDirs(filepath.Dir(fullPath))
@@ -462,8 +505,8 @@ func (s *Storage) CreateTombstone(path, deviceID string, vectorClock map[string]
 	}
 	s.mu.Unlock()
 
-	// Persist metadata
-	go s.saveMetadata()
+	// Persist metadata (debounced)
+	s.triggerSave()
 }
 
 func (s *Storage) GetTombstone(path string) *Tombstone {
