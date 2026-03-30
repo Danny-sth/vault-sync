@@ -2,8 +2,10 @@
 
 ## Документация
 
-**ОБЯЗАТЕЛЬНО:** После любых изменений обновляй документацию:
-- `/home/danny/Documents/Obsidian/Coding/vault-sync/vault-sync.md`
+**ОБЯЗАТЕЛЬНО** после любых изменений обновляй:
+`/home/danny/Documents/Obsidian/Coding/Sombra/Vault Sync.md`
+
+---
 
 ## Структура проекта
 
@@ -22,12 +24,10 @@ vault-sync/
 │   ├── settings.ts
 │   └── types.ts
 └── .claude/
-    └── CLAUDE.md    # Этот файл
+    └── CLAUDE.md
 ```
 
 ## Деплой
-
-### Сервер (VPS)
 
 ```bash
 # Сборка
@@ -41,14 +41,6 @@ ssh root@90.156.230.49 "systemctl restart vault-sync"
 # Проверка
 ssh root@90.156.230.49 "systemctl status vault-sync"
 ssh root@90.156.230.49 "journalctl -u vault-sync -n 20"
-```
-
-### Плагин
-
-```bash
-cd plugin
-npm run build
-# Файлы копируются в .obsidian/plugins/vault-sync/
 ```
 
 ## Важно
