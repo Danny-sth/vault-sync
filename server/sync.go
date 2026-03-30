@@ -2,551 +2,344 @@ package main
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"log"
-	"strings"
-	"sync"
+	"time"
+
+	"github.com/gorilla/websocket"
 )
 
-// Client -> Server messages
-type SyncMessage struct {
-	Type        string            `json:"type"`
-	DeviceID    string            `json:"deviceId"`
-	Timestamp   int64             `json:"timestamp"`
-	VectorClock map[string]int64  `json:"vectorClock"`
-	Payload     interface{}       `json:"payload"`
+// Message types
+const (
+	MsgTypeSync       = "sync"
+	MsgTypeFileChange = "file_change"
+	MsgTypeFileDelete = "file_delete"
+
+	MsgTypeSyncResponse = "sync_response"
+	MsgTypeChange       = "change"
+	MsgTypeDelete       = "delete"
+	MsgTypeConflict     = "conflict"
+	MsgTypeError        = "error"
+)
+
+// Incoming messages (Client → Server)
+
+type IncomingMessage struct {
+	Type string `json:"type"`
 }
 
-type FileChangePayload struct {
-	Path         string `json:"path"`
-	Content      string `json:"content"` // Base64 encoded
-	MTime        int64  `json:"mtime"`
-	Hash         string `json:"hash"`
-	PreviousHash string `json:"previousHash,omitempty"`
+type SyncRequest struct {
+	Type    string `json:"type"`
+	LastSeq uint64 `json:"lastSeq"`
 }
 
-type FileDeletePayload struct {
+type FileChangeRequest struct {
+	Type    string `json:"type"`
+	Path    string `json:"path"`
+	Content string `json:"content"` // base64 encoded
+	MTime   int64  `json:"mtime"`   // Unix milliseconds
+	Hash    string `json:"hash"`    // SHA-256 of content
+}
+
+type FileDeleteRequest struct {
+	Type string `json:"type"`
 	Path string `json:"path"`
 }
 
-type FileMovePayload struct {
-	OldPath string `json:"oldPath"`
-	NewPath string `json:"newPath"`
-	Content string `json:"content"` // Base64 encoded
-	MTime   int64  `json:"mtime"`
-	Hash    string `json:"hash"`
+// Outgoing messages (Server → Client)
+
+type SyncResponse struct {
+	Type       string       `json:"type"`
+	CurrentSeq uint64       `json:"currentSeq"`
+	Changes    []ChangeItem `json:"changes"`
 }
 
-// Server -> Client messages
-type ServerMessage struct {
-	Type         string      `json:"type"`
-	OriginDevice string      `json:"originDevice"`
-	Payload      interface{} `json:"payload"`
+type ChangeItem struct {
+	Type    string `json:"type"` // "change" or "delete"
+	Path    string `json:"path"`
+	Content string `json:"content,omitempty"` // base64, only for "change"
+	MTime   int64  `json:"mtime,omitempty"`   // only for "change"
+	Seq     uint64 `json:"seq"`
 }
 
-type FullSyncPayload struct {
-	Files       []*FileInfo   `json:"files"`
-	Tombstones  []*Tombstone  `json:"tombstones"`
-	VectorClock map[string]int64 `json:"vectorClock"`
+type ChangeMessage struct {
+	Type     string `json:"type"`
+	Path     string `json:"path"`
+	Content  string `json:"content"` // base64
+	MTime    int64  `json:"mtime"`
+	Seq      uint64 `json:"seq"`
+	DeviceID string `json:"deviceId,omitempty"` // source device
 }
 
-type ConflictPayload struct {
-	Path          string             `json:"path"`
-	ServerVersion *FileChangePayload `json:"serverVersion"`
-	ClientVersion *FileChangePayload `json:"clientVersion"`
-	Resolution    string             `json:"resolution"`
+type DeleteMessage struct {
+	Type     string `json:"type"`
+	Path     string `json:"path"`
+	Seq      uint64 `json:"seq"`
+	DeviceID string `json:"deviceId,omitempty"`
 }
 
-type SyncManager struct {
-	storage            *Storage
-	hub                *Hub
-	conflictResolution string
-	vectorClock        map[string]int64
-	mu                 sync.RWMutex
+type ConflictMessage struct {
+	Type          string `json:"type"`
+	Path          string `json:"path"`
+	ServerContent string `json:"serverContent"` // base64
+	ServerMTime   int64  `json:"serverMtime"`
+	ServerSeq     uint64 `json:"serverSeq"`
 }
 
-func NewSyncManager(storage *Storage, hub *Hub, conflictResolution string) *SyncManager {
-	return &SyncManager{
-		storage:            storage,
-		hub:                hub,
-		conflictResolution: conflictResolution,
-		vectorClock:        make(map[string]int64),
+type ErrorMessage struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// SyncHandler handles sync logic
+type SyncHandler struct {
+	storage *Storage
+	hub     *Hub
+}
+
+// NewSyncHandler creates a new sync handler
+func NewSyncHandler(storage *Storage, hub *Hub) *SyncHandler {
+	return &SyncHandler{
+		storage: storage,
+		hub:     hub,
 	}
 }
 
-// Vector clock operations
-func (s *SyncManager) updateVectorClock(deviceID string, clientClock map[string]int64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	// Merge client's vector clock with server's
-	for device, clock := range clientClock {
-		if clock > s.vectorClock[device] {
-			s.vectorClock[device] = clock
-		}
+// HandleMessage processes incoming WebSocket messages
+func (s *SyncHandler) HandleMessage(client *Client, raw []byte) {
+	var msg IncomingMessage
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		s.sendError(client, "Invalid JSON")
+		return
 	}
 
-	// Increment for this device
-	s.vectorClock[deviceID]++
-}
-
-func (s *SyncManager) getVectorClock() map[string]int64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	result := make(map[string]int64)
-	for k, v := range s.vectorClock {
-		result[k] = v
-	}
-	return result
-}
-
-func compareVectorClocks(a, b map[string]int64) string {
-	if a == nil || b == nil {
-		return "unknown"
-	}
-
-	aGreater := false
-	bGreater := false
-
-	allDevices := make(map[string]bool)
-	for device := range a {
-		allDevices[device] = true
-	}
-	for device := range b {
-		allDevices[device] = true
-	}
-
-	for device := range allDevices {
-		aVal := a[device]
-		bVal := b[device]
-
-		if aVal > bVal {
-			aGreater = true
-		}
-		if bVal > aVal {
-			bGreater = true
-		}
-	}
-
-	if aGreater && !bGreater {
-		return "after" // a is newer
-	}
-	if bGreater && !aGreater {
-		return "before" // b is newer
-	}
-	return "concurrent" // conflict
-}
-
-func (s *SyncManager) HandleMessage(deviceID string, msg *SyncMessage) {
-	// Update vector clock
-	if msg.VectorClock != nil {
-		s.updateVectorClock(deviceID, msg.VectorClock)
-	}
 	switch msg.Type {
-	case "file_change":
-		s.handleFileChange(deviceID, msg)
-	case "file_delete":
-		s.handleFileDelete(deviceID, msg)
-	case "file_move":
-		s.handleFileMove(deviceID, msg)
-	case "request_full_sync":
-		s.sendFullSync(deviceID)
-	case "request_file":
-		s.handleRequestFile(deviceID, msg)
-	case "ping":
-		s.hub.SendTo(deviceID, ServerMessage{Type: "pong"})
+	case MsgTypeSync:
+		s.handleSync(client, raw)
+	case MsgTypeFileChange:
+		s.handleFileChange(client, raw)
+	case MsgTypeFileDelete:
+		s.handleFileDelete(client, raw)
 	default:
-		log.Printf("Unknown message type from %s: %s", deviceID, msg.Type)
+		s.sendError(client, "Unknown message type: "+msg.Type)
 	}
 }
 
-func (s *SyncManager) handleFileChange(deviceID string, msg *SyncMessage) {
-	payload, ok := s.extractFileChangePayload(msg.Payload)
-	if !ok {
-		log.Printf("Invalid file_change payload from %s", deviceID)
+// handleSync processes sync request
+func (s *SyncHandler) handleSync(client *Client, raw []byte) {
+	var req SyncRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		s.sendError(client, "Invalid sync request")
 		return
 	}
 
-	// Decode content
-	content, err := base64.StdEncoding.DecodeString(payload.Content)
-	if err != nil {
-		log.Printf("Failed to decode content from %s: %v", deviceID, err)
-		return
-	}
+	log.Printf("[%s] Sync request: lastSeq=%d", client.deviceID, req.LastSeq)
 
-	// CRITICAL: Protect against empty content corruption
-	// NEVER allow empty .md/.txt files (they should ALWAYS have content)
-	if len(content) == 0 {
-		pathLower := strings.ToLower(payload.Path)
+	files, deletions := s.storage.GetChangesSince(req.LastSeq)
+	currentSeq := s.storage.GetSequence()
 
-		// Exception: some files can legitimately be empty
-		isException := strings.HasSuffix(pathLower, "_index.md") ||
-			strings.Contains(pathLower, "/templates/") ||
-			strings.HasSuffix(pathLower, ".txt.md") // test files
+	changes := make([]ChangeItem, 0, len(files)+len(deletions))
 
-		// Check if this is a content file type that should never be empty
-		isContentFile := strings.HasSuffix(pathLower, ".md") ||
-			strings.HasSuffix(pathLower, ".txt")
-
-		if isContentFile && !isException {
-			log.Printf("CRITICAL: Rejecting empty .md/.txt file: %s from %s (size: 0 bytes). "+
-				"Content files must not be empty. Use file_delete if deletion was intended.",
-				payload.Path, deviceID)
-
-			// Try to send server version back if it exists
-			existingInfo, err := s.storage.GetFileInfo(payload.Path)
-			if err == nil && existingInfo.Size > 0 {
-				serverContent, err := s.storage.ReadFile(payload.Path)
-				if err == nil {
-					log.Printf("Sending existing server version of %s back to %s (%d bytes)",
-						payload.Path, deviceID, existingInfo.Size)
-					serverVersion := &FileChangePayload{
-						Path:    payload.Path,
-						Content: base64.StdEncoding.EncodeToString(serverContent),
-						MTime:   existingInfo.ModTime,
-						Hash:    existingInfo.Hash,
-					}
-					s.hub.SendTo(deviceID, ServerMessage{
-						Type:         "file_changed",
-						OriginDevice: "server",
-						Payload:      serverVersion,
-					})
-				}
-			}
-			return
-		}
-
-		// For non-content files (images, etc.), allow empty if it's new
-		log.Printf("Accepting empty content for %s from %s (non-content file or exception)", payload.Path, deviceID)
-	}
-
-	// Check for conflicts
-	existingHash := s.storage.GetFileHash(payload.Path)
-	if existingHash != "" && payload.PreviousHash != "" && existingHash != payload.PreviousHash {
-		// Conflict detected
-		s.handleConflict(deviceID, payload, existingHash)
-		return
-	}
-
-	// Save file
-	if err := s.storage.WriteFile(payload.Path, content, payload.MTime); err != nil {
-		log.Printf("Failed to write file %s: %v", payload.Path, err)
-		return
-	}
-
-	log.Printf("File saved: %s (from %s, %d bytes)", payload.Path, deviceID, len(content))
-
-	// Broadcast to other devices
-	s.hub.Broadcast(deviceID, ServerMessage{
-		Type:         "file_changed",
-		OriginDevice: deviceID,
-		Payload:      payload,
-	})
-}
-
-func (s *SyncManager) handleFileDelete(deviceID string, msg *SyncMessage) {
-	payload, ok := s.extractFileDeletePayload(msg.Payload)
-	if !ok {
-		log.Printf("Invalid file_delete payload from %s", deviceID)
-		return
-	}
-
-	// Delete physical file
-	if err := s.storage.DeleteFile(payload.Path); err != nil {
-		log.Printf("Failed to delete file %s: %v", payload.Path, err)
-		// Continue anyway - file might not exist
-	}
-
-	// Create tombstone with current vector clock
-	currentClock := s.getVectorClock()
-	s.storage.CreateTombstone(payload.Path, deviceID, currentClock)
-
-	log.Printf("File deleted: %s (from %s), tombstone created", payload.Path, deviceID)
-
-	// Broadcast to other devices
-	s.hub.Broadcast(deviceID, ServerMessage{
-		Type:         "file_deleted",
-		OriginDevice: deviceID,
-		Payload:      payload,
-	})
-}
-
-func (s *SyncManager) handleFileMove(deviceID string, msg *SyncMessage) {
-	payload, ok := s.extractFileMovePayload(msg.Payload)
-	if !ok {
-		log.Printf("Invalid file_move payload from %s", deviceID)
-		return
-	}
-
-	// Decode content
-	content, err := base64.StdEncoding.DecodeString(payload.Content)
-	if err != nil {
-		log.Printf("Failed to decode content from %s: %v", deviceID, err)
-		return
-	}
-
-	// Delete old file first
-	if err := s.storage.DeleteFile(payload.OldPath); err != nil {
-		log.Printf("Failed to delete old file %s during move: %v", payload.OldPath, err)
-		// Continue anyway - file might not exist on server
-	}
-
-	// Write new file
-	if err := s.storage.WriteFile(payload.NewPath, content, payload.MTime); err != nil {
-		log.Printf("Failed to write new file %s during move: %v", payload.NewPath, err)
-		return
-	}
-
-	log.Printf("File moved: %s -> %s (from %s)", payload.OldPath, payload.NewPath, deviceID)
-
-	// Broadcast to other devices
-	s.hub.Broadcast(deviceID, ServerMessage{
-		Type:         "file_moved",
-		OriginDevice: deviceID,
-		Payload:      payload,
-	})
-}
-
-func (s *SyncManager) handleConflict(deviceID string, clientVersion *FileChangePayload, serverHash string) {
-	log.Printf("Conflict detected for %s from %s", clientVersion.Path, deviceID)
-
-	switch s.conflictResolution {
-	case "last_write_wins":
-		// Get server file mtime to compare
-		serverInfo, err := s.storage.GetFileInfo(clientVersion.Path)
+	// Add file changes
+	for _, f := range files {
+		content, err := s.storage.ReadFile(f.Path)
 		if err != nil {
-			log.Printf("Failed to get server file info for %s: %v", clientVersion.Path, err)
-			return
+			log.Printf("Error reading file %s: %v", f.Path, err)
+			continue
 		}
 
-		// Compare mtimes - only accept client version if it's actually newer
-		if clientVersion.MTime <= serverInfo.ModTime {
-			log.Printf("Conflict resolved (server wins - newer mtime %d > %d): %s",
-				serverInfo.ModTime, clientVersion.MTime, clientVersion.Path)
+		changes = append(changes, ChangeItem{
+			Type:    MsgTypeChange,
+			Path:    f.Path,
+			Content: base64.StdEncoding.EncodeToString(content),
+			MTime:   f.MTime,
+			Seq:     f.Seq,
+		})
+	}
 
-			// Send server version back to client
-			serverContent, err := s.storage.ReadFile(clientVersion.Path)
+	// Add deletions
+	for _, d := range deletions {
+		changes = append(changes, ChangeItem{
+			Type: MsgTypeDelete,
+			Path: d.Path,
+			Seq:  d.Seq,
+		})
+	}
+
+	resp := SyncResponse{
+		Type:       MsgTypeSyncResponse,
+		CurrentSeq: currentSeq,
+		Changes:    changes,
+	}
+
+	s.sendToClient(client, resp)
+	log.Printf("[%s] Sync response: currentSeq=%d, changes=%d (files=%d, deletions=%d)",
+		client.deviceID, currentSeq, len(changes), len(files), len(deletions))
+}
+
+// handleFileChange processes file change from client
+func (s *SyncHandler) handleFileChange(client *Client, raw []byte) {
+	var req FileChangeRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		s.sendError(client, "Invalid file_change request")
+		return
+	}
+
+	content, err := base64.StdEncoding.DecodeString(req.Content)
+	if err != nil {
+		s.sendError(client, "Invalid base64 content")
+		return
+	}
+
+	log.Printf("[%s] File change: %s (size=%d, mtime=%d)", client.deviceID, req.Path, len(content), req.MTime)
+
+	// Check for conflict
+	existing := s.storage.GetFile(req.Path)
+	if existing != nil && existing.Hash != req.Hash && existing.Hash != computeHash(content) {
+		// Content differs - check mtime for Last-Write-Wins
+		if req.MTime <= existing.MTime {
+			// Server wins - send conflict response
+			serverContent, err := s.storage.ReadFile(req.Path)
 			if err != nil {
-				log.Printf("Failed to read server file: %v", err)
+				s.sendError(client, "Error reading server file")
 				return
 			}
 
-			serverVersion := &FileChangePayload{
-				Path:    clientVersion.Path,
-				Content: base64.StdEncoding.EncodeToString(serverContent),
-				MTime:   serverInfo.ModTime,
-				Hash:    serverHash,
+			conflict := ConflictMessage{
+				Type:          MsgTypeConflict,
+				Path:          req.Path,
+				ServerContent: base64.StdEncoding.EncodeToString(serverContent),
+				ServerMTime:   existing.MTime,
+				ServerSeq:     existing.Seq,
 			}
-
-			// Send updated version to the client that had old data
-			s.hub.SendTo(deviceID, ServerMessage{
-				Type:         "file_changed",
-				OriginDevice: "server",
-				Payload:      serverVersion,
-			})
+			s.sendToClient(client, conflict)
+			log.Printf("[%s] Conflict: %s (client mtime=%d <= server mtime=%d)", client.deviceID, req.Path, req.MTime, existing.MTime)
 			return
 		}
+		// Client wins - proceed with save
+		log.Printf("[%s] Client wins conflict: %s (client mtime=%d > server mtime=%d)", client.deviceID, req.Path, req.MTime, existing.MTime)
+	}
 
-		// Client version is newer - accept it
-		content, _ := base64.StdEncoding.DecodeString(clientVersion.Content)
-		if err := s.storage.WriteFile(clientVersion.Path, content, clientVersion.MTime); err != nil {
-			log.Printf("Failed to resolve conflict for %s: %v", clientVersion.Path, err)
-			return
-		}
+	// Save file
+	seq, err := s.storage.WriteFile(req.Path, content, req.MTime)
+	if err != nil {
+		s.sendError(client, "Error writing file: "+err.Error())
+		return
+	}
 
-		log.Printf("Conflict resolved (client wins - newer mtime %d > %d): %s",
-			clientVersion.MTime, serverInfo.ModTime, clientVersion.Path)
+	// Broadcast to other clients
+	change := ChangeMessage{
+		Type:     MsgTypeChange,
+		Path:     req.Path,
+		Content:  req.Content,
+		MTime:    req.MTime,
+		Seq:      seq,
+		DeviceID: client.deviceID,
+	}
+	s.hub.BroadcastExcept(client.deviceID, change)
 
-		// Broadcast to other devices
-		s.hub.Broadcast(deviceID, ServerMessage{
-			Type:         "file_changed",
-			OriginDevice: deviceID,
-			Payload:      clientVersion,
-		})
+	log.Printf("[%s] File saved: %s (seq=%d)", client.deviceID, req.Path, seq)
+}
 
-	case "manual":
-		// Read server version
-		serverContent, err := s.storage.ReadFile(clientVersion.Path)
+// handleFileDelete processes file deletion from client
+func (s *SyncHandler) handleFileDelete(client *Client, raw []byte) {
+	var req FileDeleteRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		s.sendError(client, "Invalid file_delete request")
+		return
+	}
+
+	log.Printf("[%s] File delete: %s", client.deviceID, req.Path)
+
+	seq, err := s.storage.DeleteFile(req.Path)
+	if err != nil {
+		s.sendError(client, "Error deleting file: "+err.Error())
+		return
+	}
+
+	// Broadcast to other clients
+	del := DeleteMessage{
+		Type:     MsgTypeDelete,
+		Path:     req.Path,
+		Seq:      seq,
+		DeviceID: client.deviceID,
+	}
+	s.hub.BroadcastExcept(client.deviceID, del)
+
+	log.Printf("[%s] File deleted: %s (seq=%d)", client.deviceID, req.Path, seq)
+}
+
+// BroadcastChange broadcasts a file change to all clients
+func (s *SyncHandler) BroadcastChange(path string, content []byte, mtime int64, seq uint64) {
+	change := ChangeMessage{
+		Type:     MsgTypeChange,
+		Path:     path,
+		Content:  base64.StdEncoding.EncodeToString(content),
+		MTime:    mtime,
+		Seq:      seq,
+		DeviceID: "server",
+	}
+	s.hub.BroadcastJSON(change)
+}
+
+// BroadcastDelete broadcasts a file deletion to all clients
+func (s *SyncHandler) BroadcastDelete(path string, seq uint64) {
+	del := DeleteMessage{
+		Type:     MsgTypeDelete,
+		Path:     path,
+		Seq:      seq,
+		DeviceID: "server",
+	}
+	s.hub.BroadcastJSON(del)
+}
+
+// sendToClient sends a message to a specific client
+func (s *SyncHandler) sendToClient(client *Client, msg interface{}) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("Error marshaling message: %v", err)
+		return
+	}
+
+	select {
+	case client.send <- data:
+	default:
+		log.Printf("[%s] Send buffer full, dropping message", client.deviceID)
+	}
+}
+
+// sendError sends an error message to client
+func (s *SyncHandler) sendError(client *Client, message string) {
+	s.sendToClient(client, ErrorMessage{
+		Type:    MsgTypeError,
+		Message: message,
+	})
+}
+
+// ReadPump reads messages from WebSocket
+func (c *Client) ReadPump(hub *Hub, handler *SyncHandler) {
+	defer func() {
+		hub.unregister <- c
+		c.conn.Close()
+	}()
+
+	c.conn.SetReadLimit(50 * 1024 * 1024) // 50MB max message
+	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+
+	for {
+		_, message, err := c.conn.ReadMessage()
 		if err != nil {
-			log.Printf("Failed to read server version for conflict: %v", err)
-			return
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("[%s] WebSocket error: %v", c.deviceID, err)
+			}
+			break
 		}
 
-		serverInfo, _ := s.storage.GetFileInfo(clientVersion.Path)
-
-		serverVersion := &FileChangePayload{
-			Path:    clientVersion.Path,
-			Content: base64.StdEncoding.EncodeToString(serverContent),
-			MTime:   serverInfo.ModTime,
-			Hash:    serverHash,
-		}
-
-		// Send conflict to client for resolution
-		s.hub.SendTo(deviceID, ServerMessage{
-			Type: "conflict",
-			Payload: ConflictPayload{
-				Path:          clientVersion.Path,
-				ServerVersion: serverVersion,
-				ClientVersion: clientVersion,
-				Resolution:    "manual",
-			},
-		})
+		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		handler.HandleMessage(c, message)
 	}
-}
-
-func (s *SyncManager) sendFullSync(deviceID string) {
-	files, err := s.storage.ListFiles()
-	if err != nil {
-		log.Printf("Failed to list files for full sync: %v", err)
-		return
-	}
-
-	tombstones := s.storage.ListTombstones()
-	vectorClock := s.getVectorClock()
-
-	log.Printf("Sending full sync to %s: %d files, %d tombstones", deviceID, len(files), len(tombstones))
-
-	s.hub.SendTo(deviceID, ServerMessage{
-		Type: "full_sync",
-		Payload: FullSyncPayload{
-			Files:       files,
-			Tombstones:  tombstones,
-			VectorClock: vectorClock,
-		},
-	})
-}
-
-func (s *SyncManager) handleRequestFile(deviceID string, msg *SyncMessage) {
-	payload, ok := s.extractFileDeletePayload(msg.Payload) // Same structure - just path
-	if !ok {
-		log.Printf("Invalid request_file payload from %s", deviceID)
-		return
-	}
-
-	content, err := s.storage.ReadFile(payload.Path)
-	if err != nil {
-		log.Printf("Failed to read file %s for %s: %v", payload.Path, deviceID, err)
-		return
-	}
-
-	fileInfo, err := s.storage.GetFileInfo(payload.Path)
-	if err != nil {
-		log.Printf("Failed to get file info %s for %s: %v", payload.Path, deviceID, err)
-		return
-	}
-
-	log.Printf("Sending file %s to %s (%d bytes)", payload.Path, deviceID, len(content))
-
-	s.hub.SendTo(deviceID, ServerMessage{
-		Type:         "file_changed",
-		OriginDevice: "server",
-		Payload: &FileChangePayload{
-			Path:    payload.Path,
-			Content: base64.StdEncoding.EncodeToString(content),
-			MTime:   fileInfo.ModTime,
-			Hash:    fileInfo.Hash,
-		},
-	})
-}
-
-func (s *SyncManager) extractFileChangePayload(payload interface{}) (*FileChangePayload, bool) {
-	if payload == nil {
-		return nil, false
-	}
-
-	// Handle map conversion
-	data, ok := payload.(map[string]interface{})
-	if !ok {
-		return nil, false
-	}
-
-	result := &FileChangePayload{}
-
-	if path, ok := data["path"].(string); ok {
-		result.Path = path
-	} else {
-		return nil, false
-	}
-
-	if content, ok := data["content"].(string); ok {
-		result.Content = content
-	} else {
-		return nil, false
-	}
-
-	if mtime, ok := data["mtime"].(float64); ok {
-		result.MTime = int64(mtime)
-	}
-
-	if hash, ok := data["hash"].(string); ok {
-		result.Hash = hash
-	}
-
-	if prevHash, ok := data["previousHash"].(string); ok {
-		result.PreviousHash = prevHash
-	}
-
-	return result, true
-}
-
-func (s *SyncManager) extractFileDeletePayload(payload interface{}) (*FileDeletePayload, bool) {
-	if payload == nil {
-		return nil, false
-	}
-
-	data, ok := payload.(map[string]interface{})
-	if !ok {
-		return nil, false
-	}
-
-	result := &FileDeletePayload{}
-
-	if path, ok := data["path"].(string); ok {
-		result.Path = path
-	} else {
-		return nil, false
-	}
-
-	return result, true
-}
-
-func (s *SyncManager) extractFileMovePayload(payload interface{}) (*FileMovePayload, bool) {
-	if payload == nil {
-		return nil, false
-	}
-
-	data, ok := payload.(map[string]interface{})
-	if !ok {
-		return nil, false
-	}
-
-	result := &FileMovePayload{}
-
-	if oldPath, ok := data["oldPath"].(string); ok {
-		result.OldPath = oldPath
-	} else {
-		return nil, false
-	}
-
-	if newPath, ok := data["newPath"].(string); ok {
-		result.NewPath = newPath
-	} else {
-		return nil, false
-	}
-
-	if content, ok := data["content"].(string); ok {
-		result.Content = content
-	} else {
-		return nil, false
-	}
-
-	if mtime, ok := data["mtime"].(float64); ok {
-		result.MTime = int64(mtime)
-	}
-
-	if hash, ok := data["hash"].(string); ok {
-		result.Hash = hash
-	}
-
-	return result, true
 }
