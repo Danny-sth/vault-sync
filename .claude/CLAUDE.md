@@ -3,7 +3,7 @@
 ## Документация
 
 **ОБЯЗАТЕЛЬНО** после любых изменений обновляй:
-`/home/danny/Documents/Obsidian/Coding/Sombra/Vault Sync.md`
+`/home/danny/Documents/Obsidian/Coding/Vault Sync/Vault Sync.md`
 
 ---
 
