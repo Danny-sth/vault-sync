@@ -373,6 +373,22 @@ func (s *SyncManager) handleRequestFile()  // Client requests missing file
 func (s *SyncManager) sendFullSync()       // Sends file list + tombstones
 ```
 
+### Bug Fixes (2026-03-30)
+
+**Critical: False "move detection" causing file deletion**
+- Problem: In `handleFullSync`, when a file existed on server but not locally,
+  and the hash coincidentally matched another local file, the plugin would
+  SEND A DELETE to the server instead of downloading the file
+- This caused server data loss during sync operations
+- Fix: Removed false move detection logic. Now always downloads files that
+  exist on server but not locally (sync.ts:550-555)
+
+**Tombstone vs recreated file handling**
+- Problem: If a file had a tombstone but was recreated on server, client
+  wouldn't download the fresh version
+- Fix: Added check - if tombstone exists BUT file also exists on server,
+  download the server version (file was recreated) (sync.ts:629-633)
+
 ### Known Limitations
 
 1. Files created directly on VPS filesystem (not through sync) aren't broadcast

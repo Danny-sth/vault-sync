@@ -1,8 +1,8 @@
-# Vault Sync
+# Vault Sync v2.0
 
-Real-time Obsidian vault synchronization via WebSocket.
+Real-time Obsidian vault synchronization via WebSocket with sequence-based sync.
 
-## How It Works
+## Architecture (v2.0)
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
@@ -12,151 +12,87 @@ Real-time Obsidian vault synchronization via WebSocket.
 └──────┬───────┘     └──────┬───────┘     └──────┬───────┘
        │                    │                    │
        └────────────────────┼────────────────────┘
-                            │ WebSocket
+                            │ WebSocket (ws://)
                             ▼
               ┌─────────────────────────┐
               │   VPS (vault-sync)      │
-              │   /opt/sombra/          │
-              │     obsidian-vault/     │
-              └───────────┬─────────────┘
-                          │
-                          ▼
-              ┌─────────────────────────┐
-              │   Sombra reads files    │
+              │   Port: 8080            │
+              │   /opt/obsidian-vault/  │
+              │                         │
+              │   + File Watcher        │ ← NEW: real-time detection
+              │   + Sequence counter    │ ← NEW: efficient sync
+              │   + Deletion log (14d)  │ ← NEW: no tombstones
               └─────────────────────────┘
 ```
 
-- **Edit on any device** → Plugin sends to server → Server broadcasts to others
-- **Move/rename files** via file manager or Obsidian → Automatically detected and synced
-- **Conflict resolution**: Last-write-wins (by mtime)
-- **Sombra** reads synced `.md` files directly from disk
+## Key Features (v2.0)
+
+- **Sequence-based sync**: Client tracks `lastSeq`, server sends only changes after that
+- **Real-time file watcher**: Deletions on VPS are detected immediately (fsnotify)
+- **Deletion log with TTL**: 14-day retention, no permanent tombstones
+- **Last-Write-Wins**: Conflict resolution by mtime
+- **All file types**: Syncs any file, not just .md
+
+## Protocol
+
+### Client → Server
+- `sync` - Request changes since `lastSeq`
+- `file_change` - Send file content (base64)
+- `file_delete` - Delete file
+
+### Server → Client
+- `sync_response` - List of changes (files + deletions)
+- `change` - Real-time file change broadcast
+- `delete` - Real-time deletion broadcast
+- `conflict` - Server version wins (client mtime older)
 
 ## Setup
 
-### 1. VPS Setup (one time)
+### 1. VPS
 
 ```bash
-# SSH to VPS
-ssh root@90.156.230.49
+# Environment variables
+AUTH_TOKEN=<your-secret-token>
+VAULT_PATH=/opt/obsidian-vault
+VAULT_SYNC_PORT=8080
+TTL_DAYS=14
 
-# Clone repo
-git clone https://github.com/Danny-sth/vault-sync.git
-cd vault-sync/deploy
-
-# Run setup
-chmod +x setup-vps.sh
-./setup-vps.sh
-
-# Save the generated VAULT_SYNC_TOKEN!
+# Systemd service
+systemctl enable vault-sync
+systemctl start vault-sync
 ```
 
-### 2. GitHub Secrets
+### 2. Plugin
 
-Add these secrets to your repo (`Settings → Secrets → Actions`):
+1. Copy `plugin/main.js` + `manifest.json` to `.obsidian/plugins/vault-sync/`
+2. Enable plugin in Obsidian
+3. Configure:
+   - Server URL: `http://your-vps-ip:8080`
+   - Token: Same as AUTH_TOKEN
+   - Enable sync
 
-| Secret | Value |
-|--------|-------|
-| `VPS_HOST` | `90.156.230.49` |
-| `VPS_USER` | `root` (or user with sudo) |
-| `VPS_SSH_KEY` | Private SSH key for VPS access |
+## API Endpoints
 
-### 3. Deploy Server
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `/health` | No | Server status (sequence, files, clients) |
+| `/status` | Yes | Detailed status |
+| `/ws` | Yes | WebSocket connection |
 
-Push to `main` branch → GitHub Actions deploys automatically.
+## Changelog
 
-Or manually:
-```bash
-make server
-scp bin/vault-sync root@90.156.230.49:/opt/vault-sync/
-ssh root@90.156.230.49 "systemctl restart vault-sync"
-```
+### v2.0.0 (2026-03-30)
+- **Complete rewrite** - sequence-based sync
+- **Real-time file watcher** - deletions on VPS sync immediately
+- **Deletion log** - 14-day TTL instead of permanent tombstones
+- **Simplified protocol** - no vector clocks, no file_move
+- **All file types** - not just .md
+- **No TLS** - simplified setup (use reverse proxy for HTTPS)
 
-### 4. Install Plugin
-
-**Option A: From GitHub Release**
-1. Go to [Releases](../../releases)
-2. Download `main.js` and `manifest.json`
-3. Create folder: `YourVault/.obsidian/plugins/vault-sync/`
-4. Copy files there
-5. Enable in Obsidian: Settings → Community Plugins → Vault Sync
-
-**Option B: Build locally**
-```bash
-make plugin
-# Copy plugin/main.js and plugin/manifest.json to your vault
-```
-
-### 5. Configure Plugin
-
-In Obsidian: Settings → Vault Sync:
-- **Server URL**: `ws://90.156.230.49:8443/ws` (or `wss://` with TLS)
-- **Token**: The token from VPS setup
-- **Device Name**: Something recognizable
-
-## CI/CD
-
-| Event | Action |
-|-------|--------|
-| Push to `main` | Deploy server to VPS |
-| Push tag `v*` | Create GitHub Release with plugin files |
-
-To release a new plugin version:
-```bash
-git tag v0.1.7
-git push origin v0.1.7
-```
-
-## Development
-
-```bash
-# Run server locally
-VAULT_SYNC_TOKEN=test VAULT_SYNC_STORAGE=./test-vault make dev-server
-
-# Watch plugin (rebuild on change)
-cd plugin && npm run dev
-```
-
-## TLS (Production)
-
-For secure WebSocket (`wss://`):
-
-1. Get certificates (Let's Encrypt or self-signed)
-2. Set env vars:
-   ```bash
-   VAULT_SYNC_TLS_CERT=/path/to/cert.pem
-   VAULT_SYNC_TLS_KEY=/path/to/key.pem
-   ```
-3. Update plugin URL to `wss://...`
-
-## Roadmap
-
-### Phase 1 - MVP (Done)
-- [x] WebSocket server (Go)
-- [x] File create/modify/delete sync
-- [x] File move/rename detection (via hash comparison)
-- [x] Multi-device broadcast
-- [x] Last-write-wins conflict resolution
-- [x] Obsidian plugin (desktop + mobile)
-- [x] Token authentication
-- [x] Linux/Android/Windows installers
-- [x] CI/CD pipeline
-
-### Phase 2 - UX Improvements
-- [ ] Manual conflict resolution UI (modal in Obsidian)
-- [ ] Selective sync (ignore patterns like `.git/`, `node_modules/`)
-- [ ] Sync status indicator in Obsidian status bar
-- [ ] Connection health monitoring
-
-### Phase 3 - Security & Performance
-- [ ] E2E encryption (client-side encryption before sync)
-- [ ] File history/versioning
-- [ ] Delta sync (send only changes, not full file)
-- [ ] TLS via Caddy (auto HTTPS)
-
-### Phase 4 - Advanced
-- [ ] Web UI for server monitoring
-- [ ] Multiple vault support
-- [ ] Shared vaults between users
+### v1.x
+- Vector clock-based sync
+- Tombstones for deletions
+- No real-time VPS file watching
 
 ## License
 

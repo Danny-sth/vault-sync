@@ -1,108 +1,92 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
-	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Allow all origins for Obsidian plugin
+	},
+}
+
 func main() {
-	configPath := flag.String("config", "", "Path to config file")
-	flag.Parse()
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	log.Println("Starting vault-sync server...")
 
 	// Load configuration
-	config, err := LoadConfig(*configPath)
-	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
-	}
-
-	// Validate master token
-	if config.Auth.MasterToken == "" {
-		log.Fatal("VAULT_SYNC_TOKEN environment variable is required")
-	}
+	cfg := LoadConfig()
+	log.Printf("Config: port=%s, vault=%s, ttl=%d days", cfg.Port, cfg.VaultPath, cfg.TTLDays)
 
 	// Initialize storage
-	storage, err := NewStorage(config.Storage.Path, config.Sync.MaxFileSizeMB)
+	storage, err := NewStorage(cfg.VaultPath, cfg.TTLDays)
 	if err != nil {
 		log.Fatalf("Failed to initialize storage: %v", err)
 	}
-	log.Printf("Storage initialized: %s", config.Storage.Path)
-
-	// Initialize auth
-	auth := NewAuthManager(config.Auth.MasterToken)
 
 	// Initialize hub
 	hub := NewHub()
 	go hub.Run()
 
-	// Initialize sync manager
-	syncManager := NewSyncManager(storage, hub, config.Sync.ConflictResolution)
+	// Initialize sync handler
+	syncHandler := NewSyncHandler(storage, hub)
 
-	// Start tombstone cleanup goroutine (runs daily)
-	go func() {
-		ticker := time.NewTicker(24 * time.Hour)
-		defer ticker.Stop()
-
-		for range ticker.C {
-			count := storage.CleanupExpiredTombstones()
-			if count > 0 {
-				log.Printf("Cleaned up %d expired tombstones", count)
-			}
-		}
-	}()
-
-	// Initialize WebSocket handler
-	wsHandler := NewWSHandler(hub, syncManager, auth, storage)
+	// Initialize file watcher
+	watcher, err := NewWatcher(cfg.VaultPath, storage, syncHandler)
+	if err != nil {
+		log.Fatalf("Failed to initialize watcher: %v", err)
+	}
+	if err := watcher.Start(); err != nil {
+		log.Fatalf("Failed to start watcher: %v", err)
+	}
 
 	// Setup HTTP routes
 	mux := http.NewServeMux()
 
-	// WebSocket endpoint
-	mux.Handle("/ws", wsHandler)
-
-	// Health check
+	// Health check (no auth)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":    "ok",
-			"devices":   len(hub.GetConnectedDevices()),
-			"storage":   config.Storage.Path,
+			"status":   "ok",
+			"sequence": storage.GetSequence(),
+			"files":    len(storage.GetAllFiles()),
+			"clients":  len(hub.GetConnectedDevices()),
 		})
 	})
 
-	// Debug: list files (requires auth)
-	mux.HandleFunc("/api/files", func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("Authorization")
-		if token != "Bearer "+config.Auth.MasterToken {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
+	// WebSocket endpoint (with auth)
+	mux.HandleFunc("/ws", AuthMiddleware(cfg.AuthToken, func(w http.ResponseWriter, r *http.Request) {
+		handleWebSocket(w, r, hub, syncHandler)
+	}))
 
-		files, err := storage.ListFiles()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
+	// Status endpoint (with auth)
+	mux.HandleFunc("/status", AuthMiddleware(cfg.AuthToken, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(files)
-	})
-
-	// Token management
-	mux.HandleFunc("/api/token", auth.HandleGenerateToken)
-	mux.HandleFunc("/api/devices", auth.HandleListDevices)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"sequence":  storage.GetSequence(),
+			"files":     len(storage.GetAllFiles()),
+			"clients":   hub.GetConnectedDevices(),
+			"vaultPath": cfg.VaultPath,
+		})
+	}))
 
 	// Create server
-	addr := fmt.Sprintf(":%d", config.Server.Port)
 	server := &http.Server{
-		Addr:    addr,
-		Handler: logMiddleware(mux),
+		Addr:         ":" + cfg.Port,
+		Handler:      mux,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
 	}
 
 	// Graceful shutdown
@@ -110,27 +94,53 @@ func main() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 		<-sigChan
+
 		log.Println("Shutting down...")
-		server.Close()
+
+		// Stop watcher
+		watcher.Stop()
+
+		// Shutdown HTTP server
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		server.Shutdown(ctx)
 	}()
 
 	// Start server
-	if config.Server.TLS.Enabled {
-		log.Printf("Starting TLS server on %s", addr)
-		err = server.ListenAndServeTLS(config.Server.TLS.Cert, config.Server.TLS.Key)
-	} else {
-		log.Printf("Starting server on %s (TLS disabled)", addr)
-		err = server.ListenAndServe()
-	}
-
-	if err != nil && err != http.ErrServerClosed {
+	log.Printf("Server listening on :%s", cfg.Port)
+	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("Server error: %v", err)
 	}
+
+	log.Println("Server stopped")
 }
 
-func logMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s %s", r.Method, r.URL.Path, r.RemoteAddr)
-		next.ServeHTTP(w, r)
-	})
+func handleWebSocket(w http.ResponseWriter, r *http.Request, hub *Hub, syncHandler *SyncHandler) {
+	// Get device ID from query
+	deviceID := r.URL.Query().Get("device")
+	if deviceID == "" {
+		http.Error(w, "device parameter required", http.StatusBadRequest)
+		return
+	}
+
+	// Upgrade connection
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket upgrade error: %v", err)
+		return
+	}
+
+	// Create client
+	client := &Client{
+		conn:     conn,
+		deviceID: deviceID,
+		send:     make(chan []byte, 256),
+	}
+
+	// Register client
+	hub.register <- client
+
+	// Start pumps
+	go client.WritePump()
+	client.ReadPump(hub, syncHandler)
 }
