@@ -207,7 +207,29 @@ export class SyncClient {
 
         this.state.lastSeq = msg.currentSeq;
         this.saveState();
+
+        // После получения изменений с сервера - отправить локальные файлы
+        await this.syncLocalFiles();
+
         this.statusCallback('synced');
+    }
+
+    private async syncLocalFiles(): Promise<void> {
+        console.log('[VaultSync] Scanning local files...');
+        const files = this.app.vault.getFiles();
+
+        for (const file of files) {
+            if (file.path.startsWith('.')) continue;
+
+            try {
+                // sendFileChange сам проверит hash и отправит если нужно
+                await this.sendFileChange(file);
+            } catch (err) {
+                console.error('[VaultSync] Error syncing local file:', file.path, err);
+            }
+        }
+
+        console.log('[VaultSync] Local sync complete');
     }
 
     private async handleChange(msg: { path: string; content: string; mtime: number; seq: number; deviceId?: string }): Promise<void> {
