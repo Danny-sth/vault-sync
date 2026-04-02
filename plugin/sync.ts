@@ -120,6 +120,29 @@ export class SyncManager {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
   }
 
+  private shouldSyncFile(path: string): boolean {
+    // Exclude .obsidian internal files
+    if (path.startsWith('.obsidian/')) return false;
+
+    // Exclude other hidden directories
+    if (path.includes('/.')) return false;
+
+    // Exclude specific file patterns
+    const excludePatterns = [
+      '.git/',
+      '.DS_Store',
+      'Thumbs.db',
+      '.tmp',
+      '.temp'
+    ];
+
+    for (const pattern of excludePatterns) {
+      if (path.includes(pattern)) return false;
+    }
+
+    return true;
+  }
+
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private lastPongReceived: number = Date.now();
 
@@ -276,6 +299,9 @@ export class SyncManager {
   queueFileDelete(path: string): void {
     if (this.isProcessingRemote) return;
 
+    // Don't sync excluded files
+    if (!this.shouldSyncFile(path)) return;
+
     // Mark as pending delete
     this.pendingDeletes.add(path);
 
@@ -307,6 +333,9 @@ export class SyncManager {
   }
 
   private async sendFileChange(file: TFile): Promise<void> {
+    // Don't sync excluded files
+    if (!this.shouldSyncFile(file.path)) return;
+
     if (!this.isConnected()) {
       console.warn(`[Vault Sync] Cannot send change for ${file.path}, not connected. Will retry on reconnect.`);
       this.pendingUploads.set(file.path, file);
@@ -582,7 +611,7 @@ export class SyncManager {
       }
 
       // Build local file map
-      const localFiles = this.app.vault.getFiles().filter(f => !f.path.startsWith("."));
+      const localFiles = this.app.vault.getFiles().filter(f => this.shouldSyncFile(f.path));
       const localFileMap = new Map<string, TFile>();
       for (const file of localFiles) {
         localFileMap.set(file.path, file);
