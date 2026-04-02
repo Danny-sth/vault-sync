@@ -86,16 +86,16 @@ export default class VaultSyncPlugin extends Plugin {
       setTimeout(() => this.connect(), 1000);
     }
 
-    // Detect app resume (Android) and reconnect
-    this.registerEvent(
-      this.app.workspace.on('window-focus', () => {
+    // Detect app resume (Android/Desktop) using visibility API
+    this.registerDomEvent(document, 'visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
         // If we were connected but now disconnected, try to reconnect
         if (this.settings.autoConnect && !this.syncManager?.isConnected()) {
           console.log('[Vault Sync] App resumed, attempting reconnect...');
           setTimeout(() => this.connect(), 500);
         }
-      })
-    );
+      }
+    });
   }
 
   onunload() {
