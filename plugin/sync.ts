@@ -118,6 +118,41 @@ export class SyncManager {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
   }
 
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private lastPongReceived: number = Date.now();
+
+  private startPingPong(): void {
+    this.stopPingPong();
+
+    // Send ping every 25 seconds (before server's 30s interval)
+    this.pingInterval = setInterval(() => {
+      if (this.isConnected()) {
+        // Check if we received pong in last 45 seconds
+        if (Date.now() - this.lastPongReceived > 45000) {
+          console.warn('[Vault Sync] No pong received, reconnecting...');
+          this.ws?.close();
+          return;
+        }
+
+        // Send ping
+        this.send({
+          type: "ping",
+          deviceId: this.settings.deviceId,
+          timestamp: Date.now(),
+          vectorClock: this.getVectorClockObject(),
+          payload: null,
+        });
+      }
+    }, 25000); // Every 25 seconds
+  }
+
+  private stopPingPong(): void {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+  }
+
   connect(): void {
     if (this.ws) {
       this.ws.close();
@@ -141,8 +176,11 @@ export class SyncManager {
 
     this.ws.onopen = () => {
       this.reconnectAttempts = 0;
+      this.lastPongReceived = Date.now(); // Track last pong time
       new Notice("Vault sync: connected");
       this.onConnectionChange?.(true);
+
+      this.startPingPong(); // Start client-side ping mechanism
 
       if (this.settings.syncOnStart) {
         this.requestFullSync();
@@ -177,6 +215,8 @@ export class SyncManager {
   }
 
   disconnect(): void {
+    this.stopPingPong(); // Stop ping/pong mechanism
+
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
@@ -389,6 +429,8 @@ export class SyncManager {
         break;
       case "pong":
         // Connection alive
+        this.lastPongReceived = Date.now(); // Track pong received
+        console.debug('[Vault Sync] Pong received');
         break;
     }
   }
