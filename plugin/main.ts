@@ -10,6 +10,7 @@ export default class VaultSyncPlugin extends Plugin {
   settings: VaultSyncSettings = DEFAULT_SETTINGS;
   private syncManager: SyncManager | null = null;
   private statusBarItem: HTMLElement | null = null;
+  private appResumeHandler: (() => void) | null = null;
 
   async onload() {
     await this.loadSettings();
@@ -84,6 +85,17 @@ export default class VaultSyncPlugin extends Plugin {
       // Small delay to ensure vault is ready
       setTimeout(() => this.connect(), 1000);
     }
+
+    // Detect app resume (Android) and reconnect
+    this.registerEvent(
+      this.app.workspace.on('window-focus', () => {
+        // If we were connected but now disconnected, try to reconnect
+        if (this.settings.autoConnect && !this.syncManager?.isConnected()) {
+          console.log('[Vault Sync] App resumed, attempting reconnect...');
+          setTimeout(() => this.connect(), 500);
+        }
+      })
+    );
   }
 
   onunload() {
