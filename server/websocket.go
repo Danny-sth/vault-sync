@@ -191,9 +191,9 @@ func (h *WSHandler) readPump(client *Client) {
 	}()
 
 	client.conn.SetReadLimit(50 * 1024 * 1024) // 50MB max message
-	client.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	client.conn.SetReadDeadline(time.Now().Add(90 * time.Second)) // Increased timeout
 	client.conn.SetPongHandler(func(string) error {
-		client.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		client.conn.SetReadDeadline(time.Now().Add(90 * time.Second)) // Increased timeout
 		return nil
 	})
 
@@ -221,7 +221,7 @@ func (h *WSHandler) readPump(client *Client) {
 }
 
 func (h *WSHandler) writePump(client *Client) {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(60 * time.Second) // Increased ping interval
 	defer func() {
 		ticker.Stop()
 		client.conn.Close()
