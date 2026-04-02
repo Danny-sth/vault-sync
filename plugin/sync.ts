@@ -177,16 +177,15 @@ export class SyncManager {
     }
 
     this.ws.onopen = () => {
-      this.reconnectAttempts = 0;
+      this.reconnectAttempts = 0; // Reset reconnection counter
       this.lastPongReceived = Date.now(); // Track last pong time
       new Notice("Vault sync: connected");
       this.onConnectionChange?.(true);
 
       this.startPingPong(); // Start client-side ping mechanism
 
-      if (this.settings.syncOnStart) {
-        this.requestFullSync();
-      }
+      // Always do full sync after connection to catch missed changes
+      this.requestFullSync();
 
       // Retry pending operations after reconnection
       this.retryPendingOperations();
