@@ -79,6 +79,8 @@ export class SyncManager {
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
+  private pendingDeletes: Set<string> = new Set(); // Paths of files pending delete
+  private pendingUploads: Map<string, TFile> = new Map(); // Files pending upload
 
   onConnectionChange: ((connected: boolean) => void) | null = null;
 
@@ -185,6 +187,9 @@ export class SyncManager {
       if (this.settings.syncOnStart) {
         this.requestFullSync();
       }
+
+      // Retry pending operations after reconnection
+      this.retryPendingOperations();
     };
 
     this.ws.onclose = (event) => {
@@ -272,6 +277,9 @@ export class SyncManager {
   queueFileDelete(path: string): void {
     if (this.isProcessingRemote) return;
 
+    // Mark as pending delete
+    this.pendingDeletes.add(path);
+
     const existing = this.pendingChanges.get(path);
     if (existing) clearTimeout(existing);
 
@@ -284,8 +292,27 @@ export class SyncManager {
     );
   }
 
+  private retryPendingOperations(): void {
+    console.log(`[Vault Sync] Retrying ${this.pendingDeletes.size} pending deletes`);
+
+    // Retry pending deletes
+    for (const path of this.pendingDeletes) {
+      this.sendFileDelete(path);
+    }
+
+    // Retry pending uploads
+    console.log(`[Vault Sync] Retrying ${this.pendingUploads.size} pending uploads`);
+    for (const [path, file] of this.pendingUploads) {
+      void this.sendFileChange(file);
+    }
+  }
+
   private async sendFileChange(file: TFile): Promise<void> {
-    if (!this.isConnected()) return;
+    if (!this.isConnected()) {
+      console.warn(`[Vault Sync] Cannot send change for ${file.path}, not connected. Will retry on reconnect.`);
+      this.pendingUploads.set(file.path, file);
+      return;
+    }
 
     try {
       const content = await this.app.vault.read(file);
@@ -329,13 +356,21 @@ export class SyncManager {
         vectorClock: this.getVectorClockObject(),
         payload: payload,
       });
+
+      // Remove from pending after successful send
+      this.pendingUploads.delete(file.path);
     } catch (e) {
       console.error(`Vault Sync: Failed to send file change for ${file.path}:`, e);
+      this.pendingUploads.set(file.path, file); // Mark for retry
     }
   }
 
   private sendFileDelete(path: string): void {
-    if (!this.isConnected()) return;
+    if (!this.isConnected()) {
+      console.warn(`[Vault Sync] Cannot send delete for ${path}, not connected. Will retry on reconnect.`);
+      // File stays in pendingDeletes for retry
+      return;
+    }
 
     this.localHashes.delete(path);
 
@@ -347,6 +382,10 @@ export class SyncManager {
       vectorClock: this.getVectorClockObject(),
       payload: { path: path },
     });
+
+    // Remove from pending only after successful send
+    this.pendingDeletes.delete(path);
+    console.debug(`[Vault Sync] Delete sent for ${path}`);
   }
 
   queueFileMove(file: TFile, oldPath: string): void {
