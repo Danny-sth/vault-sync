@@ -74,6 +74,24 @@ export class SyncManager {
     return false;
   }
 
+  // Recursively get all file paths from filesystem
+  private async getAllFilePaths(dir: string): Promise<string[]> {
+    const paths: string[] = [];
+    try {
+      const listing = await this.app.vault.adapter.list(dir);
+      for (const file of listing.files) {
+        paths.push(file);
+      }
+      for (const folder of listing.folders) {
+        const subPaths = await this.getAllFilePaths(folder);
+        paths.push(...subPaths);
+      }
+    } catch (e) {
+      // Ignore errors for inaccessible folders
+    }
+    return paths;
+  }
+
   private shouldSyncFile(path: string): boolean {
     // Exclude temp/hidden files
     if (this.isTempFile(path)) return false;
@@ -234,137 +252,139 @@ export class SyncManager {
   }
 
   private async handleFullSync(serverFiles: FileInfo[], tombstones: Tombstone[]): Promise<void> {
-    try {
-      new Notice(`Vault sync: syncing ${serverFiles.length} files...`);
+    const adapter = this.app.vault.adapter;
 
+    try {
+      new Notice(`Vault sync: syncing...`);
+
+      // Server data
       const serverFileMap = new Map<string, FileInfo>();
-      const serverHashToPath = new Map<string, string>();
       for (const f of serverFiles) {
         serverFileMap.set(f.path, f);
-        serverHashToPath.set(f.hash, f.path);
       }
 
-      // Build local file map
-      const localFiles = this.app.vault.getFiles().filter(f => this.shouldSyncFile(f.path));
-      const localFileMap = new Map<string, TFile>();
-      for (const file of localFiles) {
-        localFileMap.set(file.path, file);
-      }
-
-      // Also sync .obsidian whitelist files via adapter (skip on mobile for now)
-      if (!Platform.isMobile) {
-        try {
-          await this.syncObsidianConfigs(serverFileMap);
-        } catch (e) {
-          console.error('[Vault Sync] syncObsidianConfigs failed:', e);
-        }
-      }
-
-      // Find local files NOT on server
-      const localOnlyFiles: TFile[] = [];
-      for (const [path, file] of localFileMap) {
-        if (!serverFileMap.has(path)) {
-          localOnlyFiles.push(file);
-        }
-      }
-
-      let filesToDownload = 0;
-      let filesToUpload = 0;
-      let filesDeleted = 0;
-
-      // First: process pending deletes (files deleted locally while offline)
-      if (this.pendingDeletes.size > 0) {
-        console.log(`[Vault Sync] Processing ${this.pendingDeletes.size} pending deletes`);
-        for (const path of [...this.pendingDeletes]) {
-          if (serverFileMap.has(path)) {
-            console.log(`[Vault Sync] Deleting pending: ${path}`);
-            await this.deleteFileOnServer(path);
-            filesDeleted++;
-          } else {
-            // File already gone from server
-            this.pendingDeletes.delete(path);
-          }
-        }
-      }
-
-      // Files on server - check if we need to download/upload based on mtime
-      for (const [serverPath, serverFile] of serverFileMap) {
-        // Skip if we just deleted this file or it's pending delete
-        if (this.pendingDeletes.has(serverPath)) {
-          continue;
-        }
-
-        const localFile = localFileMap.get(serverPath);
-
-        if (!localFile) {
-          // File doesn't exist locally - download from server
-          await this.downloadFile(serverPath);
-          filesToDownload++;
-        } else {
-          // File exists - compare mtime to decide sync direction
-          // Use 1-second tolerance for mtime comparison
-          const localMtime = Math.floor(localFile.stat.mtime / 1000);
-          const serverMtime = Math.floor(serverFile.mtime / 1000);
-
-          if (localMtime > serverMtime) {
-            // Local is newer - upload
-            console.log(`[Vault Sync] Local file is newer, uploading: ${localFile.path}`);
-            try {
-              await this.uploadFile(localFile, true);
-              filesToUpload++;
-            } catch (e) {
-              console.error(`[Vault Sync] Failed to upload ${localFile.path}:`, e);
-            }
-          } else if (serverMtime > localMtime) {
-            // Server is newer - download
-            await this.downloadFile(serverPath);
-            filesToDownload++;
-          }
-          // If mtime is equal - files are in sync, skip
-        }
-      }
-
-      // Process tombstones
       const tombstoneMap = new Map<string, Tombstone>();
       for (const tomb of tombstones) {
         tombstoneMap.set(tomb.path, tomb);
       }
 
-      // Local-only files: check tombstones, otherwise upload
-      for (const file of localOnlyFiles) {
-        const tombstone = tombstoneMap.get(file.path);
+      // Scan local filesystem
+      const localFiles = await this.getAllFilePaths('');
+      const localFileSet = new Set<string>();
+      for (const path of localFiles) {
+        if (this.shouldSyncFile(path)) {
+          localFileSet.add(path);
+        }
+      }
+
+      let downloaded = 0;
+      let uploaded = 0;
+      let deleted = 0;
+
+      // Process pending deletes first
+      for (const path of [...this.pendingDeletes]) {
+        if (serverFileMap.has(path)) {
+          await this.deleteFileOnServer(path);
+          deleted++;
+        } else {
+          this.pendingDeletes.delete(path);
+        }
+      }
+
+      // Sync local files
+      for (const path of localFileSet) {
+        if (this.pendingDeletes.has(path)) continue;
+
+        const serverFile = serverFileMap.get(path);
+        const tombstone = tombstoneMap.get(path);
 
         if (tombstone) {
-          console.debug(`[Vault Sync] Deleting local file (tombstone): ${file.path}`);
+          // Deleted on server - delete locally
+          console.log(`[Vault Sync] Deleting (tombstone): ${path}`);
           this.isProcessingRemote = true;
           try {
-            await this.app.vault.delete(file);
-            this.localHashes.delete(file.path);
-            filesDeleted++;
+            await adapter.remove(path);
+            deleted++;
           } catch (e) {
-            console.error(`[Vault Sync] Failed to delete ${file.path}:`, e);
+            console.error(`[Vault Sync] Failed to delete ${path}:`, e);
           } finally {
             this.isProcessingRemote = false;
           }
-        } else {
-          // Upload to server
-          console.log(`[Vault Sync] Uploading local-only file: ${file.path}`);
+        } else if (!serverFile) {
+          // Not on server - upload
+          console.log(`[Vault Sync] Uploading: ${path}`);
           try {
-            await this.uploadFile(file, true);
-            filesToUpload++;
+            await this.uploadFromFS(path);
+            uploaded++;
           } catch (e) {
-            console.error(`[Vault Sync] Failed to upload ${file.path}:`, e);
+            console.error(`[Vault Sync] Failed to upload ${path}:`, e);
+          }
+        } else {
+          // Exists on both - compare mtime
+          const stat = await adapter.stat(path);
+          if (stat) {
+            const localMtime = Math.floor(stat.mtime / 1000);
+            const serverMtime = Math.floor(serverFile.mtime / 1000);
+
+            if (localMtime > serverMtime) {
+              console.log(`[Vault Sync] Local newer, uploading: ${path}`);
+              await this.uploadFromFS(path);
+              uploaded++;
+            } else if (serverMtime > localMtime) {
+              console.log(`[Vault Sync] Server newer, downloading: ${path}`);
+              await this.downloadFile(path);
+              downloaded++;
+            }
           }
         }
       }
 
-      console.log(`[Vault Sync] Sync complete: ${filesToDownload} down, ${filesToUpload} up, ${filesDeleted} deleted`);
-      new Notice(`Vault sync: ${filesToDownload} ${filesToUpload} ${filesDeleted}`);
+      // Download files that exist only on server
+      for (const [serverPath, serverFile] of serverFileMap) {
+        if (!localFileSet.has(serverPath) && !this.pendingDeletes.has(serverPath)) {
+          console.log(`[Vault Sync] Downloading: ${serverPath}`);
+          await this.downloadFile(serverPath);
+          downloaded++;
+        }
+      }
+
+      console.log(`[Vault Sync] Sync complete: ${downloaded} down, ${uploaded} up, ${deleted} deleted`);
+      new Notice(`Vault sync: ↓${downloaded} ↑${uploaded} ×${deleted}`);
 
     } catch (e) {
       console.error('[Vault Sync] Full sync error:', e);
       new Notice("Vault sync: sync failed");
     }
+  }
+
+  // Upload file directly from filesystem
+  private async uploadFromFS(path: string): Promise<void> {
+    if (!this.isConnected()) return;
+
+    const adapter = this.app.vault.adapter;
+    const content = await adapter.readBinary(path);
+    const hash = await this.hashBinaryContent(content);
+    const stat = await adapter.stat(path);
+    const mtime = stat?.mtime || Date.now();
+
+    const formData = new FormData();
+    formData.append('path', path);
+    formData.append('mtime', String(mtime));
+    formData.append('hash', hash);
+    formData.append('file', new Blob([content]), path.split('/').pop() || 'file');
+
+    const baseUrl = this.getBaseUrl();
+    const response = await fetch(`${baseUrl}/api/upload?device_id=${encodeURIComponent(this.settings.deviceId)}`, {
+      method: 'POST',
+      headers: { 'X-Auth-Token': this.settings.token },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    this.localHashes.set(path, hash);
   }
 
   queueFileChange(file: TFile): void {
@@ -568,109 +588,9 @@ export class SyncManager {
     }
   }
 
-  private async hashContent(content: string): Promise<string> {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(content);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-  }
-
   private async hashBinaryContent(content: ArrayBuffer): Promise<string> {
     const hashBuffer = await crypto.subtle.digest("SHA-256", content);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-  }
-
-  // Sync .obsidian config files using adapter (not part of vault.getFiles())
-  private async syncObsidianConfigs(serverFileMap: Map<string, FileInfo>): Promise<void> {
-    const adapter = this.app.vault.adapter;
-
-    for (const allowedPath of this.obsidianWhitelist) {
-      try {
-        if (allowedPath.endsWith('/')) {
-          // It's a directory - list and sync all files in it
-          const dirPath = allowedPath.slice(0, -1);
-          if (await adapter.exists(dirPath)) {
-            const listing = await adapter.list(dirPath);
-            for (const filePath of listing.files) {
-              await this.syncConfigFile(filePath, serverFileMap);
-            }
-          }
-        } else {
-          // It's a single file
-          if (await adapter.exists(allowedPath)) {
-            await this.syncConfigFile(allowedPath, serverFileMap);
-          }
-        }
-      } catch (e) {
-        console.debug(`[Vault Sync] Could not sync ${allowedPath}:`, e);
-      }
-    }
-  }
-
-  private async syncConfigFile(path: string, serverFileMap: Map<string, FileInfo>): Promise<void> {
-    // Skip temp/hidden files
-    if (this.isTempFile(path)) {
-      console.debug(`[Vault Sync] Skipping temp file: ${path}`);
-      return;
-    }
-
-    const adapter = this.app.vault.adapter;
-    const content = await adapter.readBinary(path);
-    const hash = await this.hashBinaryContent(content);
-    const stat = await adapter.stat(path);
-    const mtime = stat?.mtime || Date.now();
-
-    const serverFile = serverFileMap.get(path);
-
-    if (!serverFile) {
-      // Upload to server
-      console.log(`[Vault Sync] Uploading config: ${path}`);
-      await this.uploadConfigFile(path, content, hash, mtime);
-    } else if (serverFile.hash !== hash) {
-      // Hash mismatch - sync based on mtime
-      if (mtime > serverFile.mtime) {
-        console.log(`[Vault Sync] Config is newer locally, uploading: ${path}`);
-        await this.uploadConfigFile(path, content, hash, mtime);
-      } else {
-        console.log(`[Vault Sync] Config is newer on server, downloading: ${path}`);
-        await this.downloadFile(path);
-      }
-    }
-    // If hashes match, no action needed
-  }
-
-  private async uploadConfigFile(path: string, content: ArrayBuffer, hash: string, mtime: number): Promise<void> {
-    if (!this.isConnected()) {
-      console.warn(`[Vault Sync] Cannot upload config ${path}, not connected`);
-      return;
-    }
-
-    try {
-      const formData = new FormData();
-      formData.append('path', path);
-      formData.append('mtime', String(mtime));
-      formData.append('hash', hash);
-      formData.append('file', new Blob([content]), path.split('/').pop() || 'config');
-
-      const baseUrl = this.getBaseUrl();
-      const response = await fetch(`${baseUrl}/api/upload?device_id=${encodeURIComponent(this.settings.deviceId)}`, {
-        method: 'POST',
-        headers: {
-          'X-Auth-Token': this.settings.token,
-        },
-        body: formData,
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      this.localHashes.set(path, hash);
-      console.debug(`[Vault Sync] Uploaded config ${path}`);
-    } catch (e) {
-      console.error(`[Vault Sync] Failed to upload config ${path}:`, e);
-    }
   }
 }
