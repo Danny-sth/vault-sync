@@ -191,7 +191,11 @@ func (h *WSHandler) readPump(client *Client) {
 	}()
 
 	client.conn.SetReadLimit(50 * 1024 * 1024) // 50MB max message
-	// No read deadline - rely on client-side ping/pong for keepalive
+	client.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	client.conn.SetPongHandler(func(string) error {
+		client.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
 
 	for {
 		_, message, err := client.conn.ReadMessage()
@@ -217,27 +221,36 @@ func (h *WSHandler) readPump(client *Client) {
 }
 
 func (h *WSHandler) writePump(client *Client) {
+	ticker := time.NewTicker(30 * time.Second)
 	defer func() {
+		ticker.Stop()
 		client.conn.Close()
 	}()
 
 	for {
-		message, ok := <-client.send
-		if !ok {
-			client.conn.WriteMessage(websocket.CloseMessage, []byte{})
-			return
-		}
+		select {
+		case message, ok := <-client.send:
+			client.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if !ok {
+				client.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
 
-		client.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			w, err := client.conn.NextWriter(websocket.TextMessage)
+			if err != nil {
+				return
+			}
+			w.Write(message)
 
-		w, err := client.conn.NextWriter(websocket.TextMessage)
-		if err != nil {
-			return
-		}
-		w.Write(message)
+			if err := w.Close(); err != nil {
+				return
+			}
 
-		if err := w.Close(); err != nil {
-			return
+		case <-ticker.C:
+			client.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			if err := client.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		}
 	}
 }

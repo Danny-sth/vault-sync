@@ -37,12 +37,8 @@ func main() {
 	// Initialize auth
 	auth := NewAuthManager(config.Auth.MasterToken)
 
-	// Initialize hub
-	hub := NewHub()
-	go hub.Run()
-
-	// Initialize sync manager
-	syncManager := NewSyncManager(storage, hub, config.Sync.ConflictResolution)
+	// Initialize SSE broker
+	broker := NewSSEBroker()
 
 	// Start tombstone cleanup goroutine (runs daily)
 	go func() {
@@ -57,41 +53,29 @@ func main() {
 		}
 	}()
 
-	// Initialize WebSocket handler
-	wsHandler := NewWSHandler(hub, syncManager, auth, storage)
+	// Initialize HTTP handler
+	httpHandler := NewHTTPHandler(storage, auth, broker)
 
 	// Setup HTTP routes
 	mux := http.NewServeMux()
 
-	// WebSocket endpoint
-	mux.Handle("/ws", wsHandler)
+	// SSE endpoint for real-time notifications
+	mux.HandleFunc("/api/events", httpHandler.HandleSSE)
+
+	// File operations
+	mux.HandleFunc("/api/upload", httpHandler.HandleUpload)
+	mux.HandleFunc("/api/download/", httpHandler.HandleDownload)
+	mux.HandleFunc("/api/delete/", httpHandler.HandleDelete)
+	mux.HandleFunc("/api/list", httpHandler.HandleList)
 
 	// Health check
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":    "ok",
-			"devices":   len(hub.GetConnectedDevices()),
-			"storage":   config.Storage.Path,
+			"status":  "ok",
+			"clients": len(broker.clients),
+			"storage": config.Storage.Path,
 		})
-	})
-
-	// Debug: list files (requires auth)
-	mux.HandleFunc("/api/files", func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("Authorization")
-		if token != "Bearer "+config.Auth.MasterToken {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		files, err := storage.ListFiles()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(files)
 	})
 
 	// Token management
@@ -102,7 +86,7 @@ func main() {
 	addr := fmt.Sprintf(":%d", config.Server.Port)
 	server := &http.Server{
 		Addr:    addr,
-		Handler: logMiddleware(mux),
+		Handler: corsMiddleware(logMiddleware(mux)),
 	}
 
 	// Graceful shutdown
@@ -131,6 +115,21 @@ func main() {
 func logMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("%s %s %s", r.Method, r.URL.Path, r.RemoteAddr)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Auth-Token")
+		
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		
 		next.ServeHTTP(w, r)
 	})
 }

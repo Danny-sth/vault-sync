@@ -12,7 +12,7 @@ export interface VaultSyncSettings {
 }
 
 export const DEFAULT_SETTINGS: VaultSyncSettings = {
-  serverUrl: "wss://90.156.230.49:8443/ws",
+  serverUrl: "http://90.156.230.49:8080",
   token: "",
   deviceId: generateDeviceId(),
   deviceName: getPlatformName(),
@@ -55,7 +55,7 @@ export class VaultSyncSettingTab extends PluginSettingTab {
       .setDesc("Address of the sync server")
       .addText((text) =>
         text
-          .setPlaceholder("wss://example.com:8443/ws")
+          .setPlaceholder("http://example.com:8080")
           .setValue(this.plugin.settings.serverUrl)
           .onChange(async (value) => {
             this.plugin.settings.serverUrl = value;
