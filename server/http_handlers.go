@@ -219,7 +219,7 @@ func (h *HTTPHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	// Save file
-	err = h.storage.WriteFile(path, content, mtime)
+	_, err = h.storage.WriteFile(path, content, mtime)
 	if err != nil {
 		log.Printf("Failed to save file %s: %v", path, err)
 		http.Error(w, "Failed to save file", http.StatusInternalServerError)
@@ -270,13 +270,13 @@ func (h *HTTPHandler) HandleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	// Get file info for metadata
-	fileInfo, err := h.storage.GetFileInfo(path)
+	fileRecord := h.storage.GetFile(path)
 
 	// Return file with metadata in headers
 	w.Header().Set("Content-Type", "application/octet-stream")
-	if err == nil && fileInfo != nil {
-		w.Header().Set("X-File-Hash", fileInfo.Hash)
-		w.Header().Set("X-File-Mtime", fmt.Sprintf("%d", fileInfo.ModTime))
+	if fileRecord != nil {
+		w.Header().Set("X-File-Hash", fileRecord.Hash)
+		w.Header().Set("X-File-Mtime", fmt.Sprintf("%d", fileRecord.MTime))
 	}
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
 	
@@ -315,7 +315,7 @@ func (h *HTTPHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	// Delete file
-	err := h.storage.DeleteFile(path)
+	_, err := h.storage.DeleteFile(path)
 	if err != nil {
 		log.Printf("Failed to delete file %s: %v", path, err)
 		http.Error(w, "Failed to delete file", http.StatusInternalServerError)

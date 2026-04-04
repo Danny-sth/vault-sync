@@ -436,28 +436,50 @@ func computeHash(content []byte) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// GetAllFiles returns all file metadata
-func (s *Storage) GetAllFiles() []FileInfo {
-	s.mu.RLock()
-	paths := make([]string, 0, len(s.knownFiles))
-	for path := range s.knownFiles {
-		paths = append(paths, path)
-	}
-	s.mu.RUnlock()
+// Tombstone represents a deleted file
+type Tombstone struct {
+	Path      string `json:"path"`
+	DeletedAt int64  `json:"deletedAt"`
+}
 
-	result := make([]FileInfo, 0, len(paths))
-	for _, path := range paths {
-		info, err := s.GetFileInfo(path)
-		if err != nil {
-			// File might have been deleted, skip it
-			continue
-		}
-		result = append(result, *info)
+// GetTombstones returns all deletion entries as tombstones
+func (s *Storage) GetTombstones() []Tombstone {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]Tombstone, 0, len(s.deletions))
+	for _, d := range s.deletions {
+		result = append(result, Tombstone{
+			Path:      d.Path,
+			DeletedAt: d.DeletedAt,
+		})
 	}
 	return result
 }
 
-// GetTombstones returns all tombstones
-func (s *Storage) GetTombstones() []*Tombstone {
-	return s.ListTombstones()
+// CleanupExpiredTombstones removes tombstones older than TTL (14 days by default)
+func (s *Storage) CleanupExpiredTombstones() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ttlSeconds := int64(14 * 24 * 60 * 60) // 14 days
+	cutoff := time.Now().Unix() - ttlSeconds
+
+	kept := make([]DeletionEntry, 0, len(s.deletions))
+	removed := 0
+
+	for _, d := range s.deletions {
+		if d.DeletedAt > cutoff {
+			kept = append(kept, d)
+		} else {
+			removed++
+		}
+	}
+
+	s.deletions = kept
+	if removed > 0 {
+		s.triggerSave()
+	}
+
+	return removed
 }
