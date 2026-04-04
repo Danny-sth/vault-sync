@@ -34,6 +34,9 @@ export class SyncManager {
   private reconnectAttempts = 0;
   private shouldReconnect = true;
 
+  // Persistent pending deletes - files that need to be deleted on server
+  private pendingDeletes: Set<string> = new Set();
+
   onConnectionChange: ((connected: boolean) => void) | null = null;
 
   constructor(app: App, settings: VaultSyncSettings) {
@@ -269,8 +272,28 @@ export class SyncManager {
       let filesToUpload = 0;
       let filesDeleted = 0;
 
+      // First: process pending deletes (files deleted locally while offline)
+      if (this.pendingDeletes.size > 0) {
+        console.log(`[Vault Sync] Processing ${this.pendingDeletes.size} pending deletes`);
+        for (const path of [...this.pendingDeletes]) {
+          if (serverFileMap.has(path)) {
+            console.log(`[Vault Sync] Deleting pending: ${path}`);
+            await this.deleteFileOnServer(path);
+            filesDeleted++;
+          } else {
+            // File already gone from server
+            this.pendingDeletes.delete(path);
+          }
+        }
+      }
+
       // Files on server - check if we need to download/upload based on mtime
       for (const [serverPath, serverFile] of serverFileMap) {
+        // Skip if we just deleted this file or it's pending delete
+        if (this.pendingDeletes.has(serverPath)) {
+          continue;
+        }
+
         const localFile = localFileMap.get(serverPath);
 
         if (!localFile) {
@@ -363,6 +386,9 @@ export class SyncManager {
   queueFileDelete(path: string): void {
     if (this.isProcessingRemote) return;
     if (!this.shouldSyncFile(path)) return;
+
+    // Always track deletion - even if offline, we'll sync on reconnect
+    this.pendingDeletes.add(path);
 
     const existing = this.pendingChanges.get(path);
     if (existing) clearTimeout(existing);
@@ -498,7 +524,8 @@ export class SyncManager {
 
   private async deleteFileOnServer(path: string): Promise<void> {
     if (!this.isConnected()) {
-      console.warn(`[Vault Sync] Cannot delete ${path}, not connected`);
+      console.warn(`[Vault Sync] Cannot delete ${path}, not connected. Will retry on reconnect.`);
+      // pendingDeletes already has this path from queueFileDelete
       return;
     }
 
@@ -515,10 +542,13 @@ export class SyncManager {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
+      // Success - remove from pending
+      this.pendingDeletes.delete(path);
       this.localHashes.delete(path);
-      console.debug(`[Vault Sync] Deleted on server: ${path}`);
+      console.log(`[Vault Sync] Deleted on server: ${path}`);
     } catch (e) {
       console.error(`[Vault Sync] Failed to delete ${path}:`, e);
+      // Keep in pendingDeletes for retry
     }
   }
 
