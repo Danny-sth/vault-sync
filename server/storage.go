@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io/fs"
 	"log"
 	"os"
@@ -14,45 +13,46 @@ import (
 	"time"
 )
 
-var (
-	ErrPathTraversal = errors.New("path traversal detected")
-	ErrFileTooLarge  = errors.New("file too large")
-	ErrInvalidPath   = errors.New("invalid file path")
-)
+// FileRecord represents a synced file
+type FileRecord struct {
+	Path  string `json:"path"`
+	Hash  string `json:"hash"`
+	MTime int64  `json:"mtime"` // Unix milliseconds
+	Size  int64  `json:"size"`
+	Seq   uint64 `json:"seq"` // sequence when last modified
+}
 
+// DeletionEntry represents a deleted file in the deletion log
+type DeletionEntry struct {
+	Path      string `json:"path"`
+	Seq       uint64 `json:"seq"`
+	DeletedAt int64  `json:"deletedAt"` // Unix timestamp for TTL cleanup
+}
+
+// StorageState is persisted to disk
+type StorageState struct {
+	Sequence  uint64           `json:"sequence"`
+	Files     []*FileRecord    `json:"files"`
+	Deletions []DeletionEntry  `json:"deletions"`
+	UpdatedAt int64            `json:"updatedAt"`
+}
+
+// Storage manages files and sync state
 type Storage struct {
-	basePath       string
-	maxFileSizeMB  int
-	hashes         map[string]string
-	tombstones     map[string]*Tombstone
-	knownFiles     map[string]bool // Track known files for deletion detection
-	metadataPath   string          // Path to store metadata (tombstones, known files)
-	mu             sync.RWMutex
+	basePath     string
+	metadataPath string
+
+	mu        sync.RWMutex
+	sequence  uint64
+	files     map[string]*FileRecord // path -> record
+	deletions []DeletionEntry
+
+	saveChan chan struct{}
+	ttlDays  int
 }
 
-type PersistentMetadata struct {
-	Tombstones map[string]*Tombstone `json:"tombstones"`
-	KnownFiles map[string]bool       `json:"knownFiles"`
-	UpdatedAt  int64                 `json:"updatedAt"`
-}
-
-type FileInfo struct {
-	Path        string            `json:"path"`
-	Hash        string            `json:"hash"`
-	Size        int64             `json:"size"`
-	ModTime     int64             `json:"mtime"`
-	VectorClock map[string]int64  `json:"vectorClock,omitempty"`
-}
-
-type Tombstone struct {
-	Path        string            `json:"path"`
-	DeletedAt   int64             `json:"deletedAt"`
-	DeletedBy   string            `json:"deletedBy"`
-	VectorClock map[string]int64  `json:"vectorClock"`
-	TTL         int64             `json:"ttl"`
-}
-
-func NewStorage(basePath string, maxFileSizeMB int) (*Storage, error) {
+// NewStorage creates a new storage instance
+func NewStorage(basePath string, ttlDays int) (*Storage, error) {
 	absPath, err := filepath.Abs(basePath)
 	if err != nil {
 		return nil, err
@@ -62,78 +62,75 @@ func NewStorage(basePath string, maxFileSizeMB int) (*Storage, error) {
 		return nil, err
 	}
 
-	metadataPath := filepath.Join(absPath, ".vault-sync-metadata.json")
-
 	s := &Storage{
-		basePath:      absPath,
-		maxFileSizeMB: maxFileSizeMB,
-		hashes:        make(map[string]string),
-		tombstones:    make(map[string]*Tombstone),
-		knownFiles:    make(map[string]bool),
-		metadataPath:  metadataPath,
+		basePath:     absPath,
+		metadataPath: filepath.Join(absPath, ".vault-sync.json"),
+		files:        make(map[string]*FileRecord),
+		deletions:    make([]DeletionEntry, 0),
+		saveChan:     make(chan struct{}, 1),
+		ttlDays:      ttlDays,
 	}
 
-	// Load persisted metadata (tombstones + known files)
-	if err := s.loadMetadata(); err != nil {
-		log.Printf("Warning: could not load metadata: %v (starting fresh)", err)
+	// Load state from disk
+	if err := s.loadState(); err != nil {
+		log.Printf("Warning: could not load state: %v (starting fresh)", err)
 	}
 
-	// Build initial hash cache
-	if err := s.rebuildHashCache(); err != nil {
+	// Scan files and reconcile with stored state
+	if err := s.scanFiles(); err != nil {
 		return nil, err
 	}
 
-	// Detect files that were deleted while server was down
-	s.detectDeletedFiles()
+	// Start background saver
+	go s.backgroundSaver()
 
-	// Save updated metadata
-	s.saveMetadata()
+	// Start TTL cleanup (every hour)
+	go s.ttlCleanup()
 
 	return s, nil
 }
 
-// loadMetadata loads tombstones and known files from disk
-func (s *Storage) loadMetadata() error {
+// loadState loads state from disk
+func (s *Storage) loadState() error {
 	data, err := os.ReadFile(s.metadataPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil // First run, no metadata yet
+			return nil
 		}
 		return err
 	}
 
-	var meta PersistentMetadata
-	if err := json.Unmarshal(data, &meta); err != nil {
+	var state StorageState
+	if err := json.Unmarshal(data, &state); err != nil {
 		return err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if meta.Tombstones != nil {
-		s.tombstones = meta.Tombstones
-		log.Printf("Loaded %d tombstones from disk", len(s.tombstones))
+	s.sequence = state.Sequence
+	for _, f := range state.Files {
+		s.files[f.Path] = f
 	}
+	s.deletions = state.Deletions
 
-	if meta.KnownFiles != nil {
-		s.knownFiles = meta.KnownFiles
-		log.Printf("Loaded %d known files from disk", len(s.knownFiles))
-	}
-
+	log.Printf("Loaded state: seq=%d, files=%d, deletions=%d", s.sequence, len(s.files), len(s.deletions))
 	return nil
 }
 
-// saveMetadata saves tombstones and known files to disk
-func (s *Storage) saveMetadata() error {
+// saveState persists state to disk
+func (s *Storage) saveState() error {
 	s.mu.RLock()
-	meta := PersistentMetadata{
-		Tombstones: s.tombstones,
-		KnownFiles: s.knownFiles,
-		UpdatedAt:  time.Now().Unix(),
+	files := make([]*FileRecord, 0, len(s.files))
+	for _, f := range s.files {
+		files = append(files, f)
+	}
+	state := StorageState{
+		Sequence:  s.sequence,
+		Files:     files,
+		Deletions: s.deletions,
+		UpdatedAt: time.Now().Unix(),
 	}
 	s.mu.RUnlock()
 
-	data, err := json.MarshalIndent(meta, "", "  ")
+	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -141,27 +138,85 @@ func (s *Storage) saveMetadata() error {
 	return os.WriteFile(s.metadataPath, data, 0644)
 }
 
-// detectDeletedFiles creates tombstones for files that existed before but are now gone
-func (s *Storage) detectDeletedFiles() {
+// triggerSave schedules a debounced save
+func (s *Storage) triggerSave() {
+	select {
+	case s.saveChan <- struct{}{}:
+	default:
+	}
+}
+
+// backgroundSaver handles debounced saves
+func (s *Storage) backgroundSaver() {
+	for range s.saveChan {
+		time.Sleep(100 * time.Millisecond)
+		// Drain pending
+		for {
+			select {
+			case <-s.saveChan:
+			default:
+				goto save
+			}
+		}
+	save:
+		if err := s.saveState(); err != nil {
+			log.Printf("Error saving state: %v", err)
+		}
+	}
+}
+
+// ttlCleanup removes expired deletions
+func (s *Storage) ttlCleanup() {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		s.cleanupExpiredDeletions()
+	}
+}
+
+func (s *Storage) cleanupExpiredDeletions() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	cutoff := time.Now().Unix() - int64(s.ttlDays*24*60*60)
+	kept := make([]DeletionEntry, 0)
+	removed := 0
+
+	for _, d := range s.deletions {
+		if d.DeletedAt > cutoff {
+			kept = append(kept, d)
+		} else {
+			removed++
+		}
+	}
+
+	if removed > 0 {
+		s.deletions = kept
+		log.Printf("TTL cleanup: removed %d expired deletions", removed)
+		s.triggerSave()
+	}
+}
+
+// scanFiles scans the vault and reconciles with stored state
+func (s *Storage) scanFiles() error {
 	currentFiles := make(map[string]bool)
 
-	// Scan current files
-	filepath.WalkDir(s.basePath, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(s.basePath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			return nil // skip errors
 		}
 
-		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
+		// Skip hidden files and directories
+		name := d.Name()
+		if strings.HasPrefix(name, ".") {
+			if d.IsDir() && name != "." {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		if strings.HasPrefix(d.Name(), ".") {
+		if d.IsDir() {
 			return nil
 		}
 
@@ -172,270 +227,197 @@ func (s *Storage) detectDeletedFiles() {
 		relPath = filepath.ToSlash(relPath)
 		currentFiles[relPath] = true
 
+		// Check if file changed
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+
+		existing := s.files[relPath]
+		mtime := info.ModTime().UnixMilli()
+		size := info.Size()
+
+		if existing == nil || existing.MTime != mtime || existing.Size != size {
+			// File is new or changed, compute hash
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			hash := computeHash(content)
+
+			s.mu.Lock()
+			s.sequence++
+			s.files[relPath] = &FileRecord{
+				Path:  relPath,
+				Hash:  hash,
+				MTime: mtime,
+				Size:  size,
+				Seq:   s.sequence,
+			}
+			s.mu.Unlock()
+		}
+
 		return nil
 	})
 
-	// Find files that were known but no longer exist
-	deletedCount := 0
-	now := time.Now().Unix()
-
-	for path := range s.knownFiles {
-		if !currentFiles[path] {
-			// File was deleted while server was down
-			if _, exists := s.tombstones[path]; !exists {
-				s.tombstones[path] = &Tombstone{
-					Path:        path,
-					DeletedAt:   now,
-					DeletedBy:   "server-scan",
-					VectorClock: nil,
-					TTL:         now + (30 * 24 * 60 * 60), // 30 days
-				}
-				deletedCount++
-				log.Printf("Detected deleted file (creating tombstone): %s", path)
-			}
-		}
-	}
-
-	// Update known files to current state
-	s.knownFiles = currentFiles
-
-	if deletedCount > 0 {
-		log.Printf("Created %d tombstones for files deleted while server was down", deletedCount)
-	}
-}
-
-func (s *Storage) validatePath(path string) (string, error) {
-	// Prevent empty paths
-	if path == "" {
-		return "", ErrInvalidPath
-	}
-
-	// Clean the path
-	cleanPath := filepath.Clean(path)
-
-	// Check for path traversal
-	if strings.Contains(cleanPath, "..") {
-		return "", ErrPathTraversal
-	}
-
-	// Build full path
-	fullPath := filepath.Join(s.basePath, cleanPath)
-
-	// Ensure the path is still within basePath
-	if !strings.HasPrefix(fullPath, s.basePath) {
-		return "", ErrPathTraversal
-	}
-
-	return fullPath, nil
-}
-
-func (s *Storage) WriteFile(path string, content []byte, mtime int64) error {
-	fullPath, err := s.validatePath(path)
 	if err != nil {
 		return err
 	}
 
-	// Check file size
-	maxSize := int64(s.maxFileSizeMB) * 1024 * 1024
-	if int64(len(content)) > maxSize {
-		return ErrFileTooLarge
+	// Find deleted files
+	s.mu.Lock()
+	for path := range s.files {
+		if !currentFiles[path] {
+			// File was deleted
+			s.sequence++
+			s.deletions = append(s.deletions, DeletionEntry{
+				Path:      path,
+				Seq:       s.sequence,
+				DeletedAt: time.Now().Unix(),
+			})
+			delete(s.files, path)
+			log.Printf("Detected deleted file: %s (seq=%d)", path, s.sequence)
+		}
+	}
+	s.mu.Unlock()
+
+	s.triggerSave()
+	log.Printf("Scan complete: %d files, seq=%d", len(s.files), s.sequence)
+	return nil
+}
+
+// GetSequence returns current sequence
+func (s *Storage) GetSequence() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.sequence
+}
+
+// GetFile returns a file record
+func (s *Storage) GetFile(path string) *FileRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.files[path]
+}
+
+// GetAllFiles returns all file records
+func (s *Storage) GetAllFiles() []*FileRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	result := make([]*FileRecord, 0, len(s.files))
+	for _, f := range s.files {
+		result = append(result, f)
+	}
+	return result
+}
+
+// GetChangesSince returns all changes (files + deletions) since given sequence
+func (s *Storage) GetChangesSince(seq uint64) ([]*FileRecord, []DeletionEntry) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	files := make([]*FileRecord, 0)
+	for _, f := range s.files {
+		if f.Seq > seq {
+			files = append(files, f)
+		}
 	}
 
-	// Ensure directory exists
+	deletions := make([]DeletionEntry, 0)
+	for _, d := range s.deletions {
+		if d.Seq > seq {
+			deletions = append(deletions, d)
+		}
+	}
+
+	return files, deletions
+}
+
+// WriteFile saves a file and returns the new sequence
+func (s *Storage) WriteFile(path string, content []byte, mtime int64) (uint64, error) {
+	fullPath := filepath.Join(s.basePath, filepath.FromSlash(path))
+
+	// Create directory if needed
 	dir := filepath.Dir(fullPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
+		return 0, err
 	}
 
 	// Write file
 	if err := os.WriteFile(fullPath, content, 0644); err != nil {
-		return err
+		return 0, err
 	}
 
-	// Set modification time if provided
+	// Set mtime
 	if mtime > 0 {
-		modTime := time.Unix(0, mtime*int64(time.Millisecond))
-		if err := os.Chtimes(fullPath, modTime, modTime); err != nil {
-			// Non-fatal error, just log it
-		}
+		t := time.UnixMilli(mtime)
+		os.Chtimes(fullPath, t, t)
 	}
 
-	// Update hash cache and known files
-	hash := s.computeHash(content)
+	hash := computeHash(content)
+	info, _ := os.Stat(fullPath)
+
 	s.mu.Lock()
-	s.hashes[path] = hash
-	s.knownFiles[path] = true
-	// Remove tombstone if file is recreated
-	delete(s.tombstones, path)
+	s.sequence++
+	seq := s.sequence
+	s.files[path] = &FileRecord{
+		Path:  path,
+		Hash:  hash,
+		MTime: info.ModTime().UnixMilli(),
+		Size:  info.Size(),
+		Seq:   seq,
+	}
+	// Remove from deletions if present
+	s.removeDeletion(path)
 	s.mu.Unlock()
 
-	// Persist metadata (async to avoid blocking)
-	go s.saveMetadata()
-
-	return nil
+	s.triggerSave()
+	return seq, nil
 }
 
-func (s *Storage) ReadFile(path string) ([]byte, error) {
-	fullPath, err := s.validatePath(path)
-	if err != nil {
-		return nil, err
+// DeleteFile removes a file and returns the new sequence
+func (s *Storage) DeleteFile(path string) (uint64, error) {
+	fullPath := filepath.Join(s.basePath, filepath.FromSlash(path))
+
+	// Remove physical file
+	if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
+		return 0, err
 	}
 
+	s.mu.Lock()
+	s.sequence++
+	seq := s.sequence
+	delete(s.files, path)
+	s.deletions = append(s.deletions, DeletionEntry{
+		Path:      path,
+		Seq:       seq,
+		DeletedAt: time.Now().Unix(),
+	})
+	s.mu.Unlock()
+
+	s.triggerSave()
+
+	// Clean empty directories
+	s.cleanEmptyDirs(filepath.Dir(fullPath))
+
+	return seq, nil
+}
+
+// ReadFile reads file content
+func (s *Storage) ReadFile(path string) ([]byte, error) {
+	fullPath := filepath.Join(s.basePath, filepath.FromSlash(path))
 	return os.ReadFile(fullPath)
 }
 
-func (s *Storage) DeleteFile(path string) error {
-	fullPath, err := s.validatePath(path)
-	if err != nil {
-		return err
+func (s *Storage) removeDeletion(path string) {
+	kept := make([]DeletionEntry, 0, len(s.deletions))
+	for _, d := range s.deletions {
+		if d.Path != path {
+			kept = append(kept, d)
+		}
 	}
-
-	if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-
-	// Remove from hash cache and known files
-	s.mu.Lock()
-	delete(s.hashes, path)
-	delete(s.knownFiles, path)
-	s.mu.Unlock()
-
-	// Persist metadata (async)
-	go s.saveMetadata()
-
-	// Try to remove empty parent directories
-	s.cleanEmptyDirs(filepath.Dir(fullPath))
-
-	return nil
-}
-
-func (s *Storage) GetFileHash(path string) string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.hashes[path]
-}
-
-func (s *Storage) GetFileInfo(path string) (*FileInfo, error) {
-	fullPath, err := s.validatePath(path)
-	if err != nil {
-		return nil, err
-	}
-
-	stat, err := os.Stat(fullPath)
-	if err != nil {
-		return nil, err
-	}
-
-	s.mu.RLock()
-	hash := s.hashes[path]
-	s.mu.RUnlock()
-
-	return &FileInfo{
-		Path:    path,
-		Hash:    hash,
-		Size:    stat.Size(),
-		ModTime: stat.ModTime().UnixMilli(),
-	}, nil
-}
-
-func (s *Storage) ListFiles() ([]*FileInfo, error) {
-	var files []*FileInfo
-
-	err := filepath.WalkDir(s.basePath, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Skip directories
-		if d.IsDir() {
-			// Skip hidden directories (like .obsidian)
-			if strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Skip hidden files
-		if strings.HasPrefix(d.Name(), ".") {
-			return nil
-		}
-
-		// Get relative path
-		relPath, err := filepath.Rel(s.basePath, path)
-		if err != nil {
-			return err
-		}
-
-		// Use forward slashes for consistency
-		relPath = filepath.ToSlash(relPath)
-
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-
-		s.mu.RLock()
-		hash := s.hashes[relPath]
-		s.mu.RUnlock()
-
-		files = append(files, &FileInfo{
-			Path:    relPath,
-			Hash:    hash,
-			Size:    info.Size(),
-			ModTime: info.ModTime().UnixMilli(),
-		})
-
-		return nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	return files, nil
-}
-
-func (s *Storage) rebuildHashCache() error {
-	return filepath.WalkDir(s.basePath, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") && d.Name() != "." {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		if strings.HasPrefix(d.Name(), ".") {
-			return nil
-		}
-
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return nil // Skip unreadable files
-		}
-
-		relPath, err := filepath.Rel(s.basePath, path)
-		if err != nil {
-			return nil
-		}
-
-		relPath = filepath.ToSlash(relPath)
-		hash := s.computeHash(content)
-
-		s.mu.Lock()
-		s.hashes[relPath] = hash
-		s.mu.Unlock()
-
-		return nil
-	})
-}
-
-func (s *Storage) computeHash(content []byte) string {
-	hash := sha256.Sum256(content)
-	return hex.EncodeToString(hash[:])
+	s.deletions = kept
 }
 
 func (s *Storage) cleanEmptyDirs(dir string) {
@@ -449,64 +431,9 @@ func (s *Storage) cleanEmptyDirs(dir string) {
 	}
 }
 
-// Tombstone management
-func (s *Storage) CreateTombstone(path, deviceID string, vectorClock map[string]int64) {
-	s.mu.Lock()
-	now := time.Now().Unix()
-	s.tombstones[path] = &Tombstone{
-		Path:        path,
-		DeletedAt:   now,
-		DeletedBy:   deviceID,
-		VectorClock: vectorClock,
-		TTL:         now + (30 * 24 * 60 * 60), // 30 days
-	}
-	s.mu.Unlock()
-
-	// Persist metadata
-	go s.saveMetadata()
-}
-
-func (s *Storage) GetTombstone(path string) *Tombstone {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.tombstones[path]
-}
-
-func (s *Storage) DeleteTombstone(path string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.tombstones, path)
-}
-
-func (s *Storage) ListTombstones() []*Tombstone {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	result := make([]*Tombstone, 0, len(s.tombstones))
-	for _, tomb := range s.tombstones {
-		result = append(result, tomb)
-	}
-	return result
-}
-
-func (s *Storage) CleanupExpiredTombstones() int {
-	s.mu.Lock()
-	now := time.Now().Unix()
-	count := 0
-
-	for path, tomb := range s.tombstones {
-		if tomb.TTL < now {
-			delete(s.tombstones, path)
-			count++
-		}
-	}
-	s.mu.Unlock()
-
-	if count > 0 {
-		s.saveMetadata()
-	}
-
-	return count
+func computeHash(content []byte) string {
+	hash := sha256.Sum256(content)
+	return hex.EncodeToString(hash[:])
 }
 
 // GetAllFiles returns all file metadata
