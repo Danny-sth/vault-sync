@@ -508,3 +508,29 @@ func (s *Storage) CleanupExpiredTombstones() int {
 
 	return count
 }
+
+// GetAllFiles returns all file metadata
+func (s *Storage) GetAllFiles() []FileInfo {
+	s.mu.RLock()
+	paths := make([]string, 0, len(s.knownFiles))
+	for path := range s.knownFiles {
+		paths = append(paths, path)
+	}
+	s.mu.RUnlock()
+
+	result := make([]FileInfo, 0, len(paths))
+	for _, path := range paths {
+		info, err := s.GetFileInfo(path)
+		if err != nil {
+			// File might have been deleted, skip it
+			continue
+		}
+		result = append(result, *info)
+	}
+	return result
+}
+
+// GetTombstones returns all tombstones
+func (s *Storage) GetTombstones() []*Tombstone {
+	return s.ListTombstones()
+}

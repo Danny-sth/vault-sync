@@ -1,5 +1,5 @@
 {
-  "id": "vault-sync-realtime",
+  "id": "vault-sync",
   "name": "Vault Sync",
   "version": "0.1.12",
   "minAppVersion": "1.0.0",

@@ -87,6 +87,8 @@ export default class VaultSyncPlugin extends Plugin {
     }
 
     // Detect app resume (Android/Desktop) using visibility API
+    // DISABLED FOR DEBUGGING: This might be triggering too frequently
+    /*
     this.registerDomEvent(document, 'visibilitychange', () => {
       if (document.visibilityState === 'visible') {
         // If we were connected but now disconnected, try to reconnect
@@ -96,6 +98,7 @@ export default class VaultSyncPlugin extends Plugin {
         }
       }
     });
+    */
   }
 
   onunload() {
