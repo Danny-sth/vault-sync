@@ -32,7 +32,7 @@ export class SyncManager {
   private isProcessingRemote = false;
   private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 10;
+  private shouldReconnect = true;
 
   onConnectionChange: ((connected: boolean) => void) | null = null;
 
@@ -103,6 +103,8 @@ export class SyncManager {
   }
 
   connect(): void {
+    this.shouldReconnect = true;
+
     if (this.eventSource && this.eventSource.readyState === EventSource.OPEN) {
       console.log('[Vault Sync] Already connected');
       return;
@@ -155,15 +157,12 @@ export class SyncManager {
       console.error('[Vault Sync] EventSource readyState:', this.eventSource?.readyState);
       this.onConnectionChange?.(false);
 
-      // Reconnect on all platforms
-      if (this.reconnectAttempts < this.maxReconnectAttempts) {
-        const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+      // Reconnect quickly - max 5 seconds delay for real-time sync
+      if (this.shouldReconnect) {
+        const delay = Math.min(1000 * (this.reconnectAttempts + 1), 5000);
         this.reconnectAttempts++;
         console.log(`[Vault Sync] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
-        new Notice(`Vault sync: reconnecting in ${delay / 1000}s...`);
         this.reconnectTimeout = setTimeout(() => this.connect(), delay);
-      } else {
-        new Notice("Vault sync: max reconnect attempts reached");
       }
     };
 
@@ -194,11 +193,12 @@ export class SyncManager {
   }
 
   disconnect(): void {
+    this.shouldReconnect = false;
+
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
-    this.reconnectAttempts = this.maxReconnectAttempts;
 
     if (this.eventSource) {
       this.eventSource.close();
