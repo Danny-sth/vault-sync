@@ -137,7 +137,7 @@ export class SyncManager {
   private handleFileWatcherChanges(changes: FileChange[]): void {
     if (this.isProcessingRemote) return;
 
-    console.log(`[VaultSync] FileWatcher detected ${changes.length} external changes`);
+    console.debug(`[VaultSync] FileWatcher detected ${changes.length} external changes`);
 
     for (const change of changes) {
       switch (change.type) {
@@ -261,7 +261,7 @@ export class SyncManager {
   }
 
   private async downloadFile(path: string, retries = 3): Promise<boolean> {
-    console.log(`[VaultSync] downloadFile starting: ${path}`);
+    console.debug(`[VaultSync] downloadFile starting: ${path}`);
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
         const baseUrl = this.settings.serverUrl.replace('/ws', '').replace('wss://', 'https://').replace('ws://', 'http://');
@@ -407,7 +407,7 @@ export class SyncManager {
       const files = response.files || [];
       const tombstoneList = response.tombstones || [];
 
-      console.log(`[VaultSync] Full sync received: ${files.length} files, ${tombstoneList.length} tombstones, currentSeq=${response.currentSeq}`);
+      console.debug(`[VaultSync] Full sync received: ${files.length} files, ${tombstoneList.length} tombstones, currentSeq=${response.currentSeq}`);
       new Notice(`Sync: Server has ${files.length} files`);
 
       // Debug: write to file
@@ -430,7 +430,7 @@ export class SyncManager {
     const localFiles = this.app.vault.getFiles().filter(f => this.shouldSyncFile(f.path));
     const localHashes = await this.localState.getAllHashes();
 
-    console.log(`[VaultSync] Local state: ${localFiles.length} files, ${localHashes.size} hashes`);
+    console.debug(`[VaultSync] Local state: ${localFiles.length} files, ${localHashes.size} hashes`);
     new Notice(`Local: ${localFiles.length} files`);
 
     // Debug: count server files not on local
@@ -445,9 +445,9 @@ export class SyncManager {
         }
       }
     }
-    console.log(`[VaultSync] DEBUG: ${missingCount} files on server but not local`);
+    console.debug(`[VaultSync] DEBUG: ${missingCount} files on server but not local`);
     if (missingCount > 0) {
-      console.log(`[VaultSync] DEBUG: Missing examples: ${missingPaths.join(', ')}`);
+      console.debug(`[VaultSync] DEBUG: Missing examples: ${missingPaths.join(', ')}`);
       new Notice(`Sync: Need to download ${missingCount} files`);
     }
 
@@ -484,7 +484,7 @@ export class SyncManager {
     }
 
     // Download files with progress logging
-    console.log(`[VaultSync] Need to download ${toDownload.length} files`);
+    console.debug(`[VaultSync] Need to download ${toDownload.length} files`);
 
     if (toDownload.length > 0) {
       new Notice(`Downloading ${toDownload.length} files...`);
@@ -494,7 +494,7 @@ export class SyncManager {
       const { path } = toDownload[i];
 
       if ((i + 1) % 10 === 0 || i === toDownload.length - 1) {
-        console.log(`[VaultSync] Downloading progress: ${i + 1}/${toDownload.length}`);
+        console.debug(`[VaultSync] Downloading progress: ${i + 1}/${toDownload.length}`);
         new Notice(`Download: ${i + 1}/${toDownload.length}`);
       }
 
@@ -515,7 +515,7 @@ export class SyncManager {
 
     // Upload local-only files
     const toUpload = localFiles.filter(f => !serverFiles.has(f.path) && !tombstones.has(f.path));
-    console.log(`[VaultSync] Need to upload ${toUpload.length} local-only files`);
+    console.debug(`[VaultSync] Need to upload ${toUpload.length} local-only files`);
 
     // Debug: add upload info
     await this.app.vault.adapter.append('_sync_debug.txt', `\nTo upload: ${toUpload.length} local-only files\nLocal total: ${localFiles.length}, Server: ${serverFiles.size}\n`);
@@ -532,7 +532,7 @@ export class SyncManager {
       }
 
       if ((i + 1) % 10 === 0 || i === toUpload.length - 1) {
-        console.log(`[VaultSync] Uploading progress: ${i + 1}/${toUpload.length}`);
+        console.debug(`[VaultSync] Uploading progress: ${i + 1}/${toUpload.length}`);
         await this.app.vault.adapter.append('_sync_debug.txt', `Progress: ${i + 1}/${toUpload.length}\n`);
       }
 
@@ -571,7 +571,7 @@ export class SyncManager {
     }
 
     const summary = `Sync complete: ↓${downloaded}${downloadFailed > 0 ? '(❌' + downloadFailed + ')' : ''} ↑${uploaded}${uploadFailed > 0 ? '(❌' + uploadFailed + ')' : ''} ×${deleted}`;
-    console.log(`[VaultSync] ${summary}`);
+    console.debug(`[VaultSync] ${summary}`);
 
     if (downloadFailed > 0 || uploadFailed > 0) {
       new Notice(`Vault Sync: ${summary}`);

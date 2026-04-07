@@ -8,14 +8,14 @@ export default class VaultSyncPlugin extends Plugin {
   statusBarItem: HTMLElement | null = null;
 
   async onload(): Promise<void> {
-    console.log('[VaultSync] ========================================');
-    console.log('[VaultSync] Loading plugin v2.0');
-    console.log('[VaultSync] ========================================');
+    console.debug('[VaultSync] ========================================');
+    console.debug('[VaultSync] Loading plugin v2.0');
+    console.debug('[VaultSync] ========================================');
     new Notice('VaultSync: Loading plugin...');
 
     try {
       await this.loadSettings();
-      console.log('[VaultSync] Settings loaded:', JSON.stringify(this.settings, null, 2));
+      console.debug('[VaultSync] Settings loaded:', JSON.stringify(this.settings, null, 2));
 
       this.addSettingTab(new VaultSyncSettingTab(this.app, this));
 
@@ -43,16 +43,16 @@ export default class VaultSyncPlugin extends Plugin {
       });
 
       // Initialize sync manager
-      console.log('[VaultSync] Creating SyncManager...');
+      console.debug('[VaultSync] Creating SyncManager...');
       this.syncManager = new SyncManager(this.app, this.settings);
       this.syncManager.onConnectionChange = (connected) => {
-        console.log('[VaultSync] Connection state changed:', connected);
+        console.debug('[VaultSync] Connection state changed:', connected);
         this.updateStatusBar(connected);
       };
 
-      console.log('[VaultSync] Initializing SyncManager...');
+      console.debug('[VaultSync] Initializing SyncManager...');
       await this.syncManager.init();
-      console.log('[VaultSync] SyncManager initialized');
+      console.debug('[VaultSync] SyncManager initialized');
 
       // Register vault events
       this.registerEvent(
@@ -88,11 +88,11 @@ export default class VaultSyncPlugin extends Plugin {
       );
 
       // Auto-connect
-      console.log('[VaultSync] AutoConnect:', this.settings.autoConnect, 'Token exists:', !!this.settings.token);
+      console.debug('[VaultSync] AutoConnect:', this.settings.autoConnect, 'Token exists:', !!this.settings.token);
       if (this.settings.autoConnect && this.settings.token) {
-        console.log('[VaultSync] Will auto-connect in 2 seconds...');
+        console.debug('[VaultSync] Will auto-connect in 2 seconds...');
         setTimeout(() => {
-          console.log('[VaultSync] Auto-connect triggered');
+          console.debug('[VaultSync] Auto-connect triggered');
           this.connect();
         }, 2000);
       }
@@ -106,7 +106,7 @@ export default class VaultSyncPlugin extends Plugin {
         }
       });
 
-      console.log('[VaultSync] Plugin loaded successfully');
+      console.debug('[VaultSync] Plugin loaded successfully');
     } catch (error) {
       console.error('[VaultSync] FATAL ERROR during plugin load:', error);
       new Notice('Vault Sync: Failed to load plugin');
@@ -114,25 +114,25 @@ export default class VaultSyncPlugin extends Plugin {
   }
 
   onunload(): void {
-    console.log('[VaultSync] Unloading plugin');
+    console.debug('[VaultSync] Unloading plugin');
     this.syncManager?.destroy();
   }
 
   async connect(): Promise<void> {
-    console.log('[VaultSync] connect() called');
-    console.log('[VaultSync] Server URL:', this.settings.serverUrl);
-    console.log('[VaultSync] Token:', this.settings.token ? '[set]' : '[not set]');
+    console.debug('[VaultSync] connect() called');
+    console.debug('[VaultSync] Server URL:', this.settings.serverUrl);
+    console.debug('[VaultSync] Token:', this.settings.token ? '[set]' : '[not set]');
 
     if (!this.settings.token) {
-      console.log('[VaultSync] No token configured');
+      console.debug('[VaultSync] No token configured');
       new Notice('Vault Sync: Please configure token in settings');
       return;
     }
 
     try {
-      console.log('[VaultSync] Calling syncManager.connect()...');
+      console.debug('[VaultSync] Calling syncManager.connect()...');
       await this.syncManager?.connect();
-      console.log('[VaultSync] syncManager.connect() completed');
+      console.debug('[VaultSync] syncManager.connect() completed');
     } catch (error) {
       console.error('[VaultSync] Connection error:', error);
       new Notice('Vault Sync: Connection failed - check console');
