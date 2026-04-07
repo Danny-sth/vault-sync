@@ -1,98 +1,134 @@
-# Vault Sync v2.0
+# Vault Sync
 
-Real-time Obsidian vault synchronization via WebSocket with sequence-based sync.
+Real-time file synchronization for Obsidian between devices using WebSocket/STOMP.
 
-## Architecture (v2.0)
+## Architecture
 
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│ Linux Desktop│     │Windows Laptop│     │Android Phone │
-│   Obsidian   │     │   Obsidian   │     │   Obsidian   │
-│   + Plugin   │     │   + Plugin   │     │   + Plugin   │
-└──────┬───────┘     └──────┬───────┘     └──────┬───────┘
-       │                    │                    │
-       └────────────────────┼────────────────────┘
-                            │ WebSocket (ws://)
-                            ▼
-              ┌─────────────────────────┐
-              │   VPS (vault-sync)      │
-              │   Port: 8080            │
-              │   /opt/obsidian-vault/  │
-              │                         │
-              │   + File Watcher        │ ← NEW: real-time detection
-              │   + Sequence counter    │ ← NEW: efficient sync
-              │   + Deletion log (14d)  │ ← NEW: no tombstones
-              └─────────────────────────┘
++-------------------+     WebSocket/STOMP      +-------------------+
+|  Obsidian Plugin  |<------------------------>|  Spring Boot      |
+|  (TypeScript)     |                          |  Server (Java 21) |
+|                   |      /topic/sync         |                   |
+|  - @stomp/stompjs |<------------------------>|  - WebSocket      |
+|  - IndexedDB      |      /app/file.*         |  - H2 Database    |
+|  - Offline Queue  |                          |  - File Storage   |
++-------------------+                          +-------------------+
 ```
 
-## Key Features (v2.0)
+## Components
 
-- **Sequence-based sync**: Client tracks `lastSeq`, server sends only changes after that
-- **Real-time file watcher**: Deletions on VPS are detected immediately (fsnotify)
-- **Deletion log with TTL**: 14-day retention, no permanent tombstones
-- **Last-Write-Wins**: Conflict resolution by mtime
-- **All file types**: Syncs any file, not just .md
+### Server (`../vault-sync-server/`)
+
+Spring Boot 3.3 + Java 21 with Virtual Threads.
+
+- **WebSocket/STOMP** for real-time bidirectional communication
+- **H2 Database** for file metadata persistence
+- **File Storage** for binary file content
+- **Token Authentication** for security
+
+### Plugin (`plugin/`)
+
+TypeScript Obsidian plugin with:
+
+- **@stomp/stompjs** for WebSocket/STOMP client
+- **IndexedDB** for local state persistence (hashes, pending operations)
+- **Debounced file detection** to prevent rapid uploads
+- **Offline queue** for operations when disconnected
+
+## Installation
+
+### Server
+
+```bash
+cd vault-sync-server
+./mvnw clean package -DskipTests
+scp target/vault-sync-*.jar user@server:/opt/vault-sync/
+```
+
+### Plugin
+
+```bash
+cd plugin
+npm install
+npm run build
+cp main.js manifest.json ~/.obsidian/plugins/vault-sync/
+```
+
+## Configuration
+
+### Server (`application.yml`)
+
+```yaml
+server:
+  port: 8444
+
+vault-sync:
+  storage-path: /opt/vault-sync/files
+  token: your-secret-token
+  tombstone-ttl-days: 14
+```
+
+### Plugin (`data.json`)
+
+```json
+{
+  "serverUrl": "ws://your-server:8444/ws",
+  "token": "your-secret-token",
+  "deviceId": "unique-device-id",
+  "autoConnect": true,
+  "syncOnStart": true,
+  "debounceMs": 500
+}
+```
 
 ## Protocol
 
-### Client → Server
-- `sync` - Request changes since `lastSeq`
-- `file_change` - Send file content (base64)
-- `file_delete` - Delete file
+### WebSocket Endpoints
 
-### Server → Client
-- `sync_response` - List of changes (files + deletions)
-- `change` - Real-time file change broadcast
-- `delete` - Real-time deletion broadcast
-- `conflict` - Server version wins (client mtime older)
+| Endpoint | Direction | Purpose |
+|----------|-----------|---------|
+| `/ws` | - | WebSocket connection |
+| `/topic/sync` | Server -> All | Broadcast file changes |
+| `/user/queue/sync` | Server -> Client | Private sync responses |
+| `/app/file.change` | Client -> Server | File change notification |
+| `/app/file.delete` | Client -> Server | File deletion |
+| `/app/sync.request` | Client -> Server | Request sync state |
 
-## Setup
+### REST Endpoints
 
-### 1. VPS
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/upload` | POST | Upload file content |
+| `/api/download/{path}` | GET | Download file content |
+| `/api/delete/{path}` | DELETE | Delete file |
+| `/api/list` | GET | List all files |
+
+## Development
+
+### Build Plugin
 
 ```bash
-# Environment variables
-AUTH_TOKEN=<your-secret-token>
-VAULT_PATH=/opt/obsidian-vault
-VAULT_SYNC_PORT=8080
-TTL_DAYS=14
-
-# Systemd service
-systemctl enable vault-sync
-systemctl start vault-sync
+cd plugin
+npm run dev    # Watch mode
+npm run build  # Production build
 ```
 
-### 2. Plugin
+### Build Server
 
-1. Copy `plugin/main.js` + `manifest.json` to `.obsidian/plugins/vault-sync/`
-2. Enable plugin in Obsidian
-3. Configure:
-   - Server URL: `http://your-vps-ip:8080`
-   - Token: Same as AUTH_TOKEN
-   - Enable sync
-
-## API Endpoints
-
-| Endpoint | Auth | Description |
-|----------|------|-------------|
-| `/health` | No | Server status (sequence, files, clients) |
-| `/status` | Yes | Detailed status |
-| `/ws` | Yes | WebSocket connection |
+```bash
+cd vault-sync-server
+./mvnw spring-boot:run  # Development
+./mvnw package          # Production JAR
+```
 
 ## Changelog
 
-### v2.0.0 (2026-03-30)
-- **Complete rewrite** - sequence-based sync
-- **Real-time file watcher** - deletions on VPS sync immediately
-- **Deletion log** - 14-day TTL instead of permanent tombstones
-- **Simplified protocol** - no vector clocks, no file_move
-- **All file types** - not just .md
-- **No TLS** - simplified setup (use reverse proxy for HTTPS)
-
-### v1.x
-- Vector clock-based sync
-- Tombstones for deletions
-- No real-time VPS file watching
+### v2.0.0 (2026-04-06)
+- **Complete rewrite** - Spring Boot + STOMP instead of Go + SSE
+- **WebSocket/STOMP** - true bidirectional communication
+- **IndexedDB** - persistent client-side state
+- **Offline queue** - operations queued when disconnected
+- **H2 Database** - proper server-side metadata storage
 
 ## License
 

@@ -1,9 +1,10 @@
 {
   "id": "vault-sync",
   "name": "Vault Sync",
-  "version": "0.1.12",
+  "version": "2.0.0",
   "minAppVersion": "1.0.0",
-  "description": "Real-time vault sync via WebSocket.",
-  "author": "Danny",
+  "description": "Real-time file synchronization between devices using WebSocket",
+  "author": "VaultSync",
+  "authorUrl": "",
   "isDesktopOnly": false
 }

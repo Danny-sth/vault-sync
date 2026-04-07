@@ -1,99 +1,93 @@
-// Message types
-export const MSG_TYPE_SYNC = 'sync';
-export const MSG_TYPE_FILE_CHANGE = 'file_change';
-export const MSG_TYPE_FILE_DELETE = 'file_delete';
-export const MSG_TYPE_SYNC_RESPONSE = 'sync_response';
-export const MSG_TYPE_CHANGE = 'change';
-export const MSG_TYPE_DELETE = 'delete';
-export const MSG_TYPE_CONFLICT = 'conflict';
-export const MSG_TYPE_ERROR = 'error';
-
-// Client → Server messages
-
-export interface SyncRequest {
-    type: 'sync';
-    lastSeq: number;
+// Server -> Client messages
+export interface FileChangedMessage {
+  type: 'file_changed';
+  path: string;
+  hash: string;
+  mtime: number;
+  size: number;
+  seq: number;
+  deviceId: string;
 }
 
+export interface FileDeletedMessage {
+  type: 'file_deleted';
+  path: string;
+  seq: number;
+  deviceId: string;
+}
+
+export interface SyncResponse {
+  type: 'sync_response';
+  currentSeq: number;
+  files: FileInfo[];
+  tombstones: TombstoneInfo[];
+}
+
+export interface FileInfo {
+  path: string;
+  hash: string;
+  mtime: number;
+  size: number;
+  seq: number;
+}
+
+export interface TombstoneInfo {
+  path: string;
+  deletedAt: number;
+  seq: number;
+}
+
+// Client -> Server messages
 export interface FileChangeRequest {
-    type: 'file_change';
-    path: string;
-    content: string; // base64
-    mtime: number;   // Unix milliseconds
-    hash: string;    // SHA-256
+  path: string;
+  hash: string;
+  mtime: number;
+  size: number;
+  deviceId: string;
 }
 
 export interface FileDeleteRequest {
-    type: 'file_delete';
-    path: string;
+  path: string;
+  deviceId: string;
 }
 
-// Server → Client messages
-
-export interface SyncResponse {
-    type: 'sync_response';
-    currentSeq: number;
-    changes: ChangeItem[];
+export interface SyncRequest {
+  lastSeq: number;
+  deviceId: string;
 }
 
-export interface ChangeItem {
-    type: 'change' | 'delete';
-    path: string;
-    content?: string; // base64, only for 'change'
-    mtime?: number;   // only for 'change'
-    seq: number;
-}
+// Unified server message type
+export type ServerMessage = FileChangedMessage | FileDeletedMessage | SyncResponse;
 
-export interface ChangeMessage {
-    type: 'change';
-    path: string;
-    content: string; // base64
-    mtime: number;
-    seq: number;
-    deviceId?: string;
+// Pending operation for offline queue
+export interface PendingOperation {
+  id: string;
+  type: 'upload' | 'delete';
+  path: string;
+  timestamp: number;
+  retries: number;
 }
-
-export interface DeleteMessage {
-    type: 'delete';
-    path: string;
-    seq: number;
-    deviceId?: string;
-}
-
-export interface ConflictMessage {
-    type: 'conflict';
-    path: string;
-    serverContent: string; // base64
-    serverMtime: number;
-    serverSeq: number;
-}
-
-export interface ErrorMessage {
-    type: 'error';
-    message: string;
-}
-
-export type IncomingMessage = SyncResponse | ChangeMessage | DeleteMessage | ConflictMessage | ErrorMessage;
 
 // Plugin settings
 export interface VaultSyncSettings {
-    serverUrl: string;
-    authToken: string;
-    deviceId: string;
-    enabled: boolean;
-    debounceMs: number;
+  serverUrl: string;
+  token: string;
+  deviceId: string;
+  deviceName: string;
+  autoConnect: boolean;
+  syncOnStart: boolean;
+  debounceMs: number;
 }
 
 export const DEFAULT_SETTINGS: VaultSyncSettings = {
-    serverUrl: '',
-    authToken: '',
-    deviceId: '',
-    enabled: false,
-    debounceMs: 500,
+  serverUrl: 'wss://90.156.230.49:8444/ws',
+  token: '',
+  deviceId: `device-${Math.random().toString(36).substring(2, 10)}`,
+  deviceName: '',
+  autoConnect: true,
+  syncOnStart: true,
+  debounceMs: 500,
 };
 
-// Local state
-export interface SyncState {
-    lastSeq: number;
-    localHashes: Map<string, string>;
-}
+// Connection state
+export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';

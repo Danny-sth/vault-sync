@@ -1,142 +1,297 @@
-import { Plugin, TFile, TAbstractFile } from "obsidian";
-import {
-  VaultSyncSettings,
-  DEFAULT_SETTINGS,
-  VaultSyncSettingTab,
-} from "./settings";
-import { SyncManager } from "./sync";
+import { App, Plugin, PluginSettingTab, Setting, Notice, TFile } from 'obsidian';
+import { SyncManager } from './sync/SyncManager';
+import { VaultSyncSettings, DEFAULT_SETTINGS } from './types';
 
 export default class VaultSyncPlugin extends Plugin {
   settings: VaultSyncSettings = DEFAULT_SETTINGS;
-  private syncManager: SyncManager | null = null;
-  private statusBarItem: HTMLElement | null = null;
-  private appResumeHandler: (() => void) | null = null;
+  syncManager: SyncManager | null = null;
+  statusBarItem: HTMLElement | null = null;
 
-  async onload() {
-    await this.loadSettings();
+  async onload(): Promise<void> {
+    console.log('[VaultSync] ========================================');
+    console.log('[VaultSync] Loading plugin v2.0');
+    console.log('[VaultSync] ========================================');
+    new Notice('VaultSync: Loading plugin...');
 
-    this.syncManager = new SyncManager(this.app, this.settings);
-    this.syncManager.onConnectionChange = (connected) => {
-      this.updateStatusBar(connected);
-    };
+    try {
+      await this.loadSettings();
+      console.log('[VaultSync] Settings loaded:', JSON.stringify(this.settings, null, 2));
 
-    // Status bar
-    this.statusBarItem = this.addStatusBarItem();
-    this.updateStatusBar(false);
+      this.addSettingTab(new VaultSyncSettingTab(this.app, this));
 
-    // Settings tab
-    this.addSettingTab(new VaultSyncSettingTab(this.app, this));
+      // Status bar
+      this.statusBarItem = this.addStatusBarItem();
+      this.updateStatusBar(false);
 
-    // Commands
-    this.addCommand({
-      id: "vault-sync-connect",
-      name: "Connect to server",
-      callback: () => this.connect(),
-    });
+      // Commands
+      this.addCommand({
+        id: 'vault-sync-connect',
+        name: 'Connect',
+        callback: () => this.connect(),
+      });
 
-    this.addCommand({
-      id: "vault-sync-disconnect",
-      name: "Disconnect from server",
-      callback: () => this.disconnect(),
-    });
+      this.addCommand({
+        id: 'vault-sync-disconnect',
+        name: 'Disconnect',
+        callback: () => this.disconnect(),
+      });
 
-    this.addCommand({
-      id: "vault-sync-full-sync",
-      name: "Request full sync",
-      callback: () => this.requestFullSync(),
-    });
+      this.addCommand({
+        id: 'vault-sync-full-sync',
+        name: 'Full Sync',
+        callback: () => this.syncManager?.requestFullSync(),
+      });
 
-    // File event handlers
-    this.registerEvent(
-      this.app.vault.on("modify", (file) => {
-        if (file instanceof TFile) {
-          void this.syncManager?.queueFileChange(file);
+      // Initialize sync manager
+      console.log('[VaultSync] Creating SyncManager...');
+      this.syncManager = new SyncManager(this.app, this.settings);
+      this.syncManager.onConnectionChange = (connected) => {
+        console.log('[VaultSync] Connection state changed:', connected);
+        this.updateStatusBar(connected);
+      };
+
+      console.log('[VaultSync] Initializing SyncManager...');
+      await this.syncManager.init();
+      console.log('[VaultSync] SyncManager initialized');
+
+      // Register vault events
+      this.registerEvent(
+        this.app.vault.on('create', (file) => {
+          if (file instanceof TFile) {
+            this.syncManager?.queueFileChange(file);
+          }
+        })
+      );
+
+      this.registerEvent(
+        this.app.vault.on('modify', (file) => {
+          if (file instanceof TFile) {
+            this.syncManager?.queueFileChange(file);
+          }
+        })
+      );
+
+      this.registerEvent(
+        this.app.vault.on('delete', (file) => {
+          if (file instanceof TFile) {
+            this.syncManager?.queueFileDelete(file.path);
+          }
+        })
+      );
+
+      this.registerEvent(
+        this.app.vault.on('rename', (file, oldPath) => {
+          if (file instanceof TFile) {
+            this.syncManager?.queueFileRename(file, oldPath);
+          }
+        })
+      );
+
+      // Auto-connect
+      console.log('[VaultSync] AutoConnect:', this.settings.autoConnect, 'Token exists:', !!this.settings.token);
+      if (this.settings.autoConnect && this.settings.token) {
+        console.log('[VaultSync] Will auto-connect in 2 seconds...');
+        setTimeout(() => {
+          console.log('[VaultSync] Auto-connect triggered');
+          this.connect();
+        }, 2000);
+      }
+
+      // Reconnect on window focus (for mobile)
+      this.registerDomEvent(document, 'visibilitychange', () => {
+        if (document.visibilityState === 'visible' && this.settings.autoConnect) {
+          if (!this.syncManager?.isConnected()) {
+            this.connect();
+          }
         }
-      })
-    );
+      });
 
-    this.registerEvent(
-      this.app.vault.on("create", (file) => {
-        if (file instanceof TFile) {
-          void this.syncManager?.queueFileChange(file);
-        }
-      })
-    );
+      console.log('[VaultSync] Plugin loaded successfully');
+    } catch (error) {
+      console.error('[VaultSync] FATAL ERROR during plugin load:', error);
+      new Notice('Vault Sync: Failed to load plugin');
+    }
+  }
 
-    this.registerEvent(
-      this.app.vault.on("delete", (file) => {
-        if (file instanceof TFile) {
-          void this.syncManager?.queueFileDelete(file.path);
-        }
-      })
-    );
+  onunload(): void {
+    console.log('[VaultSync] Unloading plugin');
+    this.syncManager?.destroy();
+  }
 
-    this.registerEvent(
-      this.app.vault.on("rename", (file: TAbstractFile, oldPath: string) => {
-        if (file instanceof TFile) {
-          // Use atomic file_move instead of separate delete + change
-          void this.syncManager?.queueFileMove(file, oldPath);
-        }
-      })
-    );
+  async connect(): Promise<void> {
+    console.log('[VaultSync] connect() called');
+    console.log('[VaultSync] Server URL:', this.settings.serverUrl);
+    console.log('[VaultSync] Token:', this.settings.token ? '[set]' : '[not set]');
 
-    // Auto-connect on load
-    if (this.settings.autoConnect && this.settings.token) {
-      // Small delay to ensure vault is ready
-      setTimeout(() => this.connect(), 1000);
+    if (!this.settings.token) {
+      console.log('[VaultSync] No token configured');
+      new Notice('Vault Sync: Please configure token in settings');
+      return;
     }
 
-    // Detect app resume (Android/Desktop) using visibility API
-    // DISABLED FOR DEBUGGING: This might be triggering too frequently
-    /*
-    this.registerDomEvent(document, 'visibilitychange', () => {
-      if (document.visibilityState === 'visible') {
-        // If we were connected but now disconnected, try to reconnect
-        if (this.settings.autoConnect && !this.syncManager?.isConnected()) {
-          console.log('[Vault Sync] App resumed, attempting reconnect...');
-          setTimeout(() => this.connect(), 500);
-        }
-      }
-    });
-    */
+    try {
+      console.log('[VaultSync] Calling syncManager.connect()...');
+      await this.syncManager?.connect();
+      console.log('[VaultSync] syncManager.connect() completed');
+    } catch (error) {
+      console.error('[VaultSync] Connection error:', error);
+      new Notice('Vault Sync: Connection failed - check console');
+    }
   }
 
-  onunload() {
+  disconnect(): void {
     this.syncManager?.disconnect();
+    this.updateStatusBar(false);
+    new Notice('Vault Sync: Disconnected');
   }
 
-  async loadSettings() {
+  private updateStatusBar(connected: boolean): void {
+    if (this.statusBarItem) {
+      this.statusBarItem.setText(connected ? '🟢 Sync' : '🔴 Sync');
+      this.statusBarItem.title = connected ? 'Vault Sync: Connected' : 'Vault Sync: Disconnected';
+    }
+  }
+
+  async loadSettings(): Promise<void> {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
   }
 
-  async saveSettings() {
+  async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
-    this.syncManager?.updateSettings(this.settings);
+  }
+}
+
+class VaultSyncSettingTab extends PluginSettingTab {
+  plugin: VaultSyncPlugin;
+
+  constructor(app: App, plugin: VaultSyncPlugin) {
+    super(app, plugin);
+    this.plugin = plugin;
   }
 
-  connect() {
-    this.syncManager?.connect();
-  }
+  display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
 
-  disconnect() {
-    this.syncManager?.disconnect();
-  }
+    containerEl.createEl('h2', { text: 'Vault Sync Settings' });
 
-  isConnected(): boolean {
-    return this.syncManager?.isConnected() ?? false;
-  }
-
-  requestFullSync() {
-    this.syncManager?.requestFullSync();
-  }
-
-  private updateStatusBar(connected: boolean) {
-    if (this.statusBarItem) {
-      this.statusBarItem.setText(connected ? "Sync: ●" : "Sync: ○");
-      this.statusBarItem.setAttribute(
-        "aria-label",
-        connected ? "Vault Sync: Connected" : "Vault Sync: Disconnected"
+    new Setting(containerEl)
+      .setName('Server URL')
+      .setDesc('WebSocket URL of the sync server')
+      .addText((text) =>
+        text
+          .setPlaceholder('wss://your-server:8443/ws')
+          .setValue(this.plugin.settings.serverUrl)
+          .onChange(async (value) => {
+            this.plugin.settings.serverUrl = value;
+            await this.plugin.saveSettings();
+          })
       );
-    }
+
+    new Setting(containerEl)
+      .setName('Authentication Token')
+      .setDesc('Token for server authentication')
+      .addText((text) =>
+        text
+          .setPlaceholder('your-token')
+          .setValue(this.plugin.settings.token)
+          .onChange(async (value) => {
+            this.plugin.settings.token = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName('Device ID')
+      .setDesc('Unique identifier for this device')
+      .addText((text) =>
+        text
+          .setValue(this.plugin.settings.deviceId)
+          .onChange(async (value) => {
+            this.plugin.settings.deviceId = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName('Device Name')
+      .setDesc('Human-readable name for this device')
+      .addText((text) =>
+        text
+          .setPlaceholder('My Laptop')
+          .setValue(this.plugin.settings.deviceName)
+          .onChange(async (value) => {
+            this.plugin.settings.deviceName = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName('Auto Connect')
+      .setDesc('Automatically connect when Obsidian starts')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.autoConnect)
+          .onChange(async (value) => {
+            this.plugin.settings.autoConnect = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName('Sync on Start')
+      .setDesc('Perform full sync when connected')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.syncOnStart)
+          .onChange(async (value) => {
+            this.plugin.settings.syncOnStart = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName('Debounce (ms)')
+      .setDesc('Delay before syncing changes (prevents rapid uploads)')
+      .addText((text) =>
+        text
+          .setValue(String(this.plugin.settings.debounceMs))
+          .onChange(async (value) => {
+            const num = parseInt(value, 10);
+            if (!isNaN(num) && num >= 0) {
+              this.plugin.settings.debounceMs = num;
+              await this.plugin.saveSettings();
+            }
+          })
+      );
+
+    containerEl.createEl('h3', { text: 'Actions' });
+
+    new Setting(containerEl)
+      .setName('Connect')
+      .setDesc('Connect to the sync server')
+      .addButton((button) =>
+        button.setButtonText('Connect').onClick(() => {
+          this.plugin.connect();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName('Disconnect')
+      .setDesc('Disconnect from the sync server')
+      .addButton((button) =>
+        button.setButtonText('Disconnect').onClick(() => {
+          this.plugin.disconnect();
+        })
+      );
+
+    new Setting(containerEl)
+      .setName('Full Sync')
+      .setDesc('Force a full synchronization')
+      .addButton((button) =>
+        button.setButtonText('Sync Now').onClick(() => {
+          this.plugin.syncManager?.requestFullSync();
+        })
+      );
   }
 }
