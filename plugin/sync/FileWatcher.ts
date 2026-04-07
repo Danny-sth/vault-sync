@@ -30,7 +30,7 @@ export class FileWatcher {
       return; // Already running
     }
 
-    console.log(`[FileWatcher] Starting with ${intervalMs}ms interval`);
+    console.debug(`[FileWatcher] Starting with ${intervalMs}ms interval`);
 
     // Initial scan to build baseline
     this.buildBaseline();
@@ -45,7 +45,7 @@ export class FileWatcher {
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
-      console.log('[FileWatcher] Stopped');
+      console.debug('[FileWatcher] Stopped');
     }
   }
 
@@ -65,7 +65,7 @@ export class FileWatcher {
       }
     }
 
-    console.log(`[FileWatcher] Baseline built with ${this.lastScanFiles.size} files`);
+    console.debug(`[FileWatcher] Baseline built with ${this.lastScanFiles.size} files`);
   }
 
   /**
@@ -97,14 +97,14 @@ export class FileWatcher {
         if (!lastState) {
           // New file
           changes.push({ type: 'create', path, file });
-          console.log(`[FileWatcher] Detected new file: ${path}`);
+          console.debug(`[FileWatcher] Detected new file: ${path}`);
         } else if (
           file.stat.mtime !== lastState.mtime ||
           file.stat.size !== lastState.size
         ) {
           // Modified file
           changes.push({ type: 'modify', path, file });
-          console.log(`[FileWatcher] Detected modified file: ${path}`);
+          console.debug(`[FileWatcher] Detected modified file: ${path}`);
         }
       }
 
@@ -112,7 +112,7 @@ export class FileWatcher {
       for (const [path] of this.lastScanFiles) {
         if (!currentFiles.has(path)) {
           changes.push({ type: 'delete', path });
-          console.log(`[FileWatcher] Detected deleted file: ${path}`);
+          console.debug(`[FileWatcher] Detected deleted file: ${path}`);
         }
       }
 
@@ -127,7 +127,7 @@ export class FileWatcher {
 
       // Notify about changes
       if (changes.length > 0 && this.onChangesDetected) {
-        console.log(`[FileWatcher] Detected ${changes.length} changes`);
+        console.debug(`[FileWatcher] Detected ${changes.length} changes`);
         this.onChangesDetected(changes);
       }
     } catch (e) {
@@ -141,7 +141,7 @@ export class FileWatcher {
    * Force immediate scan (useful after external operations)
    */
   async forceScan(): Promise<void> {
-    console.log('[FileWatcher] Force scan requested');
+    console.debug('[FileWatcher] Force scan requested');
     await this.scan();
   }
 

@@ -103,14 +103,14 @@ export class StompClient {
 
     // Subscribe to private sync response queue
     const syncSub = this.client.subscribe('/user/queue/sync', (message: IMessage) => {
-      console.log('[VaultSync] *** Received sync response message ***');
+      console.debug('[VaultSync] *** Received sync response message ***');
       try {
         const data = JSON.parse(message.body) as SyncResponse;
-        console.log(`[VaultSync] *** Parsed: ${data.files?.length || 0} files, seq=${data.currentSeq} ***`);
+        console.debug(`[VaultSync] *** Parsed: ${data.files?.length || 0} files, seq=${data.currentSeq} ***`);
         if (this.syncResponseHandler) {
-          console.log('[VaultSync] *** Calling syncResponseHandler ***');
+          console.debug('[VaultSync] *** Calling syncResponseHandler ***');
           this.syncResponseHandler(data);
-          console.log('[VaultSync] *** syncResponseHandler called ***');
+          console.debug('[VaultSync] *** syncResponseHandler called ***');
         } else {
           console.error('[VaultSync] *** ERROR: No syncResponseHandler set! ***');
         }

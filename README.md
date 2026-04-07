@@ -123,12 +123,15 @@ cd vault-sync-server
 
 ## Changelog
 
-### v2.0.0 (2026-04-06)
+### v2.0.0 (2026-04-07)
 - **Complete rewrite** - Spring Boot + STOMP instead of Go + SSE
 - **WebSocket/STOMP** - true bidirectional communication
 - **IndexedDB** - persistent client-side state
-- **Offline queue** - operations queued when disconnected
+- **FileWatcher** - detects external filesystem changes
 - **H2 Database** - proper server-side metadata storage
+- **Large file support** - tested with 5MB+ files
+- **Unicode support** - Cyrillic, emoji filenames work correctly
+- **Nested directories** - full path support with proper URL encoding
 
 ## License
 
