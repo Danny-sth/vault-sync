@@ -1,4 +1,4 @@
-import { App, Notice, TFile, TAbstractFile, requestUrl } from 'obsidian';
+import { App, Notice, TFile, TFolder, TAbstractFile, requestUrl } from 'obsidian';
 import { StompClient } from './StompClient';
 import { FileWatcher, FileChange } from './FileWatcher';
 import { LocalState } from '../storage/LocalState';
@@ -121,6 +121,8 @@ export class SyncManager {
       const file = this.app.vault.getAbstractFileByPath(msg.path);
       if (file instanceof TFile) {
         await this.app.vault.delete(file);
+        // Clean up empty parent folders
+        await this.cleanupEmptyParentFolders(msg.path);
       }
       await this.localState.deleteFileHash(msg.path);
       await this.localState.setLastSeq(msg.seq);
@@ -130,6 +132,37 @@ export class SyncManager {
       console.error(`[VaultSync] Failed to delete ${msg.path}:`, e);
     } finally {
       this.isProcessingRemote = false;
+    }
+  }
+
+  // Clean up empty parent folders after file deletion
+  private async cleanupEmptyParentFolders(filePath: string): Promise<void> {
+    const parts = filePath.split('/');
+    parts.pop(); // Remove filename
+
+    while (parts.length > 0) {
+      const folderPath = parts.join('/');
+      const folder = this.app.vault.getAbstractFileByPath(folderPath);
+
+      if (folder instanceof TFolder) {
+        const hasFiles = folder.children.some(c => c instanceof TFile);
+        const hasSubfolders = folder.children.some(c => c instanceof TFolder);
+
+        if (!hasFiles && !hasSubfolders) {
+          try {
+            await this.app.vault.delete(folder);
+            console.debug(`[VaultSync] Deleted empty parent folder: ${folderPath}`);
+          } catch (e) {
+            break; // Stop if we can't delete
+          }
+        } else {
+          break; // Folder not empty, stop
+        }
+      } else {
+        break;
+      }
+
+      parts.pop();
     }
   }
 
@@ -373,6 +406,9 @@ export class SyncManager {
 
       await this.localState.deleteFileHash(path);
 
+      // Clean up empty parent folders locally
+      await this.cleanupEmptyParentFolders(path);
+
     } catch (e) {
       console.error(`[VaultSync] Delete failed for ${path}:`, e);
       await this.queuePendingOperation('delete', path);
@@ -570,6 +606,9 @@ export class SyncManager {
       }
     }
 
+    // Clean up empty folders
+    await this.cleanupEmptyFolders();
+
     const summary = `Sync complete: ↓${downloaded}${downloadFailed > 0 ? '(❌' + downloadFailed + ')' : ''} ↑${uploaded}${uploadFailed > 0 ? '(❌' + uploadFailed + ')' : ''} ×${deleted}`;
     console.debug(`[VaultSync] ${summary}`);
 
@@ -646,6 +685,49 @@ export class SyncManager {
     const hashBuffer = await crypto.subtle.digest('SHA-256', content);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // Clean up empty folders recursively
+  private async cleanupEmptyFolders(): Promise<void> {
+    const deletedFolders: string[] = [];
+
+    // Get all folders sorted by depth (deepest first)
+    const allFolders: TFolder[] = [];
+    const collectFolders = (folder: TFolder) => {
+      for (const child of folder.children) {
+        if (child instanceof TFolder) {
+          collectFolders(child);
+          allFolders.push(child);
+        }
+      }
+    };
+    collectFolders(this.app.vault.getRoot());
+
+    // Sort by path length descending (deepest first)
+    allFolders.sort((a, b) => b.path.length - a.path.length);
+
+    for (const folder of allFolders) {
+      // Skip hidden folders
+      if (folder.path.startsWith('.') || folder.path.includes('/.')) continue;
+
+      // Check if folder is empty (no files, no subfolders)
+      const hasFiles = folder.children.some(c => c instanceof TFile);
+      const hasSubfolders = folder.children.some(c => c instanceof TFolder);
+
+      if (!hasFiles && !hasSubfolders) {
+        try {
+          await this.app.vault.delete(folder);
+          deletedFolders.push(folder.path);
+          console.debug(`[VaultSync] Deleted empty folder: ${folder.path}`);
+        } catch (e) {
+          console.error(`[VaultSync] Failed to delete empty folder: ${folder.path}`, e);
+        }
+      }
+    }
+
+    if (deletedFolders.length > 0) {
+      console.debug(`[VaultSync] Cleaned up ${deletedFolders.length} empty folders`);
+    }
   }
 
   // Cleanup
