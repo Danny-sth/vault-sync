@@ -1,0 +1,59 @@
+server:
+  port: ${PORT:8443}
+  ssl:
+    enabled: ${SSL_ENABLED:true}
+    key-store: ${SSL_KEYSTORE:classpath:keystore.p12}
+    key-store-password: ${SSL_PASSWORD:changeit}
+    key-store-type: PKCS12
+
+spring:
+  application:
+    name: vault-sync-server
+
+  datasource:
+    url: jdbc:h2:file:${VAULT_SYNC_DATA:/opt/vault-sync/data}/metadata;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  h2:
+    console:
+      enabled: false
+
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+  threads:
+    virtual:
+      enabled: true
+
+vault-sync:
+  storage-path: ${VAULT_SYNC_STORAGE:/opt/vault-sync/files}
+  token: ${VAULT_SYNC_TOKEN:}
+  tombstone-ttl-days: ${TOMBSTONE_TTL_DAYS:14}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    root: INFO
+    com.vaultsync: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
