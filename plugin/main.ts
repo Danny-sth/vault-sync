@@ -99,12 +99,32 @@ export default class VaultSyncPlugin extends Plugin {
 
       // Reconnect on window focus (for mobile)
       this.registerDomEvent(document, 'visibilitychange', () => {
+        console.debug('[VaultSync] Visibility changed:', document.visibilityState);
         if (document.visibilityState === 'visible' && this.settings.autoConnect) {
-          if (!this.syncManager?.isConnected()) {
-            this.connect();
-          }
+          // Always try to reconnect when becoming visible - connection might be stale
+          console.debug('[VaultSync] App visible, forcing reconnect check...');
+          setTimeout(() => {
+            if (!this.syncManager?.isConnected()) {
+              console.debug('[VaultSync] Not connected, reconnecting...');
+              this.connect();
+            } else {
+              // Even if "connected", do a full sync to catch up
+              console.debug('[VaultSync] Connected, requesting full sync...');
+              this.syncManager?.requestFullSync();
+            }
+          }, 500);
         }
       });
+
+      // Periodic connection check every 30 seconds (mobile connections can silently die)
+      this.registerInterval(
+        window.setInterval(() => {
+          if (this.settings.autoConnect && !this.syncManager?.isConnected()) {
+            console.debug('[VaultSync] Periodic check: not connected, reconnecting...');
+            this.connect();
+          }
+        }, 30000)
+      );
 
       console.debug('[VaultSync] Plugin loaded successfully');
     } catch (error) {
