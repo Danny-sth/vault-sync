@@ -27,7 +27,7 @@ export default class VaultSyncPlugin extends Plugin {
       this.addCommand({
         id: 'vault-sync-connect',
         name: 'Connect',
-        callback: () => this.connect(),
+        callback: () => { this.connect().catch(e => console.error('[VaultSync] Connect failed:', e)); },
       });
 
       this.addCommand({
@@ -93,7 +93,7 @@ export default class VaultSyncPlugin extends Plugin {
         console.debug('[VaultSync] Will auto-connect in 2 seconds...');
         setTimeout(() => {
           console.debug('[VaultSync] Auto-connect triggered');
-          this.connect();
+          this.connect().catch(e => console.error('[VaultSync] Auto-connect failed:', e));
         }, 2000);
       }
 
@@ -106,7 +106,7 @@ export default class VaultSyncPlugin extends Plugin {
           setTimeout(() => {
             if (!this.syncManager?.isConnected()) {
               console.debug('[VaultSync] Not connected, reconnecting...');
-              this.connect();
+              this.connect().catch(e => console.error('[VaultSync] Reconnect failed:', e));
             } else {
               // Even if "connected", do a full sync to catch up
               console.debug('[VaultSync] Connected, requesting full sync...');
@@ -121,7 +121,7 @@ export default class VaultSyncPlugin extends Plugin {
         window.setInterval(() => {
           if (this.settings.autoConnect && !this.syncManager?.isConnected()) {
             console.debug('[VaultSync] Periodic check: not connected, reconnecting...');
-            this.connect();
+            this.connect().catch(e => console.error('[VaultSync] Periodic reconnect failed:', e));
           }
         }, 30000)
       );
@@ -292,7 +292,7 @@ class VaultSyncSettingTab extends PluginSettingTab {
       .setDesc('Connect to the sync server')
       .addButton((button) =>
         button.setButtonText('Connect').onClick(() => {
-          this.plugin.connect();
+          this.plugin.connect().catch(e => console.error('[VaultSync] Connect failed:', e));
         })
       );
 
