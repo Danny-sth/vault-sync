@@ -28,3 +28,15 @@ certs/
 # Test data
 test-vault/
 server/vault-sync
+
+# Maven wrapper junk
+.mvn/
+mvnw.cmd
+mvnwDebug*
+mvn-wrapper.zip
+
+# Server build
+server/target/
+
+# Keystores
+*.p12
