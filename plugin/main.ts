@@ -193,7 +193,7 @@ class VaultSyncSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl('h2', { text: 'Vault Sync Settings' });
+    new Setting(containerEl).setName('Vault Sync settings').setHeading();
 
     new Setting(containerEl)
       .setName('Server URL')
@@ -285,7 +285,7 @@ class VaultSyncSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl('h3', { text: 'Actions' });
+    new Setting(containerEl).setName('Actions').setHeading();
 
     new Setting(containerEl)
       .setName('Connect')
