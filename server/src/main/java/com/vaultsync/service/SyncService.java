@@ -174,6 +174,18 @@ public class SyncService {
         // Remove file record
         fileRepository.deleteById(path);
 
+        // Delete file from disk
+        try {
+            Path filePath = Paths.get(storagePath).resolve(path);
+            if (Files.deleteIfExists(filePath)) {
+                log.debug("Physically deleted file: {}", path);
+                // Clean up empty parent directories
+                cleanupEmptyParentDirectories(filePath.getParent());
+            }
+        } catch (IOException e) {
+            log.warn("Could not delete file from disk: {} - {}", path, e.getMessage());
+        }
+
         // Create tombstone
         Tombstone tombstone = Tombstone.builder()
                 .path(path)
@@ -190,6 +202,32 @@ public class SyncService {
                 .seq(seq)
                 .deviceId(deviceId)
                 .build();
+    }
+
+    private void cleanupEmptyParentDirectories(Path directory) {
+        Path root = Paths.get(storagePath);
+        Path current = directory;
+
+        while (current != null && !current.equals(root) && current.startsWith(root)) {
+            try {
+                if (Files.isDirectory(current) && isDirectoryEmpty(current)) {
+                    Files.delete(current);
+                    log.debug("Deleted empty directory: {}", current);
+                    current = current.getParent();
+                } else {
+                    break;
+                }
+            } catch (IOException e) {
+                log.debug("Could not delete directory {}: {}", current, e.getMessage());
+                break;
+            }
+        }
+    }
+
+    private boolean isDirectoryEmpty(Path directory) throws IOException {
+        try (var entries = Files.list(directory)) {
+            return entries.findFirst().isEmpty();
+        }
     }
 
     public SyncMessage.SyncResponse getFullState() {
@@ -296,6 +334,13 @@ public class SyncService {
                         long diskMtime = attrs.lastModifiedTime().toMillis();
 
                         if (existingRecord.isEmpty()) {
+                            // Check if there's a tombstone for this file - if so, skip it
+                            // (file was deleted by sync but still exists on disk - will be cleaned up)
+                            if (tombstoneRepository.existsById(relativePath)) {
+                                log.debug("Skipping file with active tombstone: {}", relativePath);
+                                return FileVisitResult.CONTINUE;
+                            }
+
                             // New file on disk - add to database and broadcast
                             byte[] content = Files.readAllBytes(file);
                             String hash = computeHash(content);

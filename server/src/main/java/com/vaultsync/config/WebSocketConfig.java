@@ -1,8 +1,11 @@
 package com.vaultsync.config;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.messaging.Message;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.messaging.MessageChannel;
 import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
@@ -24,11 +27,21 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Value("${vault-sync.token}")
     private String authToken;
 
+    @Bean
+    public TaskScheduler heartbeatScheduler() {
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(1);
+        scheduler.setThreadNamePrefix("ws-heartbeat-");
+        scheduler.initialize();
+        return scheduler;
+    }
+
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
         // Enable simple broker for subscriptions with heartbeat
         config.enableSimpleBroker("/topic", "/queue")
-              .setHeartbeatValue(new long[] {10000, 10000});  // server-to-client, client-to-server (ms)
+              .setHeartbeatValue(new long[] {10000, 10000})  // server-to-client, client-to-server (ms)
+              .setTaskScheduler(heartbeatScheduler());
         // Prefix for messages FROM clients
         config.setApplicationDestinationPrefixes("/app");
         // Prefix for user-specific messages
