@@ -163,16 +163,14 @@ public class FileController {
         String path = java.net.URLDecoder.decode(rawPath, java.nio.charset.StandardCharsets.UTF_8);
 
         try {
-            fileStorageService.delete(path);
-
-            // Broadcast deletion
+            // processFileDelete handles: DB removal, physical deletion, tombstone creation
             SyncMessage.FileDeleted deleteMsg = syncService.processFileDelete(path, deviceId);
             syncService.broadcastFileDelete(deleteMsg);
 
             log.info("File deleted: {} by {}", path, deviceId);
 
             return ResponseEntity.ok(Map.of("status", "ok"));
-        } catch (IOException e) {
+        } catch (Exception e) {
             log.error("Failed to delete file: {}", path, e);
             return ResponseEntity.internalServerError()
                     .body(Map.of("error", e.getMessage()));
@@ -188,16 +186,14 @@ public class FileController {
             @RequestHeader("X-Device-Id") String deviceId) {
 
         try {
-            fileStorageService.delete(request.path());
-
-            // Broadcast deletion
+            // processFileDelete handles: DB removal, physical deletion, tombstone creation
             SyncMessage.FileDeleted deleteMsg = syncService.processFileDelete(request.path(), deviceId);
             syncService.broadcastFileDelete(deleteMsg);
 
             log.info("File deleted (JSON): {} by {}", request.path(), deviceId);
 
             return ResponseEntity.ok(Map.of("status", "ok"));
-        } catch (IOException e) {
+        } catch (Exception e) {
             log.error("Failed to delete file: {}", request.path(), e);
             return ResponseEntity.internalServerError()
                     .body(Map.of("error", e.getMessage()));
