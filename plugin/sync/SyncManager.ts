@@ -202,6 +202,17 @@ export class SyncManager {
           }
           break;
         case 'delete':
+          // Skip delete events for .obsidian/* paths. Many plugins (iconic, dataview, etc.)
+          // write their data.json atomically via temp+rename, leaving a brief window where the
+          // file does not exist on disk. Without this guard FileWatcher would propagate that
+          // window as a real delete to all devices, wiping configs across the cluster.
+          // Real .obsidian/* deletions stay local; tombstones for them are only generated
+          // when the user explicitly removes a config and the missing-state persists across
+          // restarts (server-driven, not via FileWatcher).
+          if (change.path.startsWith('.obsidian/')) {
+            console.debug(`[VaultSync] Suppressing transient delete for .obsidian/* path: ${change.path}`);
+            break;
+          }
           this.queueFileDelete(change.path);
           break;
       }
@@ -315,10 +326,14 @@ export class SyncManager {
 
         await this.localState.setFileHash(path, hash);
 
-        // Update file watcher baseline so it doesn't detect this as external change
-        const updatedFile = this.app.vault.getAbstractFileByPath(path) as TFile;
+        // Update file watcher baseline so it doesn't detect this download as external change.
+        // For .obsidian/* paths getAbstractFileByPath returns null (not vault-indexed) — use adapter.stat.
+        const updatedFile = this.app.vault.getAbstractFileByPath(path) as TFile | null;
         if (updatedFile) {
           this.fileWatcher.markProcessed(path, updatedFile.stat.mtime, updatedFile.stat.size);
+        } else {
+          const stat = await this.app.vault.adapter.stat(path);
+          if (stat) this.fileWatcher.markProcessed(path, stat.mtime, stat.size);
         }
 
         return true; // Success
@@ -427,19 +442,6 @@ export class SyncManager {
       console.debug(`[VaultSync] Full sync received: ${files.length} files, ${tombstoneList.length} tombstones, currentSeq=${response.currentSeq}`);
       new Notice(`Sync: Server has ${files.length} files`);
 
-      // Debug: write to file
-      const debugContent = `Full sync received at ${new Date().toISOString()}\nServer files: ${files.length}\nTombstones: ${tombstoneList.length}\ncurrentSeq: ${response.currentSeq}\n`;
-      try {
-        const debugFile = this.app.vault.getAbstractFileByPath('_sync_debug.txt');
-        if (debugFile) {
-          await this.app.vault.adapter.append('_sync_debug.txt', debugContent);
-        } else {
-          await this.app.vault.create('_sync_debug.txt', debugContent);
-        }
-      } catch (e) {
-        console.error('[VaultSync] Debug file write failed:', e);
-      }
-
     const serverFiles = new Map(
       files.filter(f => this.shouldSyncFile(f.path)).map(f => [f.path, f])
     );
@@ -540,9 +542,6 @@ export class SyncManager {
     const toUpload = Array.from(localFilePaths).filter(p => !serverFiles.has(p) && !tombstones.has(p));
     console.debug(`[VaultSync] Need to upload ${toUpload.length} local-only files`);
 
-    // Debug: add upload info
-    await this.app.vault.adapter.append('_sync_debug.txt', `\nTo upload: ${toUpload.length} local-only files\nLocal total: ${localFilePaths.size}, Server: ${serverFiles.size}\n`);
-
     if (toUpload.length > 0) {
       new Notice(`Uploading ${toUpload.length} files...`);
     }
@@ -550,24 +549,16 @@ export class SyncManager {
     for (let i = 0; i < toUpload.length; i++) {
       const path = toUpload[i];
 
-      if (i === 0) {
-        await this.app.vault.adapter.append('_sync_debug.txt', `\nStarting upload loop at ${new Date().toISOString()}, first file: ${path}\n`);
-      }
-
       if ((i + 1) % 10 === 0 || i === toUpload.length - 1) {
         console.debug(`[VaultSync] Uploading progress: ${i + 1}/${toUpload.length}`);
-        await this.app.vault.adapter.append('_sync_debug.txt', `Progress: ${i + 1}/${toUpload.length}\n`);
       }
 
       try {
         await this.uploadByPath(path);
         uploaded++;
-      } catch (e: any) {
+      } catch (e) {
         console.error(`[VaultSync] Upload failed: ${path}`, e);
         uploadFailed++;
-        if (i === 0) {
-          await this.app.vault.adapter.append('_sync_debug.txt', `First upload failed: ${e?.message || 'Unknown error'}\n`);
-        }
       }
 
       if (i < toUpload.length - 1) {
