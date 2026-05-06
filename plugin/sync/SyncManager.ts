@@ -38,6 +38,8 @@ export class SyncManager {
 
     // Set up file watcher handler for external FS changes
     this.fileWatcher.onChangesDetected = (changes) => this.handleFileWatcherChanges(changes);
+    // FileWatcher needs to know which .obsidian/* paths to track (skip device-specific).
+    this.fileWatcher.shouldIncludeConfigPath = (path) => this.shouldSyncFile(path);
   }
 
   async init(): Promise<void> {
@@ -194,6 +196,9 @@ export class SyncManager {
         case 'modify':
           if (change.file) {
             this.queueFileChange(change.file);
+          } else {
+            // .obsidian/* path — no TFile available, queue by path.
+            this.queueUploadByPath(change.path);
           }
           break;
         case 'delete':
@@ -201,6 +206,23 @@ export class SyncManager {
           break;
       }
     }
+  }
+
+  // Queue an upload by path with debouncing. Used for .obsidian/* paths that aren't TFile-indexed.
+  queueUploadByPath(path: string): void {
+    if (this.isProcessingRemote) return;
+    if (!this.shouldSyncFile(path)) return;
+
+    const existing = this.pendingChanges.get(path);
+    if (existing) clearTimeout(existing);
+
+    this.pendingChanges.set(
+      path,
+      setTimeout(() => {
+        void this.uploadByPath(path);
+        this.pendingChanges.delete(path);
+      }, this.settings.debounceMs)
+    );
   }
 
   // File change detection
