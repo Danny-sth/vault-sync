@@ -486,26 +486,26 @@ export class SyncManager {
 
     for (const [path, serverFile] of serverFiles) {
       const localExists = localFilePaths.has(path);
-      const localHash = localHashes.get(path);
 
       if (!localExists) {
-        // File only on server - download
+        // File only on server — download (initial pull).
         toDownload.push({ path, serverFile });
-      } else if (localHash !== serverFile.hash) {
-        // Different content - resolve by mtime
-        const localMtime = await this.pathMtime(path);
-        if (serverFile.mtime > localMtime) {
-          toDownload.push({ path, serverFile });
-        } else if (localMtime > serverFile.mtime) {
-          try {
-            await this.uploadByPath(path);
-            uploaded++;
-          } catch (e) {
-            console.error(`[VaultSync] Upload failed: ${path}`, e);
-            uploadFailed++;
-          }
+        continue;
+      }
+
+      const action = await this.resolveSyncAction(path, serverFile, localHashes.get(path));
+      if (action === 'download') {
+        toDownload.push({ path, serverFile });
+      } else if (action === 'upload') {
+        try {
+          await this.uploadByPath(path);
+          uploaded++;
+        } catch (e) {
+          console.error(`[VaultSync] Upload failed: ${path}`, e);
+          uploadFailed++;
         }
       }
+      // 'noop' — local already matches server.
     }
 
     // Download files with progress logging
@@ -732,18 +732,44 @@ export class SyncManager {
     await this.app.vault.createBinary(path, content);
   }
 
-  // Returns true if the file exists locally at the given path (vault-indexed or .obsidian/*).
-  private async pathExists(path: string): Promise<boolean> {
-    if (this.app.vault.getAbstractFileByPath(path)) return true;
-    return await this.app.vault.adapter.exists(path);
-  }
+  /**
+   * Decide whether to upload, download or do nothing for a path that exists both locally and on the server.
+   *
+   * Conflict resolution is hash-based, not mtime-based. We compare three hashes:
+   *   - localCurrentHash: hash of the file currently on disk
+   *   - lastKnownHash:    hash recorded in localState after the previous sync
+   *   - serverHash:       hash from the latest sync response
+   *
+   * Cases:
+   *   localCurrent == server                          → 'noop' (already in agreement)
+   *   localCurrent == lastKnown, server != lastKnown  → 'download' (only the server changed)
+   *   server == lastKnown, localCurrent != lastKnown  → 'upload'   (only we changed)
+   *   both differ from lastKnown (or lastKnown unset) → real conflict; policy:
+   *       .obsidian/* paths       → 'upload' (local wins; mtime on configs is unreliable
+   *                                  across devices and gets reset by recovery actions)
+   *       vault-indexed paths     → mtime tiebreaker (fallback)
+   */
+  private async resolveSyncAction(
+    path: string,
+    serverFile: { hash: string; mtime: number },
+    lastKnownHash: string | undefined,
+  ): Promise<'upload' | 'download' | 'noop'> {
+    const read = await this.readPathBinary(path);
+    if (!read) {
+      // Local file disappeared between the listing and now — trust server.
+      return 'download';
+    }
+    const localCurrentHash = await this.computeHash(read.content);
 
-  // Returns mtime of an existing path, or 0 if not found.
-  private async pathMtime(path: string): Promise<number> {
-    const file = this.app.vault.getAbstractFileByPath(path);
-    if (file instanceof TFile) return file.stat.mtime;
-    const stat = await this.app.vault.adapter.stat(path);
-    return stat?.mtime ?? 0;
+    if (localCurrentHash === serverFile.hash) return 'noop';
+    if (lastKnownHash !== undefined) {
+      if (localCurrentHash === lastKnownHash) return 'download';
+      if (serverFile.hash === lastKnownHash) return 'upload';
+    }
+    // Real conflict (both sides advanced from the last sync, or no recorded baseline).
+    if (path.startsWith('.obsidian/')) return 'upload';
+    if (serverFile.mtime > read.mtime) return 'download';
+    return 'upload';
   }
 
   // Recursively list every file under .obsidian/ via adapter API.
