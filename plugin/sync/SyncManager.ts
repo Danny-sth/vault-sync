@@ -102,6 +102,10 @@ export class SyncManager {
   }
 
   private async handleRemoteFileChange(msg: FileChangedMessage): Promise<void> {
+    if (!this.shouldSyncFile(msg.path)) {
+      await this.localState.setLastSeq(msg.seq);
+      return;
+    }
     this.isProcessingRemote = true;
     try {
       const success = await this.downloadFile(msg.path);
@@ -116,17 +120,29 @@ export class SyncManager {
   }
 
   private async handleRemoteFileDelete(msg: FileDeletedMessage): Promise<void> {
+    if (!this.shouldSyncFile(msg.path)) {
+      await this.localState.setLastSeq(msg.seq);
+      return;
+    }
+    // Apply remote deletes only for paths this client has previously synced (has a hash).
+    // This prevents server-side delete history from erasing files we joined to sync after the fact.
+    const knownHash = await this.localState.getFileHash(msg.path);
+    if (!knownHash) {
+      console.debug(`[VaultSync] Ignoring remote delete for never-synced path: ${msg.path}`);
+      await this.localState.setLastSeq(msg.seq);
+      return;
+    }
     this.isProcessingRemote = true;
     try {
       const file = this.app.vault.getAbstractFileByPath(msg.path);
       if (file instanceof TFile) {
         await this.app.vault.delete(file);
-        // Clean up empty parent folders
         await this.cleanupEmptyParentFolders(msg.path);
+      } else if (await this.app.vault.adapter.exists(msg.path)) {
+        await this.app.vault.adapter.remove(msg.path);
       }
       await this.localState.deleteFileHash(msg.path);
       await this.localState.setLastSeq(msg.seq);
-      // Update file watcher baseline
       this.fileWatcher.removeFromBaseline(msg.path);
     } catch (e) {
       console.error(`[VaultSync] Failed to delete ${msg.path}:`, e);
@@ -228,55 +244,9 @@ export class SyncManager {
     this.queueFileChange(file);
   }
 
-  // File operations
+  // Backwards-compat wrapper for vault-event handlers; delegates to uploadByPath which works for any path.
   private async uploadFile(file: TFile): Promise<void> {
-    try {
-      const content = await this.app.vault.readBinary(file);
-      const hash = await this.computeHash(content);
-
-      // Check if hash changed
-      const existingHash = await this.localState.getFileHash(file.path);
-      if (existingHash === hash) {
-        return; // No change
-      }
-
-      if (!this.isConnected()) {
-        await this.queuePendingOperation('upload', file.path);
-        return;
-      }
-
-      // Upload via HTTP - use requestUrl for CORS bypass
-      const baseUrl = this.settings.serverUrl.replace('/ws', '').replace('wss://', 'https://').replace('ws://', 'http://');
-
-      // Convert ArrayBuffer to base64 for JSON upload
-      const base64Content = this.arrayBufferToBase64(content);
-
-      const response = await requestUrl({
-        url: `${baseUrl}/api/upload-json`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Auth-Token': this.settings.token,
-          'X-Device-Id': this.settings.deviceId,
-        },
-        body: JSON.stringify({
-          path: file.path,
-          content: base64Content,
-          hash: hash,
-          mtime: file.stat.mtime,
-        }),
-      });
-
-      if (response.status !== 200) {
-        throw new Error(`Upload failed: ${response.status}`);
-      }
-
-      await this.localState.setFileHash(file.path, hash);
-
-    } catch (e) {
-      console.error(`[VaultSync] Upload failed for ${file.path}:`, e);
-      await this.queuePendingOperation('upload', file.path);
-    }
+    return this.uploadByPath(file.path);
   }
 
   private arrayBufferToBase64(buffer: ArrayBuffer): string {
@@ -318,19 +288,8 @@ export class SyncManager {
         const content = response.arrayBuffer;
         const hash = response.headers['x-file-hash'] || response.headers['X-File-Hash'] || '';
 
-        // Ensure parent directories exist
-        const dir = path.substring(0, path.lastIndexOf('/'));
-        if (dir && !this.app.vault.getAbstractFileByPath(dir)) {
-          await this.createFolderRecursively(dir);
-        }
-
-        // Write file
-        const existingFile = this.app.vault.getAbstractFileByPath(path);
-        if (existingFile instanceof TFile) {
-          await this.app.vault.modifyBinary(existingFile, content);
-        } else {
-          await this.app.vault.createBinary(path, content);
-        }
+        // Write file (writePathBinary uses adapter for .obsidian/* paths, vault API for indexed files).
+        await this.writePathBinary(path, content);
 
         await this.localState.setFileHash(path, hash);
 
@@ -459,22 +418,27 @@ export class SyncManager {
         console.error('[VaultSync] Debug file write failed:', e);
       }
 
-    const serverFiles = new Map(files.map(f => [f.path, f]));
-    const tombstones = new Set(tombstoneList.map(t => t.path));
+    const serverFiles = new Map(
+      files.filter(f => this.shouldSyncFile(f.path)).map(f => [f.path, f])
+    );
+    const tombstones = new Set(
+      tombstoneList.filter(t => this.shouldSyncFile(t.path)).map(t => t.path)
+    );
 
-    // Get local files
-    const localFiles = this.app.vault.getFiles().filter(f => this.shouldSyncFile(f.path));
+    // Local files = vault-indexed files + .obsidian/* configs (we sync those too).
+    const vaultFiles = this.app.vault.getFiles().filter(f => this.shouldSyncFile(f.path));
+    const obsidianPaths = (await this.listObsidianFiles()).filter(p => this.shouldSyncFile(p));
+    const localFilePaths = new Set<string>([...vaultFiles.map(f => f.path), ...obsidianPaths]);
     const localHashes = await this.localState.getAllHashes();
 
-    console.debug(`[VaultSync] Local state: ${localFiles.length} files, ${localHashes.size} hashes`);
-    new Notice(`Local: ${localFiles.length} files`);
+    console.debug(`[VaultSync] Local state: ${localFilePaths.size} files (vault: ${vaultFiles.length}, obsidian: ${obsidianPaths.length}), ${localHashes.size} hashes`);
+    new Notice(`Local: ${localFilePaths.size} files`);
 
     // Debug: count server files not on local
     let missingCount = 0;
     const missingPaths: string[] = [];
     for (const [path] of serverFiles) {
-      const localFile = this.app.vault.getAbstractFileByPath(path);
-      if (!localFile) {
+      if (!localFilePaths.has(path)) {
         missingCount++;
         if (missingPaths.length < 3) {
           missingPaths.push(path);
@@ -497,22 +461,23 @@ export class SyncManager {
     const toDownload: { path: string; serverFile: { hash: string; mtime: number } }[] = [];
 
     for (const [path, serverFile] of serverFiles) {
-      const localFile = this.app.vault.getAbstractFileByPath(path) as TFile | null;
+      const localExists = localFilePaths.has(path);
       const localHash = localHashes.get(path);
 
-      if (!localFile) {
+      if (!localExists) {
         // File only on server - download
         toDownload.push({ path, serverFile });
       } else if (localHash !== serverFile.hash) {
-        // Different content - use mtime to decide
-        if (serverFile.mtime > localFile.stat.mtime) {
+        // Different content - resolve by mtime
+        const localMtime = await this.pathMtime(path);
+        if (serverFile.mtime > localMtime) {
           toDownload.push({ path, serverFile });
-        } else if (localFile.stat.mtime > serverFile.mtime) {
+        } else if (localMtime > serverFile.mtime) {
           try {
-            await this.uploadFile(localFile);
+            await this.uploadByPath(path);
             uploaded++;
           } catch (e) {
-            console.error(`[VaultSync] Upload failed: ${localFile.path}`, e);
+            console.error(`[VaultSync] Upload failed: ${path}`, e);
             uploadFailed++;
           }
         }
@@ -549,22 +514,22 @@ export class SyncManager {
       }
     }
 
-    // Upload local-only files
-    const toUpload = localFiles.filter(f => !serverFiles.has(f.path) && !tombstones.has(f.path));
+    // Upload local-only files (any path: vault or .obsidian/*)
+    const toUpload = Array.from(localFilePaths).filter(p => !serverFiles.has(p) && !tombstones.has(p));
     console.debug(`[VaultSync] Need to upload ${toUpload.length} local-only files`);
 
     // Debug: add upload info
-    await this.app.vault.adapter.append('_sync_debug.txt', `\nTo upload: ${toUpload.length} local-only files\nLocal total: ${localFiles.length}, Server: ${serverFiles.size}\n`);
+    await this.app.vault.adapter.append('_sync_debug.txt', `\nTo upload: ${toUpload.length} local-only files\nLocal total: ${localFilePaths.size}, Server: ${serverFiles.size}\n`);
 
     if (toUpload.length > 0) {
       new Notice(`Uploading ${toUpload.length} files...`);
     }
 
     for (let i = 0; i < toUpload.length; i++) {
-      const file = toUpload[i];
+      const path = toUpload[i];
 
       if (i === 0) {
-        await this.app.vault.adapter.append('_sync_debug.txt', `\nStarting upload loop at ${new Date().toISOString()}, first file: ${file.path}\n`);
+        await this.app.vault.adapter.append('_sync_debug.txt', `\nStarting upload loop at ${new Date().toISOString()}, first file: ${path}\n`);
       }
 
       if ((i + 1) % 10 === 0 || i === toUpload.length - 1) {
@@ -573,36 +538,45 @@ export class SyncManager {
       }
 
       try {
-        await this.uploadFile(file);
+        await this.uploadByPath(path);
         uploaded++;
       } catch (e: any) {
-        console.error(`[VaultSync] Upload failed: ${file.path}`, e);
+        console.error(`[VaultSync] Upload failed: ${path}`, e);
         uploadFailed++;
         if (i === 0) {
           await this.app.vault.adapter.append('_sync_debug.txt', `First upload failed: ${e?.message || 'Unknown error'}\n`);
         }
       }
 
-      // Small delay between uploads
       if (i < toUpload.length - 1) {
         await this.sleep(50);
       }
     }
 
-    // Delete files that have tombstones
+    // Apply tombstones — but ONLY to paths this client has previously synced (has a hash).
+    // Without this guard, server-side delete history can erase local files that were never part of
+    // sync history on this device (caused mass plugin/config loss on 2026-05-06).
     for (const path of tombstones) {
-      const file = this.app.vault.getAbstractFileByPath(path);
-      if (file instanceof TFile) {
-        this.isProcessingRemote = true;
-        try {
+      if (!localHashes.has(path)) {
+        console.debug(`[VaultSync] Skipping tombstone for never-synced path: ${path}`);
+        continue;
+      }
+      this.isProcessingRemote = true;
+      try {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) {
           await this.app.vault.delete(file);
           await this.localState.deleteFileHash(path);
           deleted++;
-        } catch (e) {
-          console.error(`[VaultSync] Delete failed: ${path}`, e);
-        } finally {
-          this.isProcessingRemote = false;
+        } else if (await this.app.vault.adapter.exists(path)) {
+          await this.app.vault.adapter.remove(path);
+          await this.localState.deleteFileHash(path);
+          deleted++;
         }
+      } catch (e) {
+        console.error(`[VaultSync] Delete failed: ${path}`, e);
+      } finally {
+        this.isProcessingRemote = false;
       }
     }
 
@@ -657,8 +631,34 @@ export class SyncManager {
   }
 
   // Helpers
+
+  // Files inside .obsidian/ that are unique per device — never sync.
+  private static readonly DEVICE_SPECIFIC_FILES = new Set<string>([
+    '.obsidian/workspace.json',
+    '.obsidian/workspace-mobile.json',
+    '.obsidian/plugins/vault-sync/data.json',
+  ]);
+
+  // Path prefixes inside .obsidian/ that contain device-local caches and large assets — never sync.
+  private static readonly DEVICE_SPECIFIC_PREFIXES = [
+    '.obsidian/icons/',
+    '.obsidian/file-recovery/',
+    '.obsidian/cache',
+  ];
+
   private shouldSyncFile(path: string): boolean {
-    // Skip hidden files and directories
+    // Sync conflict files — never sync
+    if (path.includes('.sync-conflict-')) return false;
+
+    if (path.startsWith('.obsidian/')) {
+      if (SyncManager.DEVICE_SPECIFIC_FILES.has(path)) return false;
+      for (const prefix of SyncManager.DEVICE_SPECIFIC_PREFIXES) {
+        if (path.startsWith(prefix)) return false;
+      }
+      return true;
+    }
+
+    // Skip other hidden files and directories
     if (path.startsWith('.')) return false;
     if (path.includes('/.')) return false;
 
@@ -679,6 +679,122 @@ export class SyncManager {
     }
 
     return true;
+  }
+
+  // Read binary content for any path (vault-indexed or .obsidian/*).
+  private async readPathBinary(path: string): Promise<{ content: ArrayBuffer; mtime: number } | null> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (file instanceof TFile) {
+      return { content: await this.app.vault.readBinary(file), mtime: file.stat.mtime };
+    }
+    try {
+      const content = await this.app.vault.adapter.readBinary(path);
+      const stat = await this.app.vault.adapter.stat(path);
+      return { content, mtime: stat?.mtime ?? Date.now() };
+    } catch (e) {
+      console.error(`[VaultSync] readBinary failed for ${path}:`, e);
+      return null;
+    }
+  }
+
+  // Write binary content for any path. Uses vault API for indexed files, adapter for .obsidian/* etc.
+  private async writePathBinary(path: string, content: ArrayBuffer): Promise<void> {
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (existing instanceof TFile) {
+      await this.app.vault.modifyBinary(existing, content);
+      return;
+    }
+    if (path.startsWith('.obsidian/')) {
+      const dir = path.substring(0, path.lastIndexOf('/'));
+      if (dir && !(await this.app.vault.adapter.exists(dir))) {
+        await this.app.vault.adapter.mkdir(dir);
+      }
+      await this.app.vault.adapter.writeBinary(path, content);
+      return;
+    }
+    const dir = path.substring(0, path.lastIndexOf('/'));
+    if (dir && !this.app.vault.getAbstractFileByPath(dir)) {
+      await this.createFolderRecursively(dir);
+    }
+    await this.app.vault.createBinary(path, content);
+  }
+
+  // Returns true if the file exists locally at the given path (vault-indexed or .obsidian/*).
+  private async pathExists(path: string): Promise<boolean> {
+    if (this.app.vault.getAbstractFileByPath(path)) return true;
+    return await this.app.vault.adapter.exists(path);
+  }
+
+  // Returns mtime of an existing path, or 0 if not found.
+  private async pathMtime(path: string): Promise<number> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (file instanceof TFile) return file.stat.mtime;
+    const stat = await this.app.vault.adapter.stat(path);
+    return stat?.mtime ?? 0;
+  }
+
+  // Recursively list every file under .obsidian/ via adapter API.
+  private async listObsidianFiles(): Promise<string[]> {
+    const result: string[] = [];
+    const stack: string[] = ['.obsidian'];
+    while (stack.length > 0) {
+      const dir = stack.pop()!;
+      try {
+        const listing = await this.app.vault.adapter.list(dir);
+        for (const file of listing.files) result.push(file);
+        for (const subdir of listing.folders) stack.push(subdir);
+      } catch (e) {
+        console.error(`[VaultSync] list failed for ${dir}:`, e);
+      }
+    }
+    return result;
+  }
+
+  // Upload by path — works for both vault-indexed files and .obsidian/* via adapter.
+  private async uploadByPath(path: string): Promise<void> {
+    if (this.isProcessingRemote) return;
+    if (!this.shouldSyncFile(path)) return;
+
+    try {
+      const read = await this.readPathBinary(path);
+      if (!read) return;
+      const { content, mtime } = read;
+
+      const hash = await this.computeHash(content);
+      const existingHash = await this.localState.getFileHash(path);
+      if (existingHash === hash) return;
+
+      if (!this.isConnected()) {
+        await this.queuePendingOperation('upload', path);
+        return;
+      }
+
+      const baseUrl = this.settings.serverUrl
+        .replace('/ws', '')
+        .replace('wss://', 'https://')
+        .replace('ws://', 'http://');
+      const base64Content = this.arrayBufferToBase64(content);
+
+      const response = await requestUrl({
+        url: `${baseUrl}/api/upload-json`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Auth-Token': this.settings.token,
+          'X-Device-Id': this.settings.deviceId,
+        },
+        body: JSON.stringify({ path, content: base64Content, hash, mtime }),
+      });
+
+      if (response.status !== 200) {
+        throw new Error(`Upload failed: ${response.status}`);
+      }
+
+      await this.localState.setFileHash(path, hash);
+    } catch (e) {
+      console.error(`[VaultSync] uploadByPath failed for ${path}:`, e);
+      await this.queuePendingOperation('upload', path);
+    }
   }
 
   private async computeHash(content: ArrayBuffer): Promise<string> {
