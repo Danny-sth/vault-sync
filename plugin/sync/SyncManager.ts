@@ -566,12 +566,16 @@ export class SyncManager {
       }
     }
 
-    // Apply tombstones — but ONLY to paths this client has previously synced (has a hash) AND
-    // for which the server does NOT also have an active file record. If the server has both a
-    // tombstone and a live file for the same path the file came back after deletion (e.g. a
-    // plugin re-created its config after an atomic-write race) and the live record wins.
+    // Apply tombstones with three layers of guards:
+    //   1. Skip if this client has never synced the path (no recorded hash).
+    //   2. Skip if the server has a live record for the same path (file came back after delete).
+    //   3. Skip if the local file still exists and its current content has diverged from the
+    //      last-known-sync hash — meaning the file has been re-written locally after the deletion
+    //      reached the server. In that case the tombstone is superseded by the local change and
+    //      we should upload our version instead of erasing it.
     for (const path of tombstones) {
-      if (!localHashes.has(path)) {
+      const lastKnownHash = localHashes.get(path);
+      if (!lastKnownHash) {
         console.debug(`[VaultSync] Skipping tombstone for never-synced path: ${path}`);
         continue;
       }
@@ -579,6 +583,24 @@ export class SyncManager {
         console.debug(`[VaultSync] Skipping stale tombstone (server has live record): ${path}`);
         continue;
       }
+
+      const read = await this.readPathBinary(path);
+      if (read) {
+        const localCurrentHash = await this.computeHash(read.content);
+        if (localCurrentHash !== lastKnownHash) {
+          console.debug(`[VaultSync] Tombstone superseded by local change, uploading instead: ${path}`);
+          try {
+            await this.uploadByPath(path);
+            uploaded++;
+          } catch (e) {
+            console.error(`[VaultSync] Upload-over-tombstone failed: ${path}`, e);
+            uploadFailed++;
+          }
+          continue;
+        }
+      }
+
+      // Local content matches the last sync (or file is gone) — tombstone is authoritative.
       this.isProcessingRemote = true;
       try {
         const file = this.app.vault.getAbstractFileByPath(path);
