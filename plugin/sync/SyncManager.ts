@@ -566,12 +566,17 @@ export class SyncManager {
       }
     }
 
-    // Apply tombstones — but ONLY to paths this client has previously synced (has a hash).
-    // Without this guard, server-side delete history can erase local files that were never part of
-    // sync history on this device (caused mass plugin/config loss on 2026-05-06).
+    // Apply tombstones — but ONLY to paths this client has previously synced (has a hash) AND
+    // for which the server does NOT also have an active file record. If the server has both a
+    // tombstone and a live file for the same path the file came back after deletion (e.g. a
+    // plugin re-created its config after an atomic-write race) and the live record wins.
     for (const path of tombstones) {
       if (!localHashes.has(path)) {
         console.debug(`[VaultSync] Skipping tombstone for never-synced path: ${path}`);
+        continue;
+      }
+      if (serverFiles.has(path)) {
+        console.debug(`[VaultSync] Skipping stale tombstone (server has live record): ${path}`);
         continue;
       }
       this.isProcessingRemote = true;
