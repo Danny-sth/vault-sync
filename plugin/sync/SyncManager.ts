@@ -126,6 +126,13 @@ export class SyncManager {
       await this.localState.setLastSeq(msg.seq);
       return;
     }
+    // Plugin config deletes are never propagated to this device automatically — same policy as
+    // tombstones in processFullSync. Removing a config locally must be a deliberate local action.
+    if (msg.path.startsWith('.obsidian/')) {
+      console.debug(`[VaultSync] Ignoring remote delete for .obsidian/* path: ${msg.path}`);
+      await this.localState.setLastSeq(msg.seq);
+      return;
+    }
     // Apply remote deletes only for paths this client has previously synced (has a hash).
     // This prevents server-side delete history from erasing files we joined to sync after the fact.
     const knownHash = await this.localState.getFileHash(msg.path);
@@ -566,14 +573,22 @@ export class SyncManager {
       }
     }
 
-    // Apply tombstones with three layers of guards:
-    //   1. Skip if this client has never synced the path (no recorded hash).
-    //   2. Skip if the server has a live record for the same path (file came back after delete).
-    //   3. Skip if the local file still exists and its current content has diverged from the
-    //      last-known-sync hash — meaning the file has been re-written locally after the deletion
-    //      reached the server. In that case the tombstone is superseded by the local change and
-    //      we should upload our version instead of erasing it.
+    // Apply tombstones to vault-indexed paths only.
+    //
+    // Rationale: .obsidian/* tombstones are never replayed automatically. Plugin configs are
+    // critical, easy to lose, and trivial to re-create locally if the user actually wants them
+    // gone — but server-side stale tombstones (residual from earlier bugs, atomic-write races,
+    // or fresh installs uploading empty defaults) propagated to every device cause cluster-wide
+    // config loss with high recovery cost. Vault notes on the other hand are handled the standard
+    // way (a real deletion on one device should reach others).
+    //
+    // For vault paths we still gate on (a) prior sync history, and (b) absence of a live server
+    // record for the same path.
     for (const path of tombstones) {
+      if (path.startsWith('.obsidian/')) {
+        console.debug(`[VaultSync] Tombstones never auto-apply to .obsidian/* paths: ${path}`);
+        continue;
+      }
       const lastKnownHash = localHashes.get(path);
       if (!lastKnownHash) {
         console.debug(`[VaultSync] Skipping tombstone for never-synced path: ${path}`);
@@ -584,23 +599,6 @@ export class SyncManager {
         continue;
       }
 
-      const read = await this.readPathBinary(path);
-      if (read) {
-        const localCurrentHash = await this.computeHash(read.content);
-        if (localCurrentHash !== lastKnownHash) {
-          console.debug(`[VaultSync] Tombstone superseded by local change, uploading instead: ${path}`);
-          try {
-            await this.uploadByPath(path);
-            uploaded++;
-          } catch (e) {
-            console.error(`[VaultSync] Upload-over-tombstone failed: ${path}`, e);
-            uploadFailed++;
-          }
-          continue;
-        }
-      }
-
-      // Local content matches the last sync (or file is gone) — tombstone is authoritative.
       this.isProcessingRemote = true;
       try {
         const file = this.app.vault.getAbstractFileByPath(path);
