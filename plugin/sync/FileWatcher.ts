@@ -1,5 +1,6 @@
 import { App, TFile } from 'obsidian';
 import { LocalState } from '../storage/LocalState';
+import { SyncFilter } from './SyncFilter';
 
 export interface FileChange {
   type: 'create' | 'modify' | 'delete';
@@ -58,12 +59,12 @@ export class FileWatcher {
     this.lastScanConfigFiles.clear();
 
     for (const file of this.app.vault.getFiles()) {
-      if (this.shouldWatch(file.path)) {
+      if (SyncFilter.shouldWatchVaultFile(file.path)) {
         this.lastScanFiles.set(file.path, { mtime: file.stat.mtime, size: file.stat.size });
       }
     }
 
-    for (const path of await this.listObsidianFiles()) {
+    for (const path of await SyncFilter.listObsidianFiles(this.app)) {
       if (!this.shouldIncludeConfigPath || this.shouldIncludeConfigPath(path)) {
         const stat = await this.app.vault.adapter.stat(path);
         if (stat) this.lastScanConfigFiles.set(path, { mtime: stat.mtime, size: stat.size });
@@ -82,7 +83,7 @@ export class FileWatcher {
       // --- Vault-indexed files ---
       const currentFiles = new Map<string, TFile>();
       for (const file of this.app.vault.getFiles()) {
-        if (this.shouldWatch(file.path)) currentFiles.set(file.path, file);
+        if (SyncFilter.shouldWatchVaultFile(file.path)) currentFiles.set(file.path, file);
       }
       for (const [path, file] of currentFiles) {
         const last = this.lastScanFiles.get(path);
@@ -102,7 +103,7 @@ export class FileWatcher {
 
       // --- .obsidian/* files via adapter ---
       const currentConfigs = new Map<string, { mtime: number; size: number }>();
-      for (const path of await this.listObsidianFiles()) {
+      for (const path of await SyncFilter.listObsidianFiles(this.app)) {
         if (this.shouldIncludeConfigPath && !this.shouldIncludeConfigPath(path)) continue;
         const stat = await this.app.vault.adapter.stat(path);
         if (stat) currentConfigs.set(path, { mtime: stat.mtime, size: stat.size });
@@ -137,34 +138,6 @@ export class FileWatcher {
   async forceScan(): Promise<void> {
     console.debug('[FileWatcher] Force scan requested');
     await this.scan();
-  }
-
-  // Recursively list every file under .obsidian/ via adapter API.
-  private async listObsidianFiles(): Promise<string[]> {
-    const result: string[] = [];
-    const stack: string[] = ['.obsidian'];
-    while (stack.length > 0) {
-      const dir = stack.pop()!;
-      try {
-        const listing = await this.app.vault.adapter.list(dir);
-        for (const file of listing.files) result.push(file);
-        for (const subdir of listing.folders) stack.push(subdir);
-      } catch (e) {
-        console.error(`[FileWatcher] list failed for ${dir}:`, e);
-      }
-    }
-    return result;
-  }
-
-  /** Filter for vault-indexed files (.obsidian/* handled by shouldIncludeConfigPath). */
-  private shouldWatch(path: string): boolean {
-    if (path.includes('.sync-conflict-')) return false;
-    if (path.startsWith('.obsidian/')) return false;
-    if (path.startsWith('.')) return false;
-    if (path.includes('/.')) return false;
-    const exclude = ['.git/', '.DS_Store', 'Thumbs.db', '.tmp', '.temp'];
-    for (const p of exclude) if (path.includes(p)) return false;
-    return true;
   }
 
   markProcessed(path: string, mtime: number, size: number): void {

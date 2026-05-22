@@ -77,16 +77,24 @@ export interface VaultSyncSettings {
   autoConnect: boolean;
   syncOnStart: boolean;
   debounceMs: number;
+  reconnectDelayMs: number;
+  heartbeatIntervalMs: number;
+  syncTimeoutMs: number;
+  retryAttempts: number;
 }
 
 export const DEFAULT_SETTINGS: VaultSyncSettings = {
-  serverUrl: 'wss://90.156.230.49:8444/ws',
+  serverUrl: '',  // User must configure server URL
   token: '',
   deviceId: `device-${Math.random().toString(36).substring(2, 10)}`,
   deviceName: '',
   autoConnect: true,
   syncOnStart: true,
   debounceMs: 500,
+  reconnectDelayMs: 5000,
+  heartbeatIntervalMs: 10000,
+  syncTimeoutMs: 30000,
+  retryAttempts: 3,
 };
 
 // Connection state
