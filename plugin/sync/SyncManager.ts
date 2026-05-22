@@ -792,6 +792,14 @@ export class SyncManager {
       if (serverFile.hash === lastKnownHash) return 'upload';
     }
     // Real conflict (both sides advanced from the last sync, or no recorded baseline).
+    // For .obsidian/plugins/* configs (except device-specific), use mtime-based resolution
+    // so that the newest version wins across devices.
+    // For other .obsidian/* paths (workspace, etc.), local wins to preserve device state.
+    if (path.startsWith('.obsidian/plugins/') && !SyncManager.DEVICE_SPECIFIC_FILES.has(path)) {
+      // Plugin configs: newest wins (mtime-based)
+      if (serverFile.mtime > read.mtime) return 'download';
+      return 'upload';
+    }
     if (path.startsWith('.obsidian/')) return 'upload';
     if (serverFile.mtime > read.mtime) return 'download';
     return 'upload';
