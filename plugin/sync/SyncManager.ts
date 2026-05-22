@@ -1,7 +1,11 @@
-import { App, Notice, TFile, TFolder, TAbstractFile, requestUrl } from 'obsidian';
+import { App, Notice, TFile } from 'obsidian';
 import { StompClient } from './StompClient';
 import { FileWatcher, FileChange } from './FileWatcher';
 import { LocalState } from '../storage/LocalState';
+import { SyncFilter } from './SyncFilter';
+import { SyncApiClient } from './SyncApiClient';
+import { ConflictResolver, SyncAction } from './ConflictResolver';
+import { FileOperationService } from './FileOperationService';
 import {
   VaultSyncSettings,
   ServerMessage,
@@ -18,6 +22,8 @@ export class SyncManager {
   private stompClient: StompClient;
   private fileWatcher: FileWatcher;
   private localState: LocalState;
+  private apiClient: SyncApiClient;
+  private fileOps: FileOperationService;
 
   private pendingChanges: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private isProcessingRemote = false;
@@ -31,6 +37,8 @@ export class SyncManager {
     this.stompClient = new StompClient();
     this.localState = new LocalState();
     this.fileWatcher = new FileWatcher(app, this.localState);
+    this.apiClient = new SyncApiClient(settings);
+    this.fileOps = new FileOperationService(app);
 
     // Set up message handlers
     this.stompClient.setMessageHandler((msg) => this.handleServerMessage(msg));
@@ -39,7 +47,7 @@ export class SyncManager {
     // Set up file watcher handler for external FS changes
     this.fileWatcher.onChangesDetected = (changes) => this.handleFileWatcherChanges(changes);
     // FileWatcher needs to know which .obsidian/* paths to track (skip device-specific).
-    this.fileWatcher.shouldIncludeConfigPath = (path) => this.shouldSyncFile(path);
+    this.fileWatcher.shouldIncludeConfigPath = (path) => SyncFilter.shouldSync(path);
   }
 
   async init(): Promise<void> {
@@ -104,7 +112,7 @@ export class SyncManager {
   }
 
   private async handleRemoteFileChange(msg: FileChangedMessage): Promise<void> {
-    if (!this.shouldSyncFile(msg.path)) {
+    if (!SyncFilter.shouldSync(msg.path)) {
       await this.localState.setLastSeq(msg.seq);
       return;
     }
@@ -122,7 +130,7 @@ export class SyncManager {
   }
 
   private async handleRemoteFileDelete(msg: FileDeletedMessage): Promise<void> {
-    if (!this.shouldSyncFile(msg.path)) {
+    if (!SyncFilter.shouldSync(msg.path)) {
       await this.localState.setLastSeq(msg.seq);
       return;
     }
@@ -146,7 +154,7 @@ export class SyncManager {
       const file = this.app.vault.getAbstractFileByPath(msg.path);
       if (file instanceof TFile) {
         await this.app.vault.delete(file);
-        await this.cleanupEmptyParentFolders(msg.path);
+        await this.fileOps.cleanupEmptyParentFolders(msg.path);
       } else if (await this.app.vault.adapter.exists(msg.path)) {
         await this.app.vault.adapter.remove(msg.path);
       }
@@ -157,37 +165,6 @@ export class SyncManager {
       console.error(`[VaultSync] Failed to delete ${msg.path}:`, e);
     } finally {
       this.isProcessingRemote = false;
-    }
-  }
-
-  // Clean up empty parent folders after file deletion
-  private async cleanupEmptyParentFolders(filePath: string): Promise<void> {
-    const parts = filePath.split('/');
-    parts.pop(); // Remove filename
-
-    while (parts.length > 0) {
-      const folderPath = parts.join('/');
-      const folder = this.app.vault.getAbstractFileByPath(folderPath);
-
-      if (folder instanceof TFolder) {
-        const hasFiles = folder.children.some(c => c instanceof TFile);
-        const hasSubfolders = folder.children.some(c => c instanceof TFolder);
-
-        if (!hasFiles && !hasSubfolders) {
-          try {
-            await this.app.vault.delete(folder);
-            console.debug(`[VaultSync] Deleted empty parent folder: ${folderPath}`);
-          } catch (e) {
-            break; // Stop if we can't delete
-          }
-        } else {
-          break; // Folder not empty, stop
-        }
-      } else {
-        break;
-      }
-
-      parts.pop();
     }
   }
 
@@ -229,7 +206,7 @@ export class SyncManager {
   // Queue an upload by path with debouncing. Used for .obsidian/* paths that aren't TFile-indexed.
   queueUploadByPath(path: string): void {
     if (this.isProcessingRemote) return;
-    if (!this.shouldSyncFile(path)) return;
+    if (!SyncFilter.shouldSync(path)) return;
 
     const existing = this.pendingChanges.get(path);
     if (existing) clearTimeout(existing);
@@ -246,7 +223,7 @@ export class SyncManager {
   // File change detection
   queueFileChange(file: TFile): void {
     if (this.isProcessingRemote) return;
-    if (!this.shouldSyncFile(file.path)) return;
+    if (!SyncFilter.shouldSync(file.path)) return;
 
     const existing = this.pendingChanges.get(file.path);
     if (existing) clearTimeout(existing);
@@ -262,7 +239,7 @@ export class SyncManager {
 
   queueFileDelete(path: string): void {
     if (this.isProcessingRemote) return;
-    if (!this.shouldSyncFile(path)) return;
+    if (!SyncFilter.shouldSync(path)) return;
 
     const existing = this.pendingChanges.get(path);
     if (existing) clearTimeout(existing);
@@ -289,47 +266,19 @@ export class SyncManager {
     return this.uploadByPath(file.path);
   }
 
-  private arrayBufferToBase64(buffer: ArrayBuffer): string {
-    let binary = '';
-    const bytes = new Uint8Array(buffer);
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
-  }
-
-  // Encode path for URL while preserving slashes
-  private encodePathForUrl(path: string): string {
-    return path.split('/').map(encodeURIComponent).join('/');
-  }
-
   private async downloadFile(path: string, retries = 3): Promise<boolean> {
     console.debug(`[VaultSync] downloadFile starting: ${path}`);
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        const baseUrl = this.settings.serverUrl.replace('/ws', '').replace('wss://', 'https://').replace('ws://', 'http://');
-        const encodedPath = this.encodePathForUrl(path);
-        const url = `${baseUrl}/api/download/${encodedPath}`;
-
-        // Use Obsidian's requestUrl to bypass CORS
-        const response = await requestUrl({
-          url: url,
-          method: 'GET',
-          headers: {
-            'X-Auth-Token': this.settings.token,
-            'X-Device-Id': this.settings.deviceId,
-          },
-        });
-
-        if (response.status !== 200) {
-          throw new Error(`Download failed: ${response.status}`);
+        const result = await this.apiClient.download(path);
+        if (!result) {
+          throw new Error('Download returned null');
         }
 
-        const content = response.arrayBuffer;
-        const hash = response.headers['x-file-hash'] || response.headers['X-File-Hash'] || '';
+        const { content, hash } = result;
 
-        // Write file (writePathBinary uses adapter for .obsidian/* paths, vault API for indexed files).
-        await this.writePathBinary(path, content);
+        // Write file (fileOps.writeBinary uses adapter for .obsidian/* paths, vault API for indexed files).
+        await this.fileOps.writeBinary(path, content);
 
         await this.localState.setFileHash(path, hash);
 
@@ -355,29 +304,6 @@ export class SyncManager {
     return false; // All retries failed
   }
 
-  private async createFolderRecursively(path: string): Promise<void> {
-    const parts = path.split('/');
-    let currentPath = '';
-    for (const part of parts) {
-      currentPath = currentPath ? `${currentPath}/${part}` : part;
-      const existing = this.app.vault.getAbstractFileByPath(currentPath);
-      if (!existing) {
-        try {
-          await this.app.vault.createFolder(currentPath);
-        } catch (e: any) {
-          // Ignore "folder already exists" errors (race condition with parallel downloads)
-          const msg = e?.message?.toLowerCase() || '';
-          if (!msg.includes('already exists') && !msg.includes('folder exists')) {
-            // Check again if folder exists now - if yes, it's fine
-            if (!this.app.vault.getAbstractFileByPath(currentPath)) {
-              throw e;
-            }
-          }
-        }
-      }
-    }
-  }
-
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
@@ -389,28 +315,12 @@ export class SyncManager {
         return;
       }
 
-      const baseUrl = this.settings.serverUrl.replace('/ws', '').replace('wss://', 'https://').replace('ws://', 'http://');
-
-      // Use requestUrl for CORS bypass
-      const response = await requestUrl({
-        url: `${baseUrl}/api/delete-json`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Auth-Token': this.settings.token,
-          'X-Device-Id': this.settings.deviceId,
-        },
-        body: JSON.stringify({ path }),
-      });
-
-      if (response.status !== 200) {
-        throw new Error(`Delete failed: ${response.status}`);
-      }
+      await this.apiClient.delete(path);
 
       await this.localState.deleteFileHash(path);
 
       // Clean up empty parent folders locally
-      await this.cleanupEmptyParentFolders(path);
+      await this.fileOps.cleanupEmptyParentFolders(path);
 
     } catch (e) {
       console.error(`[VaultSync] Delete failed for ${path}:`, e);
@@ -450,15 +360,15 @@ export class SyncManager {
       new Notice(`Sync: Server has ${files.length} files`);
 
     const serverFiles = new Map(
-      files.filter(f => this.shouldSyncFile(f.path)).map(f => [f.path, f])
+      files.filter(f => SyncFilter.shouldSync(f.path)).map(f => [f.path, f])
     );
     const tombstones = new Set(
-      tombstoneList.filter(t => this.shouldSyncFile(t.path)).map(t => t.path)
+      tombstoneList.filter(t => SyncFilter.shouldSync(t.path)).map(t => t.path)
     );
 
     // Local files = vault-indexed files + .obsidian/* configs (we sync those too).
-    const vaultFiles = this.app.vault.getFiles().filter(f => this.shouldSyncFile(f.path));
-    const obsidianPaths = (await this.listObsidianFiles()).filter(p => this.shouldSyncFile(p));
+    const vaultFiles = this.app.vault.getFiles().filter(f => SyncFilter.shouldSync(f.path));
+    const obsidianPaths = (await SyncFilter.listObsidianFiles(this.app)).filter(p => SyncFilter.shouldSync(p));
     const localFilePaths = new Set<string>([...vaultFiles.map(f => f.path), ...obsidianPaths]);
     const localHashes = await this.localState.getAllHashes();
 
@@ -619,7 +529,7 @@ export class SyncManager {
     }
 
     // Clean up empty folders
-    await this.cleanupEmptyFolders();
+    await this.fileOps.cleanupEmptyFolders();
 
     const summary = `Sync complete: ↓${downloaded}${downloadFailed > 0 ? '(❌' + downloadFailed + ')' : ''} ↑${uploaded}${uploadFailed > 0 ? '(❌' + uploadFailed + ')' : ''} ×${deleted}`;
     console.debug(`[VaultSync] ${summary}`);
@@ -668,167 +578,37 @@ export class SyncManager {
     }
   }
 
-  // Helpers
-
-  // Files inside .obsidian/ that are unique per device — never sync.
-  private static readonly DEVICE_SPECIFIC_FILES = new Set<string>([
-    '.obsidian/workspace.json',
-    '.obsidian/workspace-mobile.json',
-    '.obsidian/plugins/vault-sync/data.json',
-  ]);
-
-  // Path prefixes inside .obsidian/ that contain device-local caches and large assets — never sync.
-  private static readonly DEVICE_SPECIFIC_PREFIXES = [
-    '.obsidian/icons/',
-    '.obsidian/file-recovery/',
-    '.obsidian/cache',
-  ];
-
-  private shouldSyncFile(path: string): boolean {
-    // Sync conflict files — never sync
-    if (path.includes('.sync-conflict-')) return false;
-
-    if (path.startsWith('.obsidian/')) {
-      if (SyncManager.DEVICE_SPECIFIC_FILES.has(path)) return false;
-      for (const prefix of SyncManager.DEVICE_SPECIFIC_PREFIXES) {
-        if (path.startsWith(prefix)) return false;
-      }
-      return true;
-    }
-
-    // Skip other hidden files and directories
-    if (path.startsWith('.')) return false;
-    if (path.includes('/.')) return false;
-
-    // Skip specific patterns
-    const excludePatterns = [
-      '.git/',
-      '.DS_Store',
-      'Thumbs.db',
-      '.tmp',
-      '.temp',
-      '_sync_debug',
-      'PLUGIN-DEBUG',
-      'SYNC-DEBUG',
-      'PLUGIN-LOADED-MARKER',
-    ];
-    for (const pattern of excludePatterns) {
-      if (path.includes(pattern)) return false;
-    }
-
-    return true;
-  }
-
-  // Read binary content for any path (vault-indexed or .obsidian/*).
-  private async readPathBinary(path: string): Promise<{ content: ArrayBuffer; mtime: number } | null> {
-    const file = this.app.vault.getAbstractFileByPath(path);
-    if (file instanceof TFile) {
-      return { content: await this.app.vault.readBinary(file), mtime: file.stat.mtime };
-    }
-    try {
-      const content = await this.app.vault.adapter.readBinary(path);
-      const stat = await this.app.vault.adapter.stat(path);
-      return { content, mtime: stat?.mtime ?? Date.now() };
-    } catch (e) {
-      console.error(`[VaultSync] readBinary failed for ${path}:`, e);
-      return null;
-    }
-  }
-
-  // Write binary content for any path. Uses vault API for indexed files, adapter for .obsidian/* etc.
-  private async writePathBinary(path: string, content: ArrayBuffer): Promise<void> {
-    const existing = this.app.vault.getAbstractFileByPath(path);
-    if (existing instanceof TFile) {
-      await this.app.vault.modifyBinary(existing, content);
-      return;
-    }
-    if (path.startsWith('.obsidian/')) {
-      const dir = path.substring(0, path.lastIndexOf('/'));
-      if (dir && !(await this.app.vault.adapter.exists(dir))) {
-        await this.app.vault.adapter.mkdir(dir);
-      }
-      await this.app.vault.adapter.writeBinary(path, content);
-      return;
-    }
-    const dir = path.substring(0, path.lastIndexOf('/'));
-    if (dir && !this.app.vault.getAbstractFileByPath(dir)) {
-      await this.createFolderRecursively(dir);
-    }
-    await this.app.vault.createBinary(path, content);
-  }
-
   /**
    * Decide whether to upload, download or do nothing for a path that exists both locally and on the server.
-   *
-   * Conflict resolution is hash-based, not mtime-based. We compare three hashes:
-   *   - localCurrentHash: hash of the file currently on disk
-   *   - lastKnownHash:    hash recorded in localState after the previous sync
-   *   - serverHash:       hash from the latest sync response
-   *
-   * Cases:
-   *   localCurrent == server                          → 'noop' (already in agreement)
-   *   localCurrent == lastKnown, server != lastKnown  → 'download' (only the server changed)
-   *   server == lastKnown, localCurrent != lastKnown  → 'upload'   (only we changed)
-   *   both differ from lastKnown (or lastKnown unset) → real conflict; policy:
-   *       .obsidian/* paths       → 'upload' (local wins; mtime on configs is unreliable
-   *                                  across devices and gets reset by recovery actions)
-   *       vault-indexed paths     → mtime tiebreaker (fallback)
+   * Delegates conflict resolution logic to ConflictResolver.
    */
   private async resolveSyncAction(
     path: string,
     serverFile: { hash: string; mtime: number },
     lastKnownHash: string | undefined,
-  ): Promise<'upload' | 'download' | 'noop'> {
-    const read = await this.readPathBinary(path);
+  ): Promise<SyncAction> {
+    const read = await this.fileOps.readBinary(path);
     if (!read) {
-      // Local file disappeared between the listing and now — trust server.
       return 'download';
     }
-    const localCurrentHash = await this.computeHash(read.content);
 
-    if (localCurrentHash === serverFile.hash) return 'noop';
-    if (lastKnownHash !== undefined) {
-      if (localCurrentHash === lastKnownHash) return 'download';
-      if (serverFile.hash === lastKnownHash) return 'upload';
-    }
-    // Real conflict (both sides advanced from the last sync, or no recorded baseline).
-    // For .obsidian/plugins/* configs (except device-specific), use mtime-based resolution
-    // so that the newest version wins across devices.
-    // For other .obsidian/* paths (workspace, etc.), local wins to preserve device state.
-    if (path.startsWith('.obsidian/plugins/') && !SyncManager.DEVICE_SPECIFIC_FILES.has(path)) {
-      // Plugin configs: newest wins (mtime-based)
-      if (serverFile.mtime > read.mtime) return 'download';
-      return 'upload';
-    }
-    if (path.startsWith('.obsidian/')) return 'upload';
-    if (serverFile.mtime > read.mtime) return 'download';
-    return 'upload';
-  }
+    const localHash = await this.computeHash(read.content);
 
-  // Recursively list every file under .obsidian/ via adapter API.
-  private async listObsidianFiles(): Promise<string[]> {
-    const result: string[] = [];
-    const stack: string[] = ['.obsidian'];
-    while (stack.length > 0) {
-      const dir = stack.pop()!;
-      try {
-        const listing = await this.app.vault.adapter.list(dir);
-        for (const file of listing.files) result.push(file);
-        for (const subdir of listing.folders) stack.push(subdir);
-      } catch (e) {
-        console.error(`[VaultSync] list failed for ${dir}:`, e);
-      }
-    }
-    return result;
+    return ConflictResolver.resolve(
+      path,
+      { hash: localHash, mtime: read.mtime },
+      { hash: serverFile.hash, mtime: serverFile.mtime },
+      lastKnownHash
+    );
   }
 
   // Upload by path — works for both vault-indexed files and .obsidian/* via adapter.
   private async uploadByPath(path: string): Promise<void> {
     if (this.isProcessingRemote) return;
-    if (!this.shouldSyncFile(path)) return;
+    if (!SyncFilter.shouldSync(path)) return;
 
     try {
-      const read = await this.readPathBinary(path);
+      const read = await this.fileOps.readBinary(path);
       if (!read) return;
       const { content, mtime } = read;
 
@@ -841,26 +621,7 @@ export class SyncManager {
         return;
       }
 
-      const baseUrl = this.settings.serverUrl
-        .replace('/ws', '')
-        .replace('wss://', 'https://')
-        .replace('ws://', 'http://');
-      const base64Content = this.arrayBufferToBase64(content);
-
-      const response = await requestUrl({
-        url: `${baseUrl}/api/upload-json`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Auth-Token': this.settings.token,
-          'X-Device-Id': this.settings.deviceId,
-        },
-        body: JSON.stringify({ path, content: base64Content, hash, mtime }),
-      });
-
-      if (response.status !== 200) {
-        throw new Error(`Upload failed: ${response.status}`);
-      }
+      await this.apiClient.upload(path, content, hash, mtime);
 
       await this.localState.setFileHash(path, hash);
     } catch (e) {
@@ -873,49 +634,6 @@ export class SyncManager {
     const hashBuffer = await crypto.subtle.digest('SHA-256', content);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  // Clean up empty folders recursively
-  private async cleanupEmptyFolders(): Promise<void> {
-    const deletedFolders: string[] = [];
-
-    // Get all folders sorted by depth (deepest first)
-    const allFolders: TFolder[] = [];
-    const collectFolders = (folder: TFolder) => {
-      for (const child of folder.children) {
-        if (child instanceof TFolder) {
-          collectFolders(child);
-          allFolders.push(child);
-        }
-      }
-    };
-    collectFolders(this.app.vault.getRoot());
-
-    // Sort by path length descending (deepest first)
-    allFolders.sort((a, b) => b.path.length - a.path.length);
-
-    for (const folder of allFolders) {
-      // Skip hidden folders
-      if (folder.path.startsWith('.') || folder.path.includes('/.')) continue;
-
-      // Check if folder is empty (no files, no subfolders)
-      const hasFiles = folder.children.some(c => c instanceof TFile);
-      const hasSubfolders = folder.children.some(c => c instanceof TFolder);
-
-      if (!hasFiles && !hasSubfolders) {
-        try {
-          await this.app.vault.delete(folder);
-          deletedFolders.push(folder.path);
-          console.debug(`[VaultSync] Deleted empty folder: ${folder.path}`);
-        } catch (e) {
-          console.error(`[VaultSync] Failed to delete empty folder: ${folder.path}`, e);
-        }
-      }
-    }
-
-    if (deletedFolders.length > 0) {
-      console.debug(`[VaultSync] Cleaned up ${deletedFolders.length} empty folders`);
-    }
   }
 
   // Cleanup
