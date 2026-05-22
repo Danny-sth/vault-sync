@@ -5,6 +5,7 @@ import com.vaultsync.model.SyncMessage;
 import com.vaultsync.model.Tombstone;
 import com.vaultsync.repository.FileRepository;
 import com.vaultsync.repository.TombstoneRepository;
+import com.vaultsync.util.HashUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,8 +17,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.io.IOException;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.security.MessageDigest;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -76,7 +75,7 @@ public class SyncService {
 
                         // Compute hash
                         byte[] content = Files.readAllBytes(file);
-                        String hash = computeHash(content);
+                        String hash = HashUtil.sha256(content);
                         long mtime = attrs.lastModifiedTime().toMillis();
                         long size = attrs.size();
 
@@ -116,16 +115,6 @@ public class SyncService {
         }
 
         log.info("Scan complete: indexed {} files", count[0]);
-    }
-
-    private String computeHash(byte[] content) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hashBytes = digest.digest(content);
-            return HexFormat.of().formatHex(hashBytes);
-        } catch (Exception e) {
-            throw new RuntimeException("SHA-256 not available", e);
-        }
     }
 
     public long nextSeq() {
@@ -343,7 +332,7 @@ public class SyncService {
 
                             // New file on disk - add to database and broadcast
                             byte[] content = Files.readAllBytes(file);
-                            String hash = computeHash(content);
+                            String hash = HashUtil.sha256(content);
                             long size = attrs.size();
                             long seq = nextSeq();
 
@@ -377,7 +366,7 @@ public class SyncService {
                             if (Math.abs(existing.getMtime() - diskMtime) > 1000) { // 1 second tolerance
                                 // File modified on disk
                                 byte[] content = Files.readAllBytes(file);
-                                String hash = computeHash(content);
+                                String hash = HashUtil.sha256(content);
 
                                 // Only update if hash actually changed
                                 if (!hash.equals(existing.getHash())) {

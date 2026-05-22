@@ -1,5 +1,6 @@
 package com.vaultsync.config;
 
+import com.vaultsync.util.TokenValidator;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,7 +15,6 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.security.MessageDigest;
 import java.util.List;
 
 @Configuration
@@ -66,7 +66,7 @@ public class SecurityConfig {
                         token = request.getParameter("token");
                     }
 
-                    if (token == null || !constantTimeEquals(token, authToken)) {
+                    if (!TokenValidator.validate(token, authToken)) {
                         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                         response.getWriter().write("{\"error\": \"Unauthorized\"}");
                         return;
@@ -74,11 +74,6 @@ public class SecurityConfig {
                 }
 
                 filterChain.doFilter(request, response);
-            }
-
-            private boolean constantTimeEquals(String a, String b) {
-                if (a == null || b == null) return false;
-                return MessageDigest.isEqual(a.getBytes(), b.getBytes());
             }
         };
     }
