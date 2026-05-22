@@ -10,13 +10,12 @@ import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import com.vaultsync.util.HashUtil;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.nio.file.*;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 
 @Service
 @RequiredArgsConstructor
@@ -40,7 +39,7 @@ public class FileStorageService {
         }
 
         // Compute hash
-        String actualHash = computeHash(targetPath);
+        String actualHash = HashUtil.sha256(targetPath);
         if (expectedHash != null && !expectedHash.equals(actualHash)) {
             log.warn("Hash mismatch for {}: expected={}, actual={}", path, expectedHash, actualHash);
         }
@@ -72,7 +71,7 @@ public class FileStorageService {
         Files.write(targetPath, content, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
         // Compute hash
-        String actualHash = computeHash(content);
+        String actualHash = HashUtil.sha256(content);
         if (expectedHash != null && !expectedHash.isEmpty() && !expectedHash.equals(actualHash)) {
             log.warn("Hash mismatch for {}: expected={}, actual={}", path, expectedHash, actualHash);
         }
@@ -149,27 +148,6 @@ public class FileStorageService {
 
     public FileRecord getFileInfo(String path) {
         return fileRepository.findById(path).orElse(null);
-    }
-
-    public String computeHash(Path filePath) throws IOException {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] fileBytes = Files.readAllBytes(filePath);
-            byte[] hashBytes = digest.digest(fileBytes);
-            return HexFormat.of().formatHex(hashBytes);
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("SHA-256 not available", e);
-        }
-    }
-
-    public String computeHash(byte[] content) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hashBytes = digest.digest(content);
-            return HexFormat.of().formatHex(hashBytes);
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("SHA-256 not available", e);
-        }
     }
 
     private Path getFullPath(String relativePath) {

@@ -1,0 +1,15 @@
+server:
+  ssl:
+    enabled: false
+
+spring:
+  datasource:
+    url: jdbc:h2:file:/data/metadata;DB_CLOSE_DELAY=-1
+
+vault-sync:
+  storage-path: /data/files
+
+logging:
+  level:
+    root: INFO
+    com.vaultsync: INFO

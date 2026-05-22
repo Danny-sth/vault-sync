@@ -1,5 +1,6 @@
 package com.vaultsync.config;
 
+import com.vaultsync.util.TokenValidator;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -17,7 +18,6 @@ import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBr
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 
-import java.security.MessageDigest;
 import java.security.Principal;
 
 @Configuration
@@ -69,7 +69,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                     String token = accessor.getFirstNativeHeader("X-Auth-Token");
                     String deviceId = accessor.getFirstNativeHeader("X-Device-Id");
 
-                    if (token == null || !constantTimeEquals(token, authToken)) {
+                    if (!TokenValidator.validate(token, authToken)) {
                         throw new SecurityException("Invalid authentication token");
                     }
 
@@ -81,11 +81,6 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                 return message;
             }
         });
-    }
-
-    private boolean constantTimeEquals(String a, String b) {
-        if (a == null || b == null) return false;
-        return MessageDigest.isEqual(a.getBytes(), b.getBytes());
     }
 
     private record DevicePrincipal(String deviceId) implements Principal {
