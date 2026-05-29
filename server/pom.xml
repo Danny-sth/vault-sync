@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.3.0</version>
+        <version>4.0.2</version>
         <relativePath/>
     </parent>
 
@@ -19,7 +19,7 @@
 
     <properties>
         <java.version>21</java.version>
-        <spring-ai.version>1.1.7</spring-ai.version>
+        <spring-ai.version>2.0.0-M8</spring-ai.version>
     </properties>
 
     <dependencies>
@@ -50,6 +50,12 @@
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
             <scope>runtime</scope>
+        </dependency>
+
+        <!-- Jackson (for JSON serialization) -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
         </dependency>
 
         <!-- Lombok -->
@@ -96,4 +102,15 @@
             </plugin>
         </plugins>
     </build>
+
+    <repositories>
+        <repository>
+            <id>spring-milestones</id>
+            <name>Spring Milestones</name>
+            <url>https://repo.spring.io/milestone</url>
+            <snapshots>
+                <enabled>false</enabled>
+            </snapshots>
+        </repository>
+    </repositories>
 </project>
