@@ -66,6 +66,12 @@
             <version>${spring-ai.version}</version>
         </dependency>
 
+        <!-- OAuth2 Resource Server (Keycloak JWT validation) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

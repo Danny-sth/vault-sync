@@ -59,8 +59,8 @@ public class SecurityConfig {
                     return;
                 }
 
-                // Skip auth for MCP endpoints (handled by McpAuthFilter)
-                if (path.startsWith("/mcp")) {
+                // Skip auth for MCP endpoints (handled by Spring Security OAuth2)
+                if (path.startsWith("/mcp") || path.equals("/sse") || path.startsWith("/.well-known")) {
                     filterChain.doFilter(request, response);
                     return;
                 }
@@ -70,6 +70,13 @@ public class SecurityConfig {
                     String token = request.getHeader("X-Auth-Token");
                     if (token == null) {
                         token = request.getParameter("token");
+                    }
+                    // Also check Authorization: Bearer header
+                    if (token == null) {
+                        String authHeader = request.getHeader("Authorization");
+                        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                            token = authHeader.substring(7);
+                        }
                     }
 
                     if (!TokenValidator.validate(token, authToken)) {
