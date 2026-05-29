@@ -1,13 +1,11 @@
 package com.vaultsync.mcp;
 
-import com.vaultsync.util.TokenValidator;
 import jakarta.annotation.PostConstruct;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -15,28 +13,24 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 
 /**
- * Authentication filter for MCP endpoints.
- * Uses a SEPARATE token from the sync token (VAULT_SYNC_MCP_TOKEN).
- * Implements constant-time comparison to prevent timing attacks.
+ * MCP endpoint filter - AUTHLESS mode.
+ *
+ * Security is provided by:
+ * 1. HTTPS termination at duq-gateway (Let's Encrypt)
+ * 2. Rate limiting at gateway level
+ * 3. Read-only operations (no write/delete exposed)
+ *
+ * claude.ai does NOT support static Bearer tokens for remote MCP connectors.
+ * See: https://claude.com/docs/connectors/building/authentication
  */
 @Component
-@Order(0) // Run before the general security filter
+@Order(0)
 @Slf4j
 public class McpAuthFilter extends OncePerRequestFilter {
 
-    @Value("${vault-sync.mcp-token:}")
-    private String mcpToken;
-
     @PostConstruct
     public void init() {
-        if (mcpToken == null || mcpToken.isBlank()) {
-            throw new IllegalStateException(
-                    "VAULT_SYNC_MCP_TOKEN is not configured. " +
-                            "MCP server cannot start without authentication token. " +
-                            "Set VAULT_SYNC_MCP_TOKEN environment variable."
-            );
-        }
-        log.info("MCP authentication filter initialized");
+        log.info("MCP filter initialized (authless mode - security via HTTPS gateway)");
     }
 
     @Override
@@ -45,30 +39,14 @@ public class McpAuthFilter extends OncePerRequestFilter {
                                     FilterChain filterChain) throws ServletException, IOException {
         String path = request.getRequestURI();
 
-        // Only handle MCP endpoints
-        if (!path.startsWith("/mcp")) {
+        // MCP endpoints - pass through without auth (authless mode)
+        if (path.startsWith("/mcp") || path.equals("/sse")) {
+            log.debug("MCP request: {} {} from {}", request.getMethod(), path, request.getRemoteAddr());
             filterChain.doFilter(request, response);
             return;
         }
 
-        // Extract Bearer token from Authorization header
-        String authHeader = request.getHeader("Authorization");
-        String token = null;
-
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            token = authHeader.substring(7);
-        }
-
-        // Constant-time token validation
-        if (!TokenValidator.validate(token, mcpToken)) {
-            log.warn("MCP auth failed for {} from {}", path, request.getRemoteAddr());
-            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-            response.setContentType("application/json");
-            response.getWriter().write("{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32001,\"message\":\"Unauthorized\"},\"id\":null}");
-            return;
-        }
-
-        log.debug("MCP auth successful for {} from {}", path, request.getRemoteAddr());
+        // All other paths - pass to next filter (sync endpoints have their own auth)
         filterChain.doFilter(request, response);
     }
 }
