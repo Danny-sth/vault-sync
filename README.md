@@ -1,6 +1,6 @@
 # Vault Sync
 
-Real-time Obsidian vault synchronization across devices via WebSocket/STOMP.
+Real-time Obsidian vault synchronization across devices via WebSocket/STOMP, with MCP (Model Context Protocol) integration for AI assistants.
 
 ## Features
 
@@ -9,11 +9,12 @@ Real-time Obsidian vault synchronization across devices via WebSocket/STOMP.
 - Hash-based conflict resolution with mtime fallback
 - Plugin config sync (`.obsidian/plugins/*`)
 - Tombstone-based deletion propagation
+- **MCP Server**: Read-only access to vault notes for AI assistants (Claude, etc.)
 
 ## Architecture
 
 - **Plugin**: Obsidian plugin (TypeScript)
-- **Server**: Spring Boot application with H2 embedded database
+- **Server**: Java/Spring Boot application with H2 embedded database
 
 ## Quick Start
 
@@ -26,7 +27,7 @@ cd vault-sync
 
 # Create .env file
 cp .env.example .env
-# Edit .env and set VAULT_SYNC_TOKEN (use: openssl rand -hex 32)
+# Edit .env and set tokens (use: openssl rand -hex 32)
 
 # Build and start
 cd server
@@ -55,7 +56,8 @@ Plugin will auto-connect on Obsidian startup. First sync downloads all files fro
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VAULT_SYNC_TOKEN` | (required) | Authentication token |
+| `VAULT_SYNC_TOKEN` | (required) | Authentication token for sync |
+| `VAULT_SYNC_MCP_TOKEN` | (required) | Authentication token for MCP endpoint |
 | `VAULT_SYNC_STORAGE_PATH` | `/data/files` | File storage path |
 | `SERVER_SSL_ENABLED` | `false` | Enable HTTPS/WSS |
 | `TOMBSTONE_TTL_DAYS` | `14` | Days to keep deletion records |
@@ -69,6 +71,26 @@ Plugin will auto-connect on Obsidian startup. First sync downloads all files fro
 | Auto Connect | `true` | Connect on Obsidian start |
 | Sync on Start | `true` | Full sync on connect |
 | Debounce (ms) | `500` | Delay before syncing changes |
+
+## MCP Server
+
+The server includes a read-only MCP endpoint for AI assistants like Claude.
+
+### MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `list_notes` | List all markdown notes in the vault |
+| `read_note` | Read content of a specific note |
+| `search_notes` | Full-text search across all notes |
+
+### Connecting Claude to MCP
+
+Configure Claude with the following MCP server settings:
+
+- **URL**: `https://your-server:8443/mcp`
+- **Transport**: Streamable HTTP / SSE
+- **Authentication**: Bearer token (`VAULT_SYNC_MCP_TOKEN`)
 
 ## Development
 
@@ -91,7 +113,7 @@ mvn clean package
 
 ```bash
 cd server
-VAULT_SYNC_TOKEN=dev-token mvn spring-boot:run
+VAULT_SYNC_TOKEN=dev-token VAULT_SYNC_MCP_TOKEN=mcp-token mvn spring-boot:run
 ```
 
 ## Manual Server Setup (without Docker)
@@ -110,6 +132,7 @@ After=network.target
 
 [Service]
 Environment=VAULT_SYNC_TOKEN=your-secret-token
+Environment=VAULT_SYNC_MCP_TOKEN=your-mcp-token
 Environment=VAULT_SYNC_STORAGE=/opt/vault-sync/files
 ExecStart=/usr/bin/java -jar /opt/vault-sync/vault-sync.jar
 Restart=always
@@ -133,6 +156,8 @@ WantedBy=multi-user.target
 - Token-based authentication (constant-time comparison)
 - All API endpoints require valid token
 - WebSocket connections authenticated on CONNECT frame
+- MCP endpoint uses separate token from sync
+- Path traversal protection on all file operations
 
 ## License
 
