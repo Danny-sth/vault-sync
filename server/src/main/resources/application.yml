@@ -43,7 +43,7 @@ vault-sync:
   tombstone-ttl-days: ${TOMBSTONE_TTL_DAYS:14}
   mcp-token: ${VAULT_SYNC_MCP_TOKEN:}
 
-# MCP Server Configuration
+# MCP Server Configuration - SSE transport (supported by claude.ai)
 spring.ai.mcp.server:
   enabled: true
   name: vault-sync-mcp
