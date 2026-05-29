@@ -51,13 +51,15 @@ spring.security.oauth2.resourceserver.jwt:
   issuer-uri: ${OAUTH_ISSUER_URI:https://on-za-menya.online/realms/duq}
   jwk-set-uri: ${OAUTH_ISSUER_URI:https://on-za-menya.online/realms/duq}/protocol/openid-connect/certs
 
-# MCP Server Configuration - SSE transport (supported by claude.ai)
+# MCP Server Configuration - Streamable HTTP transport (MCP spec 2025-03-26)
 spring.ai.mcp.server:
   enabled: true
   name: vault-sync-mcp
   version: 1.0.0
   type: SYNC
-  sse-message-endpoint: /mcp/message
+  protocol: STREAMABLE
+  streamable-http:
+    mcp-endpoint: /mcp
 
 management:
   endpoints:
