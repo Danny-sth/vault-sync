@@ -10,6 +10,11 @@ import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtDecoders;
+import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
 
 /**
@@ -28,6 +33,9 @@ public class McpSecurityConfig {
 
     @Value("${vault-sync.oauth.issuer-uri:https://on-za-menya.online/realms/duq}")
     private String issuerUri;
+
+    @Value("${vault-sync.oauth.required-audience:vault-mcp}")
+    private String requiredAudience;
 
     /**
      * MCP endpoints security - OAuth2 JWT required.
@@ -63,7 +71,43 @@ public class McpSecurityConfig {
                 })
             );
 
-        log.info("MCP OAuth2 Resource Server configured: issuer={}", issuerUri);
+        log.info("MCP OAuth2 Resource Server configured: issuer={}, required_audience={}", issuerUri, requiredAudience);
         return http.build();
+    }
+
+    /**
+     * JWT Decoder with audience validation (RFC 8707).
+     * Only tokens with aud=vault-mcp are accepted.
+     */
+    @Bean
+    public JwtDecoder jwtDecoder() {
+        NimbusJwtDecoder decoder = JwtDecoders.fromIssuerLocation(issuerUri);
+
+        // Add audience validator
+        decoder.setJwtValidator(token -> {
+            // First validate standard claims (issuer, expiration, etc.)
+            var defaultResult = JwtValidators.createDefaultWithIssuer(issuerUri).validate(token);
+            if (defaultResult.hasErrors()) {
+                return defaultResult;
+            }
+
+            // Then validate audience
+            var audience = token.getAudience();
+            if (audience == null || !audience.contains(requiredAudience)) {
+                log.warn("Token rejected: missing required audience '{}', got: {}", requiredAudience, audience);
+                return OAuth2TokenValidatorResult.failure(
+                    new org.springframework.security.oauth2.core.OAuth2Error(
+                        "invalid_token",
+                        "Token not issued for this resource (missing audience: " + requiredAudience + ")",
+                        null
+                    )
+                );
+            }
+
+            return OAuth2TokenValidatorResult.success();
+        });
+
+        log.info("JwtDecoder configured with audience validation: required_audience={}", requiredAudience);
+        return decoder;
     }
 }
