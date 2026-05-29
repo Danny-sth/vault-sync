@@ -59,6 +59,12 @@ public class SecurityConfig {
                     return;
                 }
 
+                // Skip auth for MCP endpoints (handled by McpAuthFilter)
+                if (path.startsWith("/mcp")) {
+                    filterChain.doFilter(request, response);
+                    return;
+                }
+
                 // Check token for API endpoints
                 if (path.startsWith("/api")) {
                     String token = request.getHeader("X-Auth-Token");

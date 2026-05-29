@@ -10,6 +10,7 @@ services:
       - ./data:/data
     environment:
       - VAULT_SYNC_TOKEN=${VAULT_SYNC_TOKEN}
+      - VAULT_SYNC_MCP_TOKEN=${VAULT_SYNC_MCP_TOKEN}
       - VAULT_SYNC_STORAGE_PATH=/data
       - SERVER_SSL_ENABLED=false
     restart: unless-stopped

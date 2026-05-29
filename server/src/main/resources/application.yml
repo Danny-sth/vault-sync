@@ -41,6 +41,15 @@ vault-sync:
   storage-path: ${VAULT_SYNC_STORAGE:/opt/vault-sync/files}
   token: ${VAULT_SYNC_TOKEN:}
   tombstone-ttl-days: ${TOMBSTONE_TTL_DAYS:14}
+  mcp-token: ${VAULT_SYNC_MCP_TOKEN:}
+
+# MCP Server Configuration
+spring.ai.mcp.server:
+  enabled: true
+  name: vault-sync-mcp
+  version: 1.0.0
+  type: SYNC
+  sse-message-endpoint: /mcp/message
 
 management:
   endpoints:
