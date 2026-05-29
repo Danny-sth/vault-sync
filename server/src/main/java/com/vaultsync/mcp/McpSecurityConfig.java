@@ -45,12 +45,14 @@ public class McpSecurityConfig {
     @Order(1)
     public SecurityFilterChain mcpSecurityFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/mcp/**", "/sse", "/.well-known/oauth-protected-resource")
+            .securityMatcher("/mcp/**", "/sse", "/.well-known/oauth-protected-resource", "/.well-known/oauth-authorization-server")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 // RFC 9728: Protected Resource Metadata must be public
                 .requestMatchers(HttpMethod.GET, "/.well-known/oauth-protected-resource").permitAll()
+                // RFC 8414: Authorization Server Metadata must be public
+                .requestMatchers(HttpMethod.GET, "/.well-known/oauth-authorization-server").permitAll()
                 // All MCP endpoints require OAuth2 JWT
                 .requestMatchers("/mcp/**", "/sse").authenticated()
                 .anyRequest().authenticated()
