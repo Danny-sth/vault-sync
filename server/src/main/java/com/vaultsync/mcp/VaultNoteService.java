@@ -14,8 +14,9 @@ import java.util.List;
 import java.util.stream.Stream;
 
 /**
- * Read-only service for accessing vault notes.
+ * Service for accessing and managing vault notes.
  * Used exclusively by MCP tools.
+ * Supports full CRUD operations: list, read, create, update, delete.
  */
 @Service
 @Slf4j
@@ -210,5 +211,64 @@ public class VaultNoteService {
      * Search result record.
      */
     public record SearchResult(String path, String title, String snippet) {
+    }
+
+    /**
+     * Write content to a note. Creates the file if it doesn't exist, overwrites if it does.
+     * Also creates parent directories if needed.
+     *
+     * @param relativePath Relative path to the note (e.g., "folder/note.md")
+     * @param content      Content to write
+     * @return true if created new file, false if overwritten existing
+     * @throws SecurityException        if path traversal is detected
+     * @throws IOException              if file cannot be written
+     * @throws IllegalArgumentException if path is invalid
+     */
+    public boolean writeNote(String relativePath, String content) throws IOException {
+        // Ensure .md extension
+        String normalizedPath = relativePath;
+        if (!normalizedPath.endsWith(".md")) {
+            normalizedPath += ".md";
+        }
+
+        Path resolvedPath = resolveSafePath(normalizedPath);
+        boolean isNew = !Files.exists(resolvedPath);
+
+        // Create parent directories if needed
+        Path parent = resolvedPath.getParent();
+        if (parent != null && !Files.exists(parent)) {
+            Files.createDirectories(parent);
+            log.debug("Created directories: {}", parent);
+        }
+
+        Files.writeString(resolvedPath, content, StandardCharsets.UTF_8);
+        log.info("Wrote note: {} ({} chars, new={})", normalizedPath, content.length(), isNew);
+        return isNew;
+    }
+
+    /**
+     * Delete a note from the vault.
+     *
+     * @param relativePath Relative path to the note (e.g., "folder/note.md")
+     * @return true if deleted, false if file didn't exist
+     * @throws SecurityException        if path traversal is detected
+     * @throws IOException              if file cannot be deleted
+     * @throws IllegalArgumentException if path is invalid
+     */
+    public boolean deleteNote(String relativePath) throws IOException {
+        Path resolvedPath = resolveSafePath(relativePath);
+
+        if (!Files.exists(resolvedPath)) {
+            log.warn("Cannot delete non-existent note: {}", relativePath);
+            return false;
+        }
+
+        if (!Files.isRegularFile(resolvedPath)) {
+            throw new IOException("Path is not a file: " + relativePath);
+        }
+
+        Files.delete(resolvedPath);
+        log.info("Deleted note: {}", relativePath);
+        return true;
     }
 }

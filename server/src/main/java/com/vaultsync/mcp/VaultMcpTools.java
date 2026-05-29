@@ -10,10 +10,15 @@ import java.io.IOException;
 import java.util.List;
 
 /**
- * MCP Tools for read-only access to vault notes.
+ * MCP Tools for full CRUD access to vault notes.
  * These tools are exposed via the MCP protocol to Claude.
  *
- * STRICTLY READ-ONLY: No tools that modify, create, or delete files.
+ * Supported operations:
+ * - list_notes: List all markdown notes
+ * - read_note: Read a specific note
+ * - search_notes: Full-text search
+ * - write_note: Create or update a note
+ * - delete_note: Delete a note
  */
 @Component
 @RequiredArgsConstructor
@@ -97,6 +102,74 @@ public class VaultMcpTools {
         }
     }
 
+    /**
+     * Write or create a note in the vault.
+     *
+     * @param path    Relative path to the note (e.g., "folder/note.md")
+     * @param content Content to write
+     * @return Result indicating success and whether file was created or updated
+     */
+    @Tool(name = "write_note", description = "Create or update a markdown note in the Obsidian vault. Provide the relative path and content. Creates parent directories if needed. Adds .md extension if missing.")
+    public WriteNoteResult writeNote(
+            @ToolParam(description = "Relative path to the note file (e.g., 'folder/note.md')") String path,
+            @ToolParam(description = "Content to write to the note") String content) {
+        log.info("MCP tool called: write_note(path={}, contentLength={})", path, content != null ? content.length() : 0);
+
+        if (path == null || path.isBlank()) {
+            return new WriteNoteResult(false, null, false, "Path is required");
+        }
+        if (content == null) {
+            return new WriteNoteResult(false, path, false, "Content is required");
+        }
+
+        try {
+            boolean created = noteService.writeNote(path, content);
+            String normalizedPath = path.endsWith(".md") ? path : path + ".md";
+            return new WriteNoteResult(true, normalizedPath, created, null);
+        } catch (SecurityException e) {
+            log.warn("Security violation in write_note: {}", e.getMessage());
+            return new WriteNoteResult(false, path, false, "Access denied: " + e.getMessage());
+        } catch (IOException e) {
+            log.error("Failed to write note {}: {}", path, e.getMessage());
+            return new WriteNoteResult(false, path, false, "Failed to write note: " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            return new WriteNoteResult(false, path, false, "Invalid path: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Delete a note from the vault.
+     *
+     * @param path Relative path to the note (e.g., "folder/note.md")
+     * @return Result indicating success
+     */
+    @Tool(name = "delete_note", description = "Delete a markdown note from the Obsidian vault. Provide the relative path to the note to delete.")
+    public DeleteNoteResult deleteNote(
+            @ToolParam(description = "Relative path to the note file to delete (e.g., 'folder/note.md')") String path) {
+        log.info("MCP tool called: delete_note(path={})", path);
+
+        if (path == null || path.isBlank()) {
+            return new DeleteNoteResult(false, null, "Path is required");
+        }
+
+        try {
+            boolean deleted = noteService.deleteNote(path);
+            if (deleted) {
+                return new DeleteNoteResult(true, path, null);
+            } else {
+                return new DeleteNoteResult(false, path, "Note not found: " + path);
+            }
+        } catch (SecurityException e) {
+            log.warn("Security violation in delete_note: {}", e.getMessage());
+            return new DeleteNoteResult(false, path, "Access denied: " + e.getMessage());
+        } catch (IOException e) {
+            log.error("Failed to delete note {}: {}", path, e.getMessage());
+            return new DeleteNoteResult(false, path, "Failed to delete note: " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            return new DeleteNoteResult(false, path, "Invalid path: " + e.getMessage());
+        }
+    }
+
     // Result records for structured JSON responses
 
     public record ListNotesResult(boolean success, List<String> notes, int count, String error) {
@@ -109,5 +182,11 @@ public class VaultMcpTools {
     }
 
     public record SearchResultItem(String path, String title, String snippet) {
+    }
+
+    public record WriteNoteResult(boolean success, String path, boolean created, String error) {
+    }
+
+    public record DeleteNoteResult(boolean success, String path, String error) {
     }
 }
