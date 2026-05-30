@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Service
@@ -36,6 +37,39 @@ public class SyncService {
     private String storagePath;
 
     private final AtomicLong sequenceCounter = new AtomicLong(0);
+
+    // Directories to exclude from sync (system/IDE/temp folders)
+    private static final Set<String> EXCLUDED_DIRS = Set.of(
+            ".git", ".idea", ".smart-env", ".DS_Store", "node_modules"
+    );
+
+    // File patterns to exclude
+    private static final Set<String> EXCLUDED_PATTERNS = Set.of(
+            ".DS_Store", "Thumbs.db", ".tmp", ".temp"
+    );
+
+    private boolean shouldExcludePath(String path) {
+        // Check excluded directories
+        for (String excluded : EXCLUDED_DIRS) {
+            if (path.startsWith(excluded + "/") || path.equals(excluded)) {
+                return true;
+            }
+            if (path.contains("/" + excluded + "/")) {
+                return true;
+            }
+        }
+        // Check excluded patterns
+        for (String pattern : EXCLUDED_PATTERNS) {
+            if (path.contains(pattern)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean shouldExcludeDir(String dirName) {
+        return EXCLUDED_DIRS.contains(dirName);
+    }
 
     @jakarta.annotation.PostConstruct
     public void init() {
@@ -68,8 +102,8 @@ public class SyncService {
                     try {
                         String relativePath = root.relativize(file).toString().replace("\\", "/");
 
-                        // Skip hidden files
-                        if (relativePath.startsWith(".") || relativePath.contains("/.")) {
+                        // Check exclusion list instead of skipping all hidden files
+                        if (shouldExcludePath(relativePath)) {
                             return FileVisitResult.CONTINUE;
                         }
 
@@ -104,7 +138,8 @@ public class SyncService {
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
                     String name = dir.getFileName() != null ? dir.getFileName().toString() : "";
-                    if (name.startsWith(".")) {
+                    // Only skip explicitly excluded directories, not all hidden dirs
+                    if (shouldExcludeDir(name)) {
                         return FileVisitResult.SKIP_SUBTREE;
                     }
                     return FileVisitResult.CONTINUE;
@@ -311,8 +346,8 @@ public class SyncService {
                     try {
                         String relativePath = root.relativize(file).toString().replace("\\", "/");
 
-                        // Skip hidden files
-                        if (relativePath.startsWith(".") || relativePath.contains("/.")) {
+                        // Check exclusion list instead of skipping all hidden files
+                        if (shouldExcludePath(relativePath)) {
                             return FileVisitResult.CONTINUE;
                         }
 
@@ -323,11 +358,11 @@ public class SyncService {
                         long diskMtime = attrs.lastModifiedTime().toMillis();
 
                         if (existingRecord.isEmpty()) {
-                            // Check if there's a tombstone for this file - if so, skip it
-                            // (file was deleted by sync but still exists on disk - will be cleaned up)
+                            // If there's a tombstone but file exists on disk, the file was re-created
+                            // Remove tombstone and treat as new file
                             if (tombstoneRepository.existsById(relativePath)) {
-                                log.debug("Skipping file with active tombstone: {}", relativePath);
-                                return FileVisitResult.CONTINUE;
+                                tombstoneRepository.deleteById(relativePath);
+                                log.info("Removed stale tombstone for re-created file: {}", relativePath);
                             }
 
                             // New file on disk - add to database and broadcast
@@ -408,7 +443,8 @@ public class SyncService {
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
                     String name = dir.getFileName() != null ? dir.getFileName().toString() : "";
-                    if (name.startsWith(".")) {
+                    // Only skip explicitly excluded directories, not all hidden dirs
+                    if (shouldExcludeDir(name)) {
                         return FileVisitResult.SKIP_SUBTREE;
                     }
                     return FileVisitResult.CONTINUE;
