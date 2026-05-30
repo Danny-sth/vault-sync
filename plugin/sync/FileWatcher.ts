@@ -1,5 +1,4 @@
 import { App, TFile } from 'obsidian';
-import { LocalState } from '../storage/LocalState';
 import { SyncFilter } from './SyncFilter';
 
 export interface FileChange {
@@ -10,9 +9,6 @@ export interface FileChange {
 
 export class FileWatcher {
   private app: App;
-  // localState retained for future use; FileWatcher stores baseline in-memory only.
-  // @ts-ignore
-  private localState: LocalState;
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private isScanning = false;
   // Vault-indexed files baseline.
@@ -28,9 +24,8 @@ export class FileWatcher {
   // Filter applied to .obsidian/* paths — set by SyncManager so device-specific files are skipped.
   shouldIncludeConfigPath?: (path: string) => boolean;
 
-  constructor(app: App, localState: LocalState) {
+  constructor(app: App) {
     this.app = app;
-    this.localState = localState;
   }
 
   /**

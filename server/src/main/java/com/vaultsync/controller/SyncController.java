@@ -70,15 +70,21 @@ public class SyncController {
             Principal principal,
             SimpMessageHeaderAccessor headerAccessor) {
 
-        log.info("Sync request from {} (lastSeq={})", request.getDeviceId(), request.getLastSeq());
+        log.info("Sync request from {} (lastSeq={}, requestId={})",
+                request.getDeviceId(), request.getLastSeq(), request.getRequestId());
 
+        SyncMessage.SyncResponse response;
         if (request.getLastSeq() <= 0) {
             // Full sync
-            return syncService.getFullState();
+            response = syncService.getFullState();
         } else {
             // Delta sync
-            return syncService.getChangesSince(request.getLastSeq());
+            response = syncService.getChangesSince(request.getLastSeq());
         }
+
+        // Echo requestId for correlation
+        response.setRequestId(request.getRequestId());
+        return response;
     }
 
     /**

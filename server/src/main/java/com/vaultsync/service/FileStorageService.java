@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.vaultsync.util.HashUtil;
@@ -27,6 +28,7 @@ public class FileStorageService {
     @Value("${vault-sync.storage-path}")
     private String storagePath;
 
+    @Transactional
     public FileRecord store(String path, MultipartFile file, String expectedHash, String deviceId, long seq) throws IOException {
         Path targetPath = getFullPath(path);
 
@@ -61,6 +63,7 @@ public class FileStorageService {
         return fileRepository.save(record);
     }
 
+    @Transactional
     public FileRecord storeBytes(String path, byte[] content, String expectedHash, String deviceId, long seq, long mtime) throws IOException {
         Path targetPath = getFullPath(path);
 

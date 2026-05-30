@@ -26,22 +26,31 @@ export class LocalState {
 
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
+        const oldVersion = event.oldVersion;
 
-        // Store for simple key-value state (lastSeq, etc)
-        if (!db.objectStoreNames.contains(STORE_STATE)) {
-          db.createObjectStore(STORE_STATE);
+        // Migration: version 0 -> 1 (fresh install or first schema)
+        if (oldVersion < 1) {
+          // Store for simple key-value state (lastSeq, etc)
+          if (!db.objectStoreNames.contains(STORE_STATE)) {
+            db.createObjectStore(STORE_STATE);
+          }
+
+          // Store for file hashes
+          if (!db.objectStoreNames.contains(STORE_HASHES)) {
+            db.createObjectStore(STORE_HASHES);
+          }
+
+          // Store for pending operations (offline queue)
+          if (!db.objectStoreNames.contains(STORE_PENDING)) {
+            const store = db.createObjectStore(STORE_PENDING, { keyPath: 'id' });
+            store.createIndex('timestamp', 'timestamp', { unique: false });
+          }
         }
 
-        // Store for file hashes
-        if (!db.objectStoreNames.contains(STORE_HASHES)) {
-          db.createObjectStore(STORE_HASHES);
-        }
-
-        // Store for pending operations (offline queue)
-        if (!db.objectStoreNames.contains(STORE_PENDING)) {
-          const store = db.createObjectStore(STORE_PENDING, { keyPath: 'id' });
-          store.createIndex('timestamp', 'timestamp', { unique: false });
-        }
+        // Future migrations:
+        // if (oldVersion < 2) {
+        //   // Migration from v1 to v2
+        // }
       };
     });
   }
