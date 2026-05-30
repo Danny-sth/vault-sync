@@ -1,5 +1,7 @@
 import { App, Modal, Setting } from 'obsidian';
 import { LUCIDE_ICONS } from './LucideIcons';
+import { BRAND_ICONS } from './BrandIcons';
+import { DEV_ICONS } from './DevIcons';
 
 // Popular emojis organized by category
 const EMOJI_CATEGORIES: Record<string, string[]> = {
@@ -15,10 +17,10 @@ const EMOJI_CATEGORIES: Record<string, string[]> = {
   'Flags': ['🏳️', '🏴', '🏴‍☠️', '🏁', '🚩', '🎌', '🏳️‍🌈', '🏳️‍⚧️', '🇺🇳', '🇦🇫', '🇦🇱', '🇩🇿', '🇦🇸', '🇦🇩', '🇦🇴', '🇦🇮', '🇦🇶', '🇦🇬', '🇦🇷', '🇦🇲', '🇦🇼', '🇦🇺', '🇦🇹', '🇦🇿', '🇧🇸', '🇧🇭', '🇧🇩', '🇧🇧', '🇧🇾', '🇧🇪', '🇧🇿', '🇧🇯', '🇧🇲', '🇧🇹', '🇧🇴', '🇧🇦', '🇧🇼', '🇧🇷', '🇮🇴', '🇻🇬', '🇧🇳', '🇧🇬', '🇧🇫', '🇧🇮', '🇰🇭', '🇨🇲', '🇨🇦', '🇮🇨', '🇨🇻', '🇧🇶', '🇰🇾', '🇨🇫', '🇹🇩', '🇨🇱', '🇨🇳', '🇨🇽', '🇨🇨', '🇨🇴', '🇰🇲', '🇨🇬', '🇨🇩', '🇨🇰', '🇨🇷', '🇨🇮', '🇭🇷', '🇨🇺', '🇨🇼', '🇨🇾', '🇨🇿', '🇩🇰', '🇩🇯', '🇩🇲', '🇩🇴', '🇪🇨', '🇪🇬', '🇸🇻', '🇬🇶', '🇪🇷', '🇪🇪', '🇸🇿', '🇪🇹', '🇪🇺', '🇫🇰', '🇫🇴', '🇫🇯', '🇫🇮', '🇫🇷', '🇬🇫', '🇵🇫', '🇹🇫', '🇬🇦', '🇬🇲', '🇬🇪', '🇩🇪', '🇬🇭', '🇬🇮', '🇬🇷', '🇬🇱', '🇬🇩', '🇬🇵', '🇬🇺', '🇬🇹', '🇬🇬', '🇬🇳', '🇬🇼', '🇬🇾', '🇭🇹', '🇭🇳', '🇭🇰', '🇭🇺', '🇮🇸', '🇮🇳', '🇮🇩', '🇮🇷', '🇮🇶', '🇮🇪', '🇮🇲', '🇮🇱', '🇮🇹', '🇯🇲', '🇯🇵', '🎌', '🇯🇪', '🇯🇴', '🇰🇿', '🇰🇪', '🇰🇮', '🇽🇰', '🇰🇼', '🇰🇬', '🇱🇦', '🇱🇻', '🇱🇧', '🇱🇸', '🇱🇷', '🇱🇾', '🇱🇮', '🇱🇹', '🇱🇺', '🇲🇴', '🇲🇬', '🇲🇼', '🇲🇾', '🇲🇻', '🇲🇱', '🇲🇹', '🇲🇭', '🇲🇶', '🇲🇷', '🇲🇺', '🇾🇹', '🇲🇽', '🇫🇲', '🇲🇩', '🇲🇨', '🇲🇳', '🇲🇪', '🇲🇸', '🇲🇦', '🇲🇿', '🇲🇲', '🇳🇦', '🇳🇷', '🇳🇵', '🇳🇱', '🇳🇨', '🇳🇿', '🇳🇮', '🇳🇪', '🇳🇬', '🇳🇺', '🇳🇫', '🇰🇵', '🇲🇰', '🇲🇵', '🇳🇴', '🇴🇲', '🇵🇰', '🇵🇼', '🇵🇸', '🇵🇦', '🇵🇬', '🇵🇾', '🇵🇪', '🇵🇭', '🇵🇳', '🇵🇱', '🇵🇹', '🇵🇷', '🇶🇦', '🇷🇪', '🇷🇴', '🇷🇺', '🇷🇼', '🇼🇸', '🇸🇲', '🇸🇹', '🇸🇦', '🇸🇳', '🇷🇸', '🇸🇨', '🇸🇱', '🇸🇬', '🇸🇽', '🇸🇰', '🇸🇮', '🇬🇸', '🇸🇧', '🇸🇴', '🇿🇦', '🇰🇷', '🇸🇸', '🇪🇸', '🇱🇰', '🇧🇱', '🇸🇭', '🇰🇳', '🇱🇨', '🇵🇲', '🇻🇨', '🇸🇩', '🇸🇷', '🇸🇪', '🇨🇭', '🇸🇾', '🇹🇼', '🇹🇯', '🇹🇿', '🇹🇭', '🇹🇱', '🇹🇬', '🇹🇰', '🇹🇴', '🇹🇹', '🇹🇳', '🇹🇷', '🇹🇲', '🇹🇨', '🇹🇻', '🇻🇮', '🇺🇬', '🇺🇦', '🇦🇪', '🇬🇧', '🏴󠁧󠁢󠁥󠁮󠁧󠁿', '🏴󠁧󠁢󠁳󠁣󠁴󠁿', '🏴󠁧󠁢󠁷󠁬󠁳󠁿', '🇺🇸', '🇺🇾', '🇺🇿', '🇻🇺', '🇻🇦', '🇻🇪', '🇻🇳', '🇼🇫', '🇪🇭', '🇾🇪', '🇿🇲', '🇿🇼'],
 };
 
-type TabType = 'lucide' | 'emoji';
+type TabType = 'emoji' | 'lucide' | 'brand' | 'dev';
 
 /**
- * Modal for picking an icon (Lucide or Emoji).
+ * Modal for picking an icon (Emoji, Lucide, Brand, or Dev).
  */
 export class IconPickerModal extends Modal {
   private onSelect: (iconName: string | null) => void;
@@ -32,11 +34,17 @@ export class IconPickerModal extends Modal {
     super(app);
     this.currentIcon = currentIcon;
     this.onSelect = onSelect;
-    // Detect if current icon is emoji or lucide
-    if (currentIcon && !LUCIDE_ICONS[currentIcon]) {
-      this.activeTab = 'emoji';
-    } else if (currentIcon) {
-      this.activeTab = 'lucide';
+    // Detect icon type
+    if (currentIcon) {
+      if (LUCIDE_ICONS[currentIcon]) {
+        this.activeTab = 'lucide';
+      } else if (BRAND_ICONS[currentIcon]) {
+        this.activeTab = 'brand';
+      } else if (DEV_ICONS[currentIcon]) {
+        this.activeTab = 'dev';
+      } else {
+        this.activeTab = 'emoji';
+      }
     }
   }
 
@@ -89,25 +97,24 @@ export class IconPickerModal extends Modal {
     if (!this.tabContainer) return;
     this.tabContainer.empty();
 
-    const emojiTab = this.tabContainer.createDiv({
-      cls: `icon-picker-tab ${this.activeTab === 'emoji' ? 'is-active' : ''}`,
-      text: '😀 Emoji'
-    });
-    emojiTab.addEventListener('click', () => {
-      this.activeTab = 'emoji';
-      this.renderTabs();
-      this.renderGrid();
-    });
+    const tabs: { type: TabType; label: string }[] = [
+      { type: 'emoji', label: '😀 Emoji' },
+      { type: 'lucide', label: '🔲 Lucide' },
+      { type: 'brand', label: '🏢 Brand' },
+      { type: 'dev', label: '💻 Dev' },
+    ];
 
-    const lucideTab = this.tabContainer.createDiv({
-      cls: `icon-picker-tab ${this.activeTab === 'lucide' ? 'is-active' : ''}`,
-      text: '🔲 Lucide'
-    });
-    lucideTab.addEventListener('click', () => {
-      this.activeTab = 'lucide';
-      this.renderTabs();
-      this.renderGrid();
-    });
+    for (const tab of tabs) {
+      const tabEl = this.tabContainer.createDiv({
+        cls: `icon-picker-tab ${this.activeTab === tab.type ? 'is-active' : ''}`,
+        text: tab.label
+      });
+      tabEl.addEventListener('click', () => {
+        this.activeTab = tab.type;
+        this.renderTabs();
+        this.renderGrid();
+      });
+    }
   }
 
   private renderGrid(): void {
@@ -116,10 +123,18 @@ export class IconPickerModal extends Modal {
 
     const searchTerm = this.searchInput?.value.toLowerCase() || '';
 
-    if (this.activeTab === 'lucide') {
-      this.renderLucideGrid(searchTerm);
-    } else {
-      this.renderEmojiGrid(searchTerm);
+    switch (this.activeTab) {
+      case 'lucide':
+        this.renderLucideGrid(searchTerm);
+        break;
+      case 'brand':
+        this.renderSvgIconGrid(BRAND_ICONS, searchTerm);
+        break;
+      case 'dev':
+        this.renderSvgIconGrid(DEV_ICONS, searchTerm);
+        break;
+      default:
+        this.renderEmojiGrid(searchTerm);
     }
   }
 
@@ -140,6 +155,37 @@ export class IconPickerModal extends Modal {
 
       const svgPath = LUCIDE_ICONS[iconName];
       iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none">${svgPath}</svg>`;
+      iconEl.setAttribute('title', iconName);
+
+      iconEl.addEventListener('click', () => {
+        this.onSelect(iconName);
+        this.close();
+      });
+    }
+
+    if (filtered.length === 0) {
+      this.gridContainer.createEl('p', { text: 'No icons found', cls: 'icon-picker-empty' });
+    }
+  }
+
+  private renderSvgIconGrid(icons: Record<string, string>, searchTerm: string): void {
+    if (!this.gridContainer) return;
+
+    const iconNames = Object.keys(icons);
+    const filtered = searchTerm
+      ? iconNames.filter(name => name.toLowerCase().includes(searchTerm))
+      : iconNames;
+
+    for (const iconName of filtered) {
+      const iconEl = this.gridContainer.createDiv({ cls: 'icon-picker-item' });
+
+      if (iconName === this.currentIcon) {
+        iconEl.addClass('is-selected');
+      }
+
+      const svgPath = icons[iconName];
+      // Brand/Dev icons use fill, not stroke
+      iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">${svgPath}</svg>`;
       iconEl.setAttribute('title', iconName);
 
       iconEl.addEventListener('click', () => {

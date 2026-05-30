@@ -1,5 +1,7 @@
 import { App, TFile, TFolder } from 'obsidian';
 import { LUCIDE_ICONS } from './LucideIcons';
+import { BRAND_ICONS } from './BrandIcons';
+import { DEV_ICONS } from './DevIcons';
 
 const FOLDER_ICONS_PATH = '.obsidian/folder-icons.json';
 
@@ -113,6 +115,10 @@ export class FileIcons {
         stroke-linecap: round;
         stroke-linejoin: round;
         fill: none;
+      }
+      .vault-sync-file-icon svg.vault-sync-fill-icon {
+        stroke: none;
+        fill: currentColor;
       }
       .vault-sync-emoji-icon {
         font-size: 14px;
@@ -237,27 +243,30 @@ export class FileIcons {
   }
 
   /**
-   * Check if a string is an emoji (not a Lucide icon name).
-   */
-  private isEmoji(str: string): boolean {
-    // Lucide icons are alphanumeric with dashes, emojis are not
-    return !LUCIDE_ICONS[str] && /\p{Emoji}/u.test(str);
-  }
-
-  /**
-   * Get HTML for an icon (SVG for Lucide, span for emoji).
+   * Get HTML for an icon (SVG for Lucide/Brand/Dev, span for emoji).
    */
   private getIconHtml(iconName: string): string | null {
-    // Check if it's an emoji
-    if (this.isEmoji(iconName)) {
+    // Check Lucide icons (stroke-based)
+    if (LUCIDE_ICONS[iconName]) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${LUCIDE_ICONS[iconName]}</svg>`;
+    }
+
+    // Check Brand icons (fill-based)
+    if (BRAND_ICONS[iconName]) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="vault-sync-fill-icon">${BRAND_ICONS[iconName]}</svg>`;
+    }
+
+    // Check Dev icons (fill-based)
+    if (DEV_ICONS[iconName]) {
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="vault-sync-fill-icon">${DEV_ICONS[iconName]}</svg>`;
+    }
+
+    // Assume it's an emoji if it contains emoji characters
+    if (/\p{Emoji}/u.test(iconName)) {
       return `<span class="vault-sync-emoji-icon">${iconName}</span>`;
     }
 
-    // Lucide icon
-    const path = LUCIDE_ICONS[iconName];
-    if (!path) return null;
-
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${path}</svg>`;
+    return null;
   }
 
   /**

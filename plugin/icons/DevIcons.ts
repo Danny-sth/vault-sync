@@ -1,0 +1,114 @@
+// Developer/Nerd icons - programming languages, tools, file types
+export const DEV_ICONS: Record<string, string> = {
+  // File types
+  'FileJson': '<path d="M4 2h12l4 4v16H4zm8 10v4m-2-2h4"/><rect x="8" y="14" width="8" height="4" rx="1"/>',
+  'FileYaml': '<path d="M4 2h12l4 4v16H4z"/><path d="M9 10l3 3 3-3M12 13v5"/>',
+  'FileXml': '<path d="M4 2h12l4 4v16H4z"/><path d="M8 10l4 4 4-4M8 14l4-4 4 4"/>',
+  'FileMarkdown': '<path d="M4 2h12l4 4v16H4z"/><path d="M7 15V9l2.5 3L12 9v6m4-6v6l2-2"/>',
+  'FileHtml': '<path d="M4 2h12l4 4v16H4z"/><path d="M8 10l-2 4 2 4m8-8l2 4-2 4"/>',
+  'FileCss': '<path d="M4 2h12l4 4v16H4z"/><path d="M8 11h8M8 14h6M8 17h4"/>',
+  'FileTs': '<path d="M4 2h12l4 4v16H4z"/><path d="M9 11h6M12 11v7m-4-3h2"/>',
+  'FileJs': '<path d="M4 2h12l4 4v16H4z"/><path d="M10 11v4c0 1-1 2-2 2m6-6v6c0 1 1 1 2 0"/>',
+  'FilePy': '<path d="M4 2h12l4 4v16H4z"/><circle cx="10" cy="12" r="1"/><circle cx="14" cy="16" r="1"/>',
+  'FileRb': '<path d="M4 2h12l4 4v16H4z"/><path d="M12 10l-4 4h8l-4-4zm0 0v8"/>',
+  'FileRs': '<path d="M4 2h12l4 4v16H4z"/><circle cx="12" cy="14" r="3"/><path d="M12 11v-1m0 8v1"/>',
+  'FileGo': '<path d="M4 2h12l4 4v16H4z"/><ellipse cx="12" cy="14" rx="4" ry="2.5"/>',
+  'FileJava': '<path d="M4 2h12l4 4v16H4z"/><path d="M9 11c0 2 6 2 6 0M9 14c0 2 6 2 6 0M9 17c0 2 6 2 6 0"/>',
+  'FileC': '<path d="M4 2h12l4 4v16H4z"/><path d="M15 11c-1-2-4-2-5 0s1 4 3 5c1 0 2-1 2-2"/>',
+  'FileCpp': '<path d="M4 2h12l4 4v16H4z"/><path d="M11 11h2M12 10v2M15 13h2M16 12v2"/>',
+  'FileSql': '<path d="M4 2h12l4 4v16H4z"/><ellipse cx="12" cy="11" rx="4" ry="2"/><path d="M8 11v5c0 1 1.8 2 4 2s4-1 4-2v-5"/>',
+  'FileDocker': '<path d="M4 2h12l4 4v16H4z"/><rect x="7" y="10" width="2" height="2"/><rect x="10" y="10" width="2" height="2"/><rect x="13" y="10" width="2" height="2"/><rect x="10" y="13" width="2" height="2"/><rect x="10" y="7" width="2" height="2"/>',
+  'FileShell': '<path d="M4 2h12l4 4v16H4z"/><path d="M8 11l3 3-3 3m5 0h4"/>',
+  'FileConfig': '<path d="M4 2h12l4 4v16H4z"/><circle cx="12" cy="14" r="2"/><path d="M12 10v2m0 4v2m-4-4h2m4 0h2"/>',
+
+  // Terminals & Shells
+  'Terminal': '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 9l3 3-3 3m5 0h4"/>',
+  'Console': '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 9l3 3-3 3"/>',
+  'Bash': '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 9l2 3-2 3m4 0h3"/>',
+  'Zsh': '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 9l5 6m0-6l-5 6"/>',
+  'PowerShell': '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15l5-6M6 9h6"/>',
+
+  // Frameworks
+  'React': '<circle cx="12" cy="12" r="2"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(-60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4"/>',
+  'Vue': '<path d="M2 3h4l6 10 6-10h4L12 21z"/><path d="M7 3l5 8.5L17 3"/>',
+  'Angular': '<path d="M12 2L2 6l1.5 13L12 22l8.5-3L22 6z"/><path d="M12 2v20M7 18l5-10 5 10"/>',
+  'Svelte': '<path d="M19.1 4.9C17.3 2.3 13.8 1.4 11 3L5.5 6.5c-1.4.8-2.3 2.2-2.5 3.7-.2 1.2.1 2.4.6 3.4-.4.9-.6 1.9-.4 2.9.3 2.2 2.1 4 4.3 4.4 1.5.3 3-.1 4.2-1l5.5-3.5c1.4-.8 2.3-2.2 2.5-3.7.2-1.2-.1-2.4-.6-3.4.4-.9.6-1.9.4-2.9-.2-1.6-1.1-3-2.4-3.9z"/>',
+  'NextJs': '<circle cx="12" cy="12" r="10"/><path d="M8 8v8l8-8"/>',
+  'Spring': '<path d="M21 12c-1 4-5 8-9 8s-8-4-9-8c1-4 5-8 9-8s8 4 9 8z"/><path d="M12 4c2 2 2 6 0 8s-4 4-6 4"/><circle cx="12" cy="12" r="2"/>',
+  'Django': '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 7h4v10h-2v-8H7zm6 0h4v2h-2v3h2v2h-2v3h-2z"/>',
+  'Flask': '<path d="M12 3c-1 0-2 4-2 6v1c-3 1-5 3-5 5 0 3 3 6 7 6s7-3 7-6c0-2-2-4-5-5v-1c0-2-1-6-2-6z"/>',
+  'Rails': '<path d="M3 17h18M3 12h18M6 7h12M9 3h6"/><circle cx="6" cy="17" r="2"/><circle cx="18" cy="17" r="2"/>',
+  'Laravel': '<path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M12 3v18M3 7l9 4 9-4"/>',
+  'Express': '<path d="M4 12h16M4 12l4-4m-4 4l4 4"/><path d="M14 8c2 0 4 2 4 4s-2 4-4 4"/>',
+  'FastAPI': '<path d="M13 2L3 14h9l-1 8 10-12h-9z"/>',
+  'GraphQL': '<path d="M12 2l9 5v10l-9 5-9-5V7z"/><circle cx="12" cy="12" r="2"/><path d="M12 2v4m0 12v4M3 7l4 2m10 6l4 2M21 7l-4 2m-10 6l-4 2"/>',
+
+  // Databases
+  'Database': '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>',
+  'MySQL': '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/><path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/>',
+  'Postgres': '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/><path d="M20 12c0 1.66-3.58 3-8 3s-8-1.34-8-3"/>',
+  'SQLite': '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8M8 12h8M8 16h4"/>',
+  'Redis': '<path d="M12 3L3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+  'Elasticsearch': '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/>',
+
+  // DevOps & Cloud
+  'Cloud': '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>',
+  'Server': '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1"/><circle cx="6" cy="18" r="1"/>',
+  'Container': '<rect x="2" y="6" width="20" height="14" rx="2"/><path d="M6 6V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/>',
+  'Kubernetes': '<path d="M12 2l9 5v10l-9 5-9-5V7z"/><circle cx="12" cy="12" r="3"/><path d="M12 5v4m0 6v4m5-9l-3 2m-4 0l-3-2m10 4l-3-2m-4 0l-3 2"/>',
+  'Helm': '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M12 6v4l3 2-3 2v4"/>',
+  'Terraform': '<path d="M1 5h8v8H1zm14 0h8v8h-8zm-7 7h8v8H8z"/>',
+  'Ansible': '<circle cx="12" cy="12" r="10"/><path d="M12 7v10M8 14l4-4 4 4"/>',
+  'Jenkins': '<circle cx="12" cy="8" r="4"/><path d="M12 12v6M8 22h8"/>',
+  'GitHubActions': '<circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/>',
+  'CircleCI': '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>',
+  'TravisCI': '<path d="M2 12h4l2-4 3 8 2-4h9"/>',
+
+  // Testing
+  'Jest': '<circle cx="12" cy="12" r="10"/><path d="M8 10l4 4 4-4"/>',
+  'Cypress': '<circle cx="12" cy="12" r="10"/><path d="M8 12h8m-4-4v8"/>',
+  'Playwright': '<rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="8" cy="12" r="2"/><circle cx="16" cy="12" r="2"/>',
+  'Selenium': '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 12h10M12 7v10"/>',
+
+  // Monitoring
+  'Grafana': '<rect x="2" y="2" width="20" height="20" rx="2"/><path d="M6 14l3-4 3 2 3-4 3 6"/>',
+  'Prometheus': '<circle cx="12" cy="12" r="10"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>',
+  'Datadog': '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M8 14c1.5 0 2.5-1.5 4-1.5s2.5 1.5 4 1.5"/>',
+  'NewRelic': '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1"/>',
+
+  // Security
+  'Shield': '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  'Lock': '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  'Key': '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
+  'Vault': '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M12 9v6M9 12h6"/>',
+
+  // APIs & Integration
+  'API': '<path d="M4 4h16v16H4z"/><path d="M8 8h2v2H8zm4 0h2v2h-2zm4 0h2v2h-2zm-8 4h2v2H8zm4 0h2v2h-2zm4 0h2v2h-2z"/>',
+  'Webhook': '<path d="M18 16v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/><path d="M8 12h14l-4-4m4 4l-4 4"/>',
+  'REST': '<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="1"/><circle cx="16" cy="12" r="1"/><circle cx="8" cy="18" r="1"/>',
+  'gRPC': '<path d="M4 4h16v16H4z"/><path d="M8 10h8M8 14h8"/><circle cx="6" cy="10" r="1"/><circle cx="6" cy="14" r="1"/>',
+  'SOAP': '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h12M6 12h8M6 16h10"/>',
+
+  // Version Control
+  'GitBranch': '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  'GitCommit': '<circle cx="12" cy="12" r="3"/><line x1="3" y1="12" x2="9" y2="12"/><line x1="15" y1="12" x2="21" y2="12"/>',
+  'GitMerge': '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
+  'GitPullRequest': '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/>',
+  'GitFork': '<circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/>',
+
+  // Package Managers
+  'Npm': '<rect x="2" y="6" width="20" height="12" rx="1"/><path d="M6 10v4h3v-3h2v3h2v-4"/>',
+  'Yarn': '<circle cx="12" cy="12" r="10"/><path d="M12 6v12M8 10c2 0 3 2 4 2s2-2 4-2"/>',
+  'Pip': '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8v2H8zm0 4h6v2H8zm0 4h4v2H8z"/>',
+  'Maven': '<path d="M12 2L2 7v10l10 5 10-5V7z"/><path d="M12 22V12M2 7l10 5 10-5"/>',
+  'Gradle': '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M8 14l4-4 4 4"/>',
+  'Cargo': '<rect x="3" y="6" width="18" height="14" rx="2"/><path d="M3 10h18"/><circle cx="8" cy="14" r="2"/><circle cx="16" cy="14" r="2"/>',
+
+  // IDEs & Editors
+  'VSCode': '<rect x="2" y="2" width="20" height="20" rx="2"/><path d="M16 3v18M7 8l4 4-4 4"/>',
+  'IntelliJ': '<rect x="2" y="2" width="20" height="20" rx="2"/><path d="M6 6h4v4H6zm8 0h4M6 14h6"/>',
+  'Vim': '<path d="M2 6l10 6-10 6z"/><path d="M12 6l10 6-10 6z"/>',
+  'Emacs': '<circle cx="12" cy="12" r="10"/><path d="M8 8l8 8M16 8l-8 8"/>',
+  'Sublime': '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 10h10M7 14h6"/>',
+  'Atom': '<circle cx="12" cy="12" r="10"/><ellipse cx="12" cy="12" rx="3" ry="8" transform="rotate(45 12 12)"/><ellipse cx="12" cy="12" rx="3" ry="8" transform="rotate(-45 12 12)"/>',
+};
