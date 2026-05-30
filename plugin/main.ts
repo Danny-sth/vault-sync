@@ -127,7 +127,7 @@ export default class VaultSyncPlugin extends Plugin {
 
             menu.addItem((item) => {
               item
-                .setTitle(currentIcon ? 'Change Icon' : 'Set Icon')
+                .setTitle('Set Icon')
                 .setIcon('image')
                 .onClick(() => {
                   new IconPickerModal(this.app, currentIcon || null, async (iconName) => {
@@ -141,7 +141,7 @@ export default class VaultSyncPlugin extends Plugin {
 
             menu.addItem((item) => {
               item
-                .setTitle(currentIcon ? 'Change Icon' : 'Set Icon')
+                .setTitle('Set Icon')
                 .setIcon('image')
                 .onClick(() => {
                   new IconPickerModal(this.app, currentIcon, async (iconName) => {
