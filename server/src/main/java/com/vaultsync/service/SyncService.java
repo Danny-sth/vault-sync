@@ -19,6 +19,7 @@ import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Service
@@ -73,16 +74,20 @@ public class SyncService {
 
     @jakarta.annotation.PostConstruct
     public void init() {
-        // Initialize sequence counter from database
-        long maxFileSeq = fileRepository.findMaxSeq();
-        long maxTombstoneSeq = tombstoneRepository.findMaxSeq();
-        sequenceCounter.set(Math.max(maxFileSeq, maxTombstoneSeq));
-        log.info("Initialized sequence counter to {}", sequenceCounter.get());
-
+        initializeSequenceCounter();
         // Scan existing files if database is empty
         if (fileRepository.count() == 0) {
             scanExistingFiles();
         }
+    }
+
+    @Transactional(readOnly = true)
+    protected void initializeSequenceCounter() {
+        // Initialize sequence counter from database (transactional to ensure consistency)
+        long maxFileSeq = fileRepository.findMaxSeq();
+        long maxTombstoneSeq = tombstoneRepository.findMaxSeq();
+        sequenceCounter.set(Math.max(maxFileSeq, maxTombstoneSeq));
+        log.info("Initialized sequence counter to {}", sequenceCounter.get());
     }
 
     private void scanExistingFiles() {
@@ -93,7 +98,7 @@ public class SyncService {
         }
 
         log.info("Scanning existing files in {}", storagePath);
-        int[] count = {0};
+        AtomicInteger count = new AtomicInteger(0);
 
         try {
             Files.walkFileTree(root, new SimpleFileVisitor<>() {
@@ -124,10 +129,10 @@ public class SyncService {
                                 .lastModifiedBy("server-scan")
                                 .build();
                         fileRepository.save(record);
-                        count[0]++;
+                        int current = count.incrementAndGet();
 
-                        if (count[0] % 100 == 0) {
-                            log.info("Scanned {} files...", count[0]);
+                        if (current % 100 == 0) {
+                            log.info("Scanned {} files...", current);
                         }
                     } catch (Exception e) {
                         log.error("Error scanning file: {}", file, e);
@@ -149,7 +154,7 @@ public class SyncService {
             log.error("Error scanning storage directory", e);
         }
 
-        log.info("Scan complete: indexed {} files", count[0]);
+        log.info("Scan complete: indexed {} files", count.get());
     }
 
     public long nextSeq() {
@@ -332,9 +337,9 @@ public class SyncService {
             return;
         }
 
-        int[] added = {0};
-        int[] modified = {0};
-        int[] deleted = {0};
+        AtomicInteger added = new AtomicInteger(0);
+        AtomicInteger modified = new AtomicInteger(0);
+        AtomicInteger deleted = new AtomicInteger(0);
 
         // Track files found on disk
         java.util.Set<String> diskFiles = new java.util.HashSet<>();
@@ -392,7 +397,7 @@ public class SyncService {
                                     .build();
                             messagingTemplate.convertAndSend("/topic/sync", changeMsg);
 
-                            added[0]++;
+                            added.incrementAndGet();
                             log.info("Filesystem scan: new file detected: {}", relativePath);
 
                         } else {
@@ -429,7 +434,7 @@ public class SyncService {
                                             .build();
                                     messagingTemplate.convertAndSend("/topic/sync", changeMsg);
 
-                                    modified[0]++;
+                                    modified.incrementAndGet();
                                     log.info("Filesystem scan: file modified: {}", relativePath);
                                 }
                             }
@@ -475,7 +480,7 @@ public class SyncService {
                             .build();
                     messagingTemplate.convertAndSend("/topic/sync", deleteMsg);
 
-                    deleted[0]++;
+                    deleted.incrementAndGet();
                     log.info("Filesystem scan: file deleted: {}", dbFile.getPath());
                 }
             }
@@ -484,8 +489,8 @@ public class SyncService {
             log.error("Error during periodic filesystem scan", e);
         }
 
-        if (added[0] > 0 || modified[0] > 0 || deleted[0] > 0) {
-            log.info("Filesystem scan complete: {} added, {} modified, {} deleted", added[0], modified[0], deleted[0]);
+        if (added.get() > 0 || modified.get() > 0 || deleted.get() > 0) {
+            log.info("Filesystem scan complete: {} added, {} modified, {} deleted", added.get(), modified.get(), deleted.get());
         }
 
         // Sync empty folder markers
@@ -505,8 +510,8 @@ public class SyncService {
             return;
         }
 
-        int[] markersCreated = {0};
-        int[] markersDeleted = {0};
+        AtomicInteger markersCreated = new AtomicInteger(0);
+        AtomicInteger markersDeleted = new AtomicInteger(0);
 
         try {
             Files.walkFileTree(root, new SimpleFileVisitor<>() {
@@ -577,7 +582,7 @@ public class SyncService {
                                     .deviceId("server")
                                     .build();
                                 messagingTemplate.convertAndSend("/topic/sync", changeMsg);
-                                markersCreated[0]++;
+                                markersCreated.incrementAndGet();
                             }
                         } else if (markerExists) {
                             // Non-empty folder - remove marker
@@ -601,7 +606,7 @@ public class SyncService {
                             messagingTemplate.convertAndSend("/topic/sync", deleteMsg);
 
                             log.info("Removed folder marker: {}", markerRelativePath);
-                            markersDeleted[0]++;
+                            markersDeleted.incrementAndGet();
                         }
                     } catch (IOException e) {
                         log.error("Error syncing folder marker for {}: {}", dir, e.getMessage());
@@ -614,8 +619,8 @@ public class SyncService {
             log.error("Error syncing folder markers", e);
         }
 
-        if (markersCreated[0] > 0 || markersDeleted[0] > 0) {
-            log.info("Folder markers sync: {} created, {} deleted", markersCreated[0], markersDeleted[0]);
+        if (markersCreated.get() > 0 || markersDeleted.get() > 0) {
+            log.info("Folder markers sync: {} created, {} deleted", markersCreated.get(), markersDeleted.get());
         }
         log.debug("syncEmptyFolderMarkers() finished");
     }

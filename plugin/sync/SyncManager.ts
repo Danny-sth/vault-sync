@@ -27,6 +27,7 @@ export class SyncManager {
 
   private pendingChanges: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private isProcessingRemote = false;
+  private isSyncing = false;
   private connectionState: ConnectionState = 'disconnected';
 
   onConnectionChange?: (connected: boolean) => void;
@@ -36,7 +37,7 @@ export class SyncManager {
     this.settings = settings;
     this.stompClient = new StompClient();
     this.localState = new LocalState();
-    this.fileWatcher = new FileWatcher(app, this.localState);
+    this.fileWatcher = new FileWatcher(app);
     this.apiClient = new SyncApiClient(settings);
     this.fileOps = new FileOperationService(app);
 
@@ -336,6 +337,13 @@ export class SyncManager {
       return;
     }
 
+    // Prevent parallel sync requests (debounce rapid button clicks)
+    if (this.isSyncing) {
+      console.debug('[VaultSync] Sync already in progress, skipping');
+      return;
+    }
+
+    this.isSyncing = true;
     try {
       new Notice('Vault Sync: Syncing...');
       // Always request full state (lastSeq=0) to get ALL files from server
@@ -349,6 +357,8 @@ export class SyncManager {
     } catch (e) {
       console.error('[VaultSync] Full sync failed:', e);
       new Notice('Vault Sync: Sync failed');
+    } finally {
+      this.isSyncing = false;
     }
   }
 

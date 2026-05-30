@@ -11,12 +11,18 @@ import {
 export type MessageHandler = (message: ServerMessage) => void;
 export type ConnectionHandler = (state: ConnectionState) => void;
 
+interface PendingRequest {
+  resolve: (response: SyncResponse) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
 export class StompClient {
   private client: Client | null = null;
   private subscriptions: StompSubscription[] = [];
   private messageHandler: MessageHandler | null = null;
   private connectionHandler: ConnectionHandler | null = null;
-  private syncResponseHandler: ((response: SyncResponse) => void) | null = null;
+  private pendingRequests: Map<string, PendingRequest> = new Map();
 
   private serverUrl: string = '';
   private token: string = '';
@@ -103,19 +109,22 @@ export class StompClient {
 
     // Subscribe to private sync response queue
     const syncSub = this.client.subscribe('/user/queue/sync', (message: IMessage) => {
-      console.debug('[VaultSync] *** Received sync response message ***');
+      console.debug('[VaultSync] Received sync response message');
       try {
         const data = JSON.parse(message.body) as SyncResponse;
-        console.debug(`[VaultSync] *** Parsed: ${data.files?.length || 0} files, seq=${data.currentSeq} ***`);
-        if (this.syncResponseHandler) {
-          console.debug('[VaultSync] *** Calling syncResponseHandler ***');
-          this.syncResponseHandler(data);
-          console.debug('[VaultSync] *** syncResponseHandler called ***');
+        console.debug(`[VaultSync] Parsed: ${data.files?.length || 0} files, seq=${data.currentSeq}, requestId=${data.requestId}`);
+
+        if (data.requestId && this.pendingRequests.has(data.requestId)) {
+          const pending = this.pendingRequests.get(data.requestId)!;
+          clearTimeout(pending.timeout);
+          this.pendingRequests.delete(data.requestId);
+          pending.resolve(data);
+          console.debug(`[VaultSync] Resolved request ${data.requestId}`);
         } else {
-          console.error('[VaultSync] *** ERROR: No syncResponseHandler set! ***');
+          console.warn('[VaultSync] Received response with unknown requestId:', data.requestId);
         }
       } catch (e) {
-        console.error('[VaultSync] *** Failed to parse sync response:', e);
+        console.error('[VaultSync] Failed to parse sync response:', e);
       }
     });
     this.subscriptions.push(syncSub);
@@ -128,6 +137,14 @@ export class StompClient {
   }
 
   disconnect(): void {
+    // Cancel all pending requests
+    for (const [requestId, pending] of this.pendingRequests) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error('Disconnected'));
+      console.debug(`[VaultSync] Cancelled pending request ${requestId} due to disconnect`);
+    }
+    this.pendingRequests.clear();
+
     this.subscriptions.forEach(sub => sub.unsubscribe());
     this.subscriptions = [];
 
@@ -174,27 +191,31 @@ export class StompClient {
         return;
       }
 
-      // Set up one-time response handler
+      const requestId = this.generateRequestId();
+
       const timeout = setTimeout(() => {
-        this.syncResponseHandler = null;
+        this.pendingRequests.delete(requestId);
         reject(new Error('Sync request timeout'));
       }, 120000);  // 2 minutes timeout for large vaults
 
-      this.syncResponseHandler = (response: SyncResponse) => {
-        clearTimeout(timeout);
-        this.syncResponseHandler = null;
-        resolve(response);
-      };
+      this.pendingRequests.set(requestId, { resolve, reject, timeout });
 
-      // Send sync request
+      // Send sync request with requestId
       this.client!.publish({
         destination: '/app/sync.request',
         body: JSON.stringify({
+          requestId,
           lastSeq,
           deviceId: this.deviceId,
         } as SyncRequest),
       });
+
+      console.debug(`[VaultSync] Sent sync request ${requestId} (lastSeq=${lastSeq})`);
     });
+  }
+
+  private generateRequestId(): string {
+    return `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
   }
 
   sendPing(): void {

@@ -36,6 +36,7 @@ public class SyncMessage {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class SyncRequest {
+        private String requestId;
         private long lastSeq;
         private String deviceId;
     }
@@ -75,6 +76,7 @@ public class SyncMessage {
     public static class SyncResponse {
         @Builder.Default
         private String type = "sync_response";
+        private String requestId;
         private long currentSeq;
         private List<FileInfo> files;
         private List<TombstoneInfo> tombstones;

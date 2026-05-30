@@ -18,6 +18,7 @@ export interface FileDeletedMessage {
 
 export interface SyncResponse {
   type: 'sync_response';
+  requestId?: string;
   currentSeq: number;
   files: FileInfo[];
   tombstones: TombstoneInfo[];
@@ -52,6 +53,7 @@ export interface FileDeleteRequest {
 }
 
 export interface SyncRequest {
+  requestId: string;
   lastSeq: number;
   deviceId: string;
 }
