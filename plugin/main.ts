@@ -1,12 +1,14 @@
 import { App, Plugin, PluginSettingTab, Setting, Notice, TFile } from 'obsidian';
 import { SyncManager } from './sync/SyncManager';
 import { DailyNotes } from './daily/DailyNotes';
+import { FileIcons } from './icons/FileIcons';
 import { VaultSyncSettings, DEFAULT_SETTINGS } from './types';
 
 export default class VaultSyncPlugin extends Plugin {
   settings: VaultSyncSettings = DEFAULT_SETTINGS;
   syncManager: SyncManager | null = null;
   dailyNotes: DailyNotes | null = null;
+  fileIcons: FileIcons | null = null;
   statusBarItem: HTMLElement | null = null;
 
   async onload(): Promise<void> {
@@ -97,10 +99,22 @@ export default class VaultSyncPlugin extends Plugin {
 
       // Daily Notes - create today's note on startup
       this.dailyNotes = new DailyNotes(this.app);
+
+      // File Icons - display icons from frontmatter
+      this.fileIcons = new FileIcons(this.app);
+
       this.app.workspace.onLayoutReady(async () => {
-        console.debug('[VaultSync] Workspace ready, checking daily note...');
+        console.debug('[VaultSync] Workspace ready, initializing modules...');
         await this.dailyNotes?.init();
+        this.fileIcons?.init();
       });
+
+      // Refresh icons when metadata changes
+      this.registerEvent(
+        this.app.metadataCache.on('changed', (file) => {
+          this.fileIcons?.refreshFile(file.path);
+        })
+      );
 
       // Auto-connect
       console.debug('[VaultSync] AutoConnect:', this.settings.autoConnect, 'Token exists:', !!this.settings.token);
@@ -151,6 +165,7 @@ export default class VaultSyncPlugin extends Plugin {
   onunload(): void {
     console.debug('[VaultSync] Unloading plugin');
     this.syncManager?.destroy();
+    this.fileIcons?.destroy();
   }
 
   async connect(): Promise<void> {
