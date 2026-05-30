@@ -93,7 +93,7 @@ export const DEFAULT_SETTINGS: VaultSyncSettings = {
   debounceMs: 500,
   reconnectDelayMs: 5000,
   heartbeatIntervalMs: 10000,
-  syncTimeoutMs: 30000,
+  syncTimeoutMs: 120000,  // 2 minutes for large vaults
   retryAttempts: 3,
 };
 

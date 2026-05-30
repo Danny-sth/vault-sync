@@ -47,9 +47,9 @@ export class StompClient {
 
         webSocketFactory: () => new WebSocket(serverUrl),
 
-        reconnectDelay: 5000,
-        heartbeatIncoming: 10000,
-        heartbeatOutgoing: 10000,
+        reconnectDelay: 10000,         // Wait 10 seconds before reconnecting (was 5s - too aggressive)
+        heartbeatIncoming: 60000,      // 60 seconds - must match server heartbeat for large sync responses
+        heartbeatOutgoing: 60000,      // 60 seconds
 
         onConnect: () => {
           this.connectionHandler?.('connected');
@@ -178,7 +178,7 @@ export class StompClient {
       const timeout = setTimeout(() => {
         this.syncResponseHandler = null;
         reject(new Error('Sync request timeout'));
-      }, 30000);
+      }, 120000);  // 2 minutes timeout for large vaults
 
       this.syncResponseHandler = (response: SyncResponse) => {
         clearTimeout(timeout);

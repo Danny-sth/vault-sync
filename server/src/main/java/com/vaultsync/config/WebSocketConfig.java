@@ -19,11 +19,26 @@ import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 import org.springframework.web.socket.config.annotation.WebSocketTransportRegistration;
 
+import org.springframework.web.socket.server.standard.ServletServerContainerFactoryBean;
+
 import java.security.Principal;
 
 @Configuration
 @EnableWebSocketMessageBroker
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+
+    /**
+     * Configure native WebSocket container buffer sizes.
+     * Required for Tomcat 11+ to handle large STOMP messages.
+     */
+    @Bean
+    public ServletServerContainerFactoryBean createWebSocketContainer() {
+        ServletServerContainerFactoryBean container = new ServletServerContainerFactoryBean();
+        container.setMaxTextMessageBufferSize(4 * 1024 * 1024);  // 4MB for large sync responses
+        container.setMaxBinaryMessageBufferSize(4 * 1024 * 1024); // 4MB
+        container.setMaxSessionIdleTimeout(600000L); // 10 minutes
+        return container;
+    }
 
     @Value("${vault-sync.token}")
     private String authToken;
@@ -40,8 +55,9 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
         // Enable simple broker for subscriptions with heartbeat
+        // Using 60 seconds heartbeat to allow time for large sync responses (5000+ files)
         config.enableSimpleBroker("/topic", "/queue")
-              .setHeartbeatValue(new long[] {10000, 10000})  // server-to-client, client-to-server (ms)
+              .setHeartbeatValue(new long[] {60000, 60000})  // server-to-client, client-to-server (ms)
               .setTaskScheduler(heartbeatScheduler());
         // Prefix for messages FROM clients
         config.setApplicationDestinationPrefixes("/app");
@@ -61,10 +77,10 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void configureWebSocketTransport(WebSocketTransportRegistration registration) {
-        // Increase buffer sizes for large sync responses
-        registration.setSendBufferSizeLimit(2 * 1024 * 1024);  // 2MB send buffer
-        registration.setMessageSizeLimit(2 * 1024 * 1024);     // 2MB message size
-        registration.setSendTimeLimit(30 * 1000);               // 30 seconds send timeout
+        // Increase buffer sizes for large sync responses (5000+ files = several MB)
+        registration.setSendBufferSizeLimit(4 * 1024 * 1024);  // 4MB send buffer
+        registration.setMessageSizeLimit(4 * 1024 * 1024);     // 4MB message size
+        registration.setSendTimeLimit(120 * 1000);              // 120 seconds send timeout (mobile networks are slow)
     }
 
     @Override
