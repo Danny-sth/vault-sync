@@ -87,24 +87,27 @@ export class FileOperationService {
 
     while (parts.length > 0) {
       const folderPath = parts.join('/');
-      const folder = this.app.vault.getAbstractFileByPath(folderPath);
 
-      if (folder instanceof TFolder) {
-        const hasFiles = folder.children.some(c => c instanceof TFile);
-        const hasSubfolders = folder.children.some(c => c instanceof TFolder);
+      try {
+        // Use adapter API to check folder contents (works for non-indexed folders)
+        const listing = await this.app.vault.adapter.list(folderPath);
+        const isEmpty = listing.files.length === 0 && listing.folders.length === 0;
 
-        if (!hasFiles && !hasSubfolders) {
-          try {
+        if (isEmpty) {
+          // Try vault API first (for indexed folders)
+          const folder = this.app.vault.getAbstractFileByPath(folderPath);
+          if (folder instanceof TFolder) {
             await this.app.vault.delete(folder);
-            console.debug(`[FileOperationService] Deleted empty parent folder: ${folderPath}`);
-          } catch (e) {
-            break; // Stop if we can't delete
+          } else {
+            // Use adapter for non-indexed folders
+            await this.app.vault.adapter.rmdir(folderPath, false);
           }
+          console.debug(`[FileOperationService] Deleted empty parent folder: ${folderPath}`);
         } else {
           break; // Folder not empty, stop
         }
-      } else {
-        break;
+      } catch (e) {
+        break; // Stop on any error
       }
 
       parts.pop();
@@ -113,6 +116,7 @@ export class FileOperationService {
 
   /**
    * Clean up all empty folders in the vault recursively (deepest first).
+   * Folders with only .folder-marker files are NOT deleted (they're intentionally kept empty).
    * @returns Number of deleted folders.
    */
   async cleanupEmptyFolders(): Promise<number> {
@@ -137,18 +141,21 @@ export class FileOperationService {
       // Skip hidden folders
       if (folder.path.startsWith('.') || folder.path.includes('/.')) continue;
 
-      // Check if folder is empty (no files, no subfolders)
-      const hasFiles = folder.children.some(c => c instanceof TFile);
-      const hasSubfolders = folder.children.some(c => c instanceof TFolder);
+      // Check if folder is empty using adapter (to catch hidden files like .folder-marker)
+      try {
+        const listing = await this.app.vault.adapter.list(folder.path);
+        const hasRealFiles = listing.files.some(f => !f.endsWith('.folder-marker'));
+        const hasSubfolders = listing.folders.length > 0;
 
-      if (!hasFiles && !hasSubfolders) {
-        try {
+        // Only delete if truly empty (no real files and no subfolders)
+        // Folders with .folder-marker are kept
+        if (!hasRealFiles && !hasSubfolders && listing.files.length === 0) {
           await this.app.vault.delete(folder);
           deletedFolders.push(folder.path);
           console.debug(`[FileOperationService] Deleted empty folder: ${folder.path}`);
-        } catch (e) {
-          console.error(`[FileOperationService] Failed to delete empty folder: ${folder.path}`, e);
         }
+      } catch (e) {
+        console.error(`[FileOperationService] Failed to check/delete folder: ${folder.path}`, e);
       }
     }
 

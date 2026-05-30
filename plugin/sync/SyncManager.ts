@@ -154,10 +154,11 @@ export class SyncManager {
       const file = this.app.vault.getAbstractFileByPath(msg.path);
       if (file instanceof TFile) {
         await this.app.vault.delete(file);
-        await this.fileOps.cleanupEmptyParentFolders(msg.path);
       } else if (await this.app.vault.adapter.exists(msg.path)) {
         await this.app.vault.adapter.remove(msg.path);
       }
+      // Cleanup empty parent folders after any delete
+      await this.fileOps.cleanupEmptyParentFolders(msg.path);
       await this.localState.deleteFileHash(msg.path);
       await this.localState.setLastSeq(msg.seq);
       this.fileWatcher.removeFromBaseline(msg.path);
@@ -400,6 +401,22 @@ export class SyncManager {
     let uploadFailed = 0;
     let deleted = 0;
 
+    // FIRST: Detect locally deleted files (in localState but not on disk)
+    // This catches deletions made outside Obsidian (rm, file manager, etc.)
+    for (const [path] of localHashes) {
+      if (!localFilePaths.has(path) && !path.startsWith('.obsidian/')) {
+        // File was synced before but now doesn't exist locally → deleted locally
+        console.debug(`[VaultSync] Detected local deletion: ${path}`);
+        try {
+          await this.deleteFile(path);
+          await this.localState.deleteFileHash(path);
+          deleted++;
+        } catch (e) {
+          console.error(`[VaultSync] Failed to sync local deletion: ${path}`, e);
+        }
+      }
+    }
+
     // Collect files to download
     const toDownload: { path: string; serverFile: { hash: string; mtime: number } }[] = [];
 
@@ -523,6 +540,14 @@ export class SyncManager {
           await this.localState.deleteFileHash(path);
           deleted++;
         }
+        // If we deleted a .folder-marker, also delete the parent folder if it's now empty
+        // This prevents syncEmptyFolderMarkers from re-creating the marker
+        if (path.endsWith('.folder-marker')) {
+          const parentPath = path.substring(0, path.lastIndexOf('/'));
+          if (parentPath) {
+            await this.fileOps.cleanupEmptyParentFolders(path);
+          }
+        }
       } catch (e) {
         console.error(`[VaultSync] Delete failed: ${path}`, e);
       } finally {
@@ -530,7 +555,27 @@ export class SyncManager {
       }
     }
 
-    // Clean up empty folders
+    // Sync empty folder markers - create markers for empty folders, upload them
+    // Pass tombstones to avoid re-creating markers for folders that server deleted
+    const markers = await SyncFilter.syncEmptyFolderMarkers(this.app, tombstones);
+    for (const markerPath of markers.created) {
+      try {
+        await this.uploadByPath(markerPath);
+        uploaded++;
+      } catch (e) {
+        console.error(`[VaultSync] Failed to upload folder marker: ${markerPath}`, e);
+      }
+    }
+    for (const markerPath of markers.deleted) {
+      try {
+        await this.deleteFile(markerPath);
+        deleted++;
+      } catch (e) {
+        console.error(`[VaultSync] Failed to delete folder marker: ${markerPath}`, e);
+      }
+    }
+
+    // Clean up empty folders (but not folders with .folder-marker)
     await this.fileOps.cleanupEmptyFolders();
 
     const summary = `Sync complete: ↓${downloaded}${downloadFailed > 0 ? '(❌' + downloadFailed + ')' : ''} ↑${uploaded}${uploadFailed > 0 ? '(❌' + uploadFailed + ')' : ''} ×${deleted}`;

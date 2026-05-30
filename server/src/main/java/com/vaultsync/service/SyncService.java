@@ -487,5 +487,136 @@ public class SyncService {
         if (added[0] > 0 || modified[0] > 0 || deleted[0] > 0) {
             log.info("Filesystem scan complete: {} added, {} modified, {} deleted", added[0], modified[0], deleted[0]);
         }
+
+        // Sync empty folder markers
+        syncEmptyFolderMarkers();
+    }
+
+    private static final String FOLDER_MARKER = ".folder-marker";
+
+    /**
+     * Ensure empty folders have .folder-marker files and non-empty folders don't.
+     */
+    private void syncEmptyFolderMarkers() {
+        log.debug("syncEmptyFolderMarkers() started");
+        Path root = Paths.get(storagePath);
+        if (!Files.exists(root)) {
+            log.debug("syncEmptyFolderMarkers(): root path doesn't exist");
+            return;
+        }
+
+        int[] markersCreated = {0};
+        int[] markersDeleted = {0};
+
+        try {
+            Files.walkFileTree(root, new SimpleFileVisitor<>() {
+                @Override
+                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                    String name = dir.getFileName() != null ? dir.getFileName().toString() : "";
+                    if (shouldExcludeDir(name)) {
+                        return FileVisitResult.SKIP_SUBTREE;
+                    }
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult postVisitDirectory(Path dir, IOException exc) {
+                    if (dir.equals(root)) {
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    String relativePath = root.relativize(dir).toString().replace("\\", "/");
+                    if (shouldExcludePath(relativePath + "/")) {
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    try {
+                        Path markerPath = dir.resolve(FOLDER_MARKER);
+                        String markerRelativePath = root.relativize(markerPath).toString().replace("\\", "/");
+
+                        // Count real files (not .folder-marker)
+                        long realFileCount;
+                        long subdirCount;
+                        try (var stream = Files.list(dir)) {
+                            var entries = stream.toList();
+                            realFileCount = entries.stream()
+                                .filter(p -> Files.isRegularFile(p) && !p.getFileName().toString().equals(FOLDER_MARKER))
+                                .count();
+                            subdirCount = entries.stream()
+                                .filter(Files::isDirectory)
+                                .count();
+                        }
+
+                        boolean markerExists = Files.exists(markerPath);
+
+                        if (realFileCount == 0 && subdirCount == 0) {
+                            // Empty folder - create marker if not exists
+                            if (!markerExists) {
+                                Files.createFile(markerPath);
+                                log.info("Created folder marker: {}", markerRelativePath);
+
+                                // Add to database and broadcast
+                                long seq = nextSeq();
+                                String hash = HashUtil.sha256(new byte[0]);
+                                FileRecord record = FileRecord.builder()
+                                    .path(markerRelativePath)
+                                    .hash(hash)
+                                    .mtime(System.currentTimeMillis())
+                                    .size(0)
+                                    .seq(seq)
+                                    .lastModifiedBy("server")
+                                    .build();
+                                fileRepository.save(record);
+
+                                SyncMessage.FileChanged changeMsg = SyncMessage.FileChanged.builder()
+                                    .path(markerRelativePath)
+                                    .hash(hash)
+                                    .mtime(System.currentTimeMillis())
+                                    .size(0)
+                                    .seq(seq)
+                                    .deviceId("server")
+                                    .build();
+                                messagingTemplate.convertAndSend("/topic/sync", changeMsg);
+                                markersCreated[0]++;
+                            }
+                        } else if (markerExists) {
+                            // Non-empty folder - remove marker
+                            Files.delete(markerPath);
+                            fileRepository.deleteById(markerRelativePath);
+
+                            long seq = nextSeq();
+                            Tombstone tombstone = Tombstone.builder()
+                                .path(markerRelativePath)
+                                .deletedAt(System.currentTimeMillis())
+                                .deletedBy("server")
+                                .seq(seq)
+                                .build();
+                            tombstoneRepository.save(tombstone);
+
+                            SyncMessage.FileDeleted deleteMsg = SyncMessage.FileDeleted.builder()
+                                .path(markerRelativePath)
+                                .seq(seq)
+                                .deviceId("server")
+                                .build();
+                            messagingTemplate.convertAndSend("/topic/sync", deleteMsg);
+
+                            log.info("Removed folder marker: {}", markerRelativePath);
+                            markersDeleted[0]++;
+                        }
+                    } catch (IOException e) {
+                        log.error("Error syncing folder marker for {}: {}", dir, e.getMessage());
+                    }
+
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException e) {
+            log.error("Error syncing folder markers", e);
+        }
+
+        if (markersCreated[0] > 0 || markersDeleted[0] > 0) {
+            log.info("Folder markers sync: {} created, {} deleted", markersCreated[0], markersDeleted[0]);
+        }
+        log.debug("syncEmptyFolderMarkers() finished");
     }
 }
