@@ -135,17 +135,17 @@ export class SyncManager {
       await this.localState.setLastSeq(msg.seq);
       return;
     }
-    // Plugin config deletes are never propagated to this device automatically — same policy as
-    // tombstones in processFullSync. Removing a config locally must be a deliberate local action.
-    if (msg.path.startsWith('.obsidian/')) {
-      console.debug(`[VaultSync] Ignoring remote delete for .obsidian/* path: ${msg.path}`);
+    // Allow plugin deletions to sync, block other .obsidian/* paths (workspace, cache, etc.)
+    if (msg.path.startsWith('.obsidian/') && !msg.path.startsWith('.obsidian/plugins/')) {
+      console.debug(`[VaultSync] Ignoring remote delete for .obsidian/* path (not plugins): ${msg.path}`);
       await this.localState.setLastSeq(msg.seq);
       return;
     }
     // Apply remote deletes only for paths this client has previously synced (has a hash).
-    // This prevents server-side delete history from erasing files we joined to sync after the fact.
+    // Exception: plugins should always be deleted even if not previously synced.
     const knownHash = await this.localState.getFileHash(msg.path);
-    if (!knownHash) {
+    const isPlugin = msg.path.startsWith('.obsidian/plugins/');
+    if (!knownHash && !isPlugin) {
       console.debug(`[VaultSync] Ignoring remote delete for never-synced path: ${msg.path}`);
       await this.localState.setLastSeq(msg.seq);
       return;
@@ -188,15 +188,12 @@ export class SyncManager {
           }
           break;
         case 'delete':
-          // Skip delete events for .obsidian/* paths. Many plugins (iconic, dataview, etc.)
-          // write their data.json atomically via temp+rename, leaving a brief window where the
-          // file does not exist on disk. Without this guard FileWatcher would propagate that
-          // window as a real delete to all devices, wiping configs across the cluster.
-          // Real .obsidian/* deletions stay local; tombstones for them are only generated
-          // when the user explicitly removes a config and the missing-state persists across
-          // restarts (server-driven, not via FileWatcher).
-          if (change.path.startsWith('.obsidian/')) {
-            console.debug(`[VaultSync] Suppressing transient delete for .obsidian/* path: ${change.path}`);
+          // Skip delete events for .obsidian/* paths EXCEPT plugins.
+          // Many plugins write data.json atomically via temp+rename, leaving a brief window
+          // where the file does not exist. Without this guard FileWatcher would propagate that
+          // window as a real delete. But for plugins themselves we DO want to sync deletions.
+          if (change.path.startsWith('.obsidian/') && !change.path.startsWith('.obsidian/plugins/')) {
+            console.debug(`[VaultSync] Suppressing transient delete for .obsidian/* path (not plugins): ${change.path}`);
             break;
           }
           this.queueFileDelete(change.path);
@@ -413,8 +410,10 @@ export class SyncManager {
 
     // FIRST: Detect locally deleted files (in localState but not on disk)
     // This catches deletions made outside Obsidian (rm, file manager, etc.)
+    // Allow detection for plugins, skip other .obsidian/* paths (workspace, cache, etc.)
     for (const [path] of localHashes) {
-      if (!localFilePaths.has(path) && !path.startsWith('.obsidian/')) {
+      const isProtectedObsidian = path.startsWith('.obsidian/') && !path.startsWith('.obsidian/plugins/');
+      if (!localFilePaths.has(path) && !isProtectedObsidian) {
         // File was synced before but now doesn't exist locally → deleted locally
         console.debug(`[VaultSync] Detected local deletion: ${path}`);
         try {
@@ -524,12 +523,17 @@ export class SyncManager {
     // For vault paths we still gate on (a) prior sync history, and (b) absence of a live server
     // record for the same path.
     for (const path of tombstones) {
-      if (path.startsWith('.obsidian/')) {
-        console.debug(`[VaultSync] Tombstones never auto-apply to .obsidian/* paths: ${path}`);
+      // Allow tombstones for .obsidian/plugins/* (plugins should sync deletions)
+      // But skip other .obsidian/* paths (workspace, cache, device-specific configs)
+      if (path.startsWith('.obsidian/') && !path.startsWith('.obsidian/plugins/')) {
+        console.debug(`[VaultSync] Tombstones never auto-apply to .obsidian/* paths (except plugins): ${path}`);
         continue;
       }
       const lastKnownHash = localHashes.get(path);
-      if (!lastKnownHash) {
+      // For plugins, always apply tombstones even if not previously synced
+      // (old plugins installed before vault-sync was active should be removed)
+      const isPlugin = path.startsWith('.obsidian/plugins/');
+      if (!lastKnownHash && !isPlugin) {
         console.debug(`[VaultSync] Skipping tombstone for never-synced path: ${path}`);
         continue;
       }
