@@ -1,14 +1,18 @@
-import { App, TFile } from 'obsidian';
+import { App, TFile, TFolder } from 'obsidian';
 import { LUCIDE_ICONS } from './LucideIcons';
+
+const FOLDER_ICONS_PATH = '.obsidian/folder-icons.json';
 
 /**
  * FileIcons module for vault-sync plugin.
- * Reads `icon` frontmatter property and displays Lucide icons in file explorer.
+ * Reads `icon` frontmatter property for files and folder-icons.json for folders.
+ * Displays Lucide icons in file explorer.
  */
 export class FileIcons {
   private app: App;
   private observer: MutationObserver | null = null;
   private styleEl: HTMLStyleElement | null = null;
+  private folderIcons: Record<string, string> = {};
 
   constructor(app: App) {
     this.app = app;
@@ -18,7 +22,8 @@ export class FileIcons {
    * Initialize file icons module.
    * Call after workspace is ready.
    */
-  init(): void {
+  async init(): Promise<void> {
+    await this.loadFolderIcons();
     this.injectStyles();
     this.setupObserver();
     this.applyAllIcons();
@@ -32,6 +37,56 @@ export class FileIcons {
     this.observer?.disconnect();
     this.styleEl?.remove();
     console.debug('[VaultSync:FileIcons] Destroyed');
+  }
+
+  /**
+   * Load folder icons from JSON file.
+   */
+  async loadFolderIcons(): Promise<void> {
+    try {
+      if (await this.app.vault.adapter.exists(FOLDER_ICONS_PATH)) {
+        const content = await this.app.vault.adapter.read(FOLDER_ICONS_PATH);
+        this.folderIcons = JSON.parse(content);
+        console.debug('[VaultSync:FileIcons] Loaded folder icons:', Object.keys(this.folderIcons).length);
+      }
+    } catch (e) {
+      console.error('[VaultSync:FileIcons] Failed to load folder icons:', e);
+      this.folderIcons = {};
+    }
+  }
+
+  /**
+   * Save folder icons to JSON file.
+   */
+  async saveFolderIcons(): Promise<void> {
+    try {
+      await this.app.vault.adapter.write(
+        FOLDER_ICONS_PATH,
+        JSON.stringify(this.folderIcons, null, 2)
+      );
+    } catch (e) {
+      console.error('[VaultSync:FileIcons] Failed to save folder icons:', e);
+    }
+  }
+
+  /**
+   * Set icon for a folder.
+   */
+  async setFolderIcon(folderPath: string, iconName: string | null): Promise<void> {
+    if (iconName) {
+      this.folderIcons[folderPath] = iconName;
+    } else {
+      delete this.folderIcons[folderPath];
+    }
+    await this.saveFolderIcons();
+    this.refreshFolder(folderPath);
+  }
+
+  /**
+   * Get icon for a folder.
+   */
+  getFolderIcon(folderPath: string): string | null {
+    return this.folderIcons[folderPath] || null;
   }
 
   /**
@@ -64,6 +119,13 @@ export class FileIcons {
         display: none !important;
       }
       .tree-item-self.has-vault-sync-icon .tree-item-icon {
+        display: none !important;
+      }
+      /* Hide default folder icon when custom icon is present */
+      .nav-folder-title.has-vault-sync-icon .nav-folder-collapse-indicator {
+        display: none !important;
+      }
+      .nav-folder-title.has-vault-sync-icon > .nav-folder-title-content::before {
         display: none !important;
       }
     `;
@@ -102,40 +164,46 @@ export class FileIcons {
   }
 
   /**
-   * Apply icons to all visible files.
+   * Apply icons to all visible files and folders.
    */
   applyAllIcons(): void {
     // Find all file items in file explorer
     const fileItems = document.querySelectorAll('.nav-file-title, .tree-item-self');
-
     fileItems.forEach(item => {
       const el = item as HTMLElement;
-
-      // Get file path from data attribute
       const path = el.getAttribute('data-path');
       if (!path) return;
-
-      // Skip if already processed
       if (el.querySelector('.vault-sync-file-icon')) return;
 
-      // Get frontmatter for this file
       const file = this.app.vault.getAbstractFileByPath(path);
       if (!(file instanceof TFile)) return;
 
       const cache = this.app.metadataCache.getFileCache(file);
       const iconName = cache?.frontmatter?.icon as string | undefined;
-
       if (!iconName) return;
 
-      // Apply icon
       this.applyIconToElement(el, iconName);
+    });
+
+    // Find all folder items in file explorer
+    const folderItems = document.querySelectorAll('.nav-folder-title');
+    folderItems.forEach(item => {
+      const el = item as HTMLElement;
+      const path = el.getAttribute('data-path');
+      if (!path) return;
+      if (el.querySelector('.vault-sync-file-icon')) return;
+
+      const iconName = this.folderIcons[path];
+      if (!iconName) return;
+
+      this.applyIconToElement(el, iconName, true);
     });
   }
 
   /**
-   * Apply icon to a specific file element.
+   * Apply icon to a specific element.
    */
-  private applyIconToElement(el: HTMLElement, iconName: string): void {
+  private applyIconToElement(el: HTMLElement, iconName: string, isFolder = false): void {
     const iconSvg = this.getIconSvg(iconName);
     if (!iconSvg) {
       console.debug(`[VaultSync:FileIcons] Unknown icon: ${iconName}`);
@@ -147,11 +215,20 @@ export class FileIcons {
     iconEl.className = 'vault-sync-file-icon';
     iconEl.innerHTML = iconSvg;
 
-    // Find the content element and insert icon before it
-    const content = el.querySelector('.nav-file-title-content, .tree-item-inner');
-    if (content) {
-      content.parentElement?.insertBefore(iconEl, content);
-      el.classList.add('has-vault-sync-icon');
+    if (isFolder) {
+      // For folders, insert before the title content
+      const content = el.querySelector('.nav-folder-title-content');
+      if (content) {
+        content.parentElement?.insertBefore(iconEl, content);
+        el.classList.add('has-vault-sync-icon');
+      }
+    } else {
+      // For files
+      const content = el.querySelector('.nav-file-title-content, .tree-item-inner');
+      if (content) {
+        content.parentElement?.insertBefore(iconEl, content);
+        el.classList.add('has-vault-sync-icon');
+      }
     }
   }
 
@@ -186,6 +263,26 @@ export class FileIcons {
 
       if (iconName) {
         this.applyIconToElement(el, iconName);
+      }
+    });
+  }
+
+  /**
+   * Refresh icon for a specific folder.
+   */
+  refreshFolder(folderPath: string): void {
+    const folderItems = document.querySelectorAll(`[data-path="${folderPath}"]`);
+    folderItems.forEach(item => {
+      const el = item as HTMLElement;
+
+      // Remove existing icon
+      el.querySelector('.vault-sync-file-icon')?.remove();
+      el.classList.remove('has-vault-sync-icon');
+
+      // Get new icon
+      const iconName = this.folderIcons[folderPath];
+      if (iconName) {
+        this.applyIconToElement(el, iconName, true);
       }
     });
   }

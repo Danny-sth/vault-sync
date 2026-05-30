@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting, Notice, TFile, Menu, TAbstractFile } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, Notice, TFile, TFolder, Menu, TAbstractFile } from 'obsidian';
 import { SyncManager } from './sync/SyncManager';
 import { DailyNotes } from './daily/DailyNotes';
 import { FileIcons } from './icons/FileIcons';
@@ -107,7 +107,7 @@ export default class VaultSyncPlugin extends Plugin {
       this.app.workspace.onLayoutReady(async () => {
         console.debug('[VaultSync] Workspace ready, initializing modules...');
         await this.dailyNotes?.init();
-        this.fileIcons?.init();
+        await this.fileIcons?.init();
       });
 
       // Refresh icons when metadata changes
@@ -117,24 +117,40 @@ export default class VaultSyncPlugin extends Plugin {
         })
       );
 
-      // File context menu - Set Icon
+      // File/Folder context menu - Set Icon
       this.registerEvent(
         this.app.workspace.on('file-menu', (menu: Menu, file: TAbstractFile) => {
-          if (!(file instanceof TFile)) return;
+          if (file instanceof TFile) {
+            // File icon from frontmatter
+            const cache = this.app.metadataCache.getFileCache(file);
+            const currentIcon = cache?.frontmatter?.icon as string | undefined;
 
-          const cache = this.app.metadataCache.getFileCache(file);
-          const currentIcon = cache?.frontmatter?.icon as string | undefined;
+            menu.addItem((item) => {
+              item
+                .setTitle(currentIcon ? 'Change Icon' : 'Set Icon')
+                .setIcon('image')
+                .onClick(() => {
+                  new IconPickerModal(this.app, currentIcon || null, async (iconName) => {
+                    await this.setFileIcon(file, iconName);
+                  }).open();
+                });
+            });
+          } else if (file instanceof TFolder) {
+            // Folder icon from folder-icons.json
+            const currentIcon = this.fileIcons?.getFolderIcon(file.path) || null;
 
-          menu.addItem((item) => {
-            item
-              .setTitle(currentIcon ? 'Change Icon' : 'Set Icon')
-              .setIcon('image')
-              .onClick(() => {
-                new IconPickerModal(this.app, currentIcon || null, async (iconName) => {
-                  await this.setFileIcon(file, iconName);
-                }).open();
-              });
-          });
+            menu.addItem((item) => {
+              item
+                .setTitle(currentIcon ? 'Change Icon' : 'Set Icon')
+                .setIcon('image')
+                .onClick(() => {
+                  new IconPickerModal(this.app, currentIcon, async (iconName) => {
+                    await this.fileIcons?.setFolderIcon(file.path, iconName);
+                    new Notice(iconName ? `Folder icon set: ${iconName}` : 'Folder icon removed');
+                  }).open();
+                });
+            });
+          }
         })
       );
 
