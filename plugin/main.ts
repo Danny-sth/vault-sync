@@ -1,7 +1,8 @@
-import { App, Plugin, PluginSettingTab, Setting, Notice, TFile } from 'obsidian';
+import { App, Plugin, PluginSettingTab, Setting, Notice, TFile, Menu, TAbstractFile } from 'obsidian';
 import { SyncManager } from './sync/SyncManager';
 import { DailyNotes } from './daily/DailyNotes';
 import { FileIcons } from './icons/FileIcons';
+import { IconPickerModal } from './icons/IconPickerModal';
 import { VaultSyncSettings, DEFAULT_SETTINGS } from './types';
 
 export default class VaultSyncPlugin extends Plugin {
@@ -116,6 +117,27 @@ export default class VaultSyncPlugin extends Plugin {
         })
       );
 
+      // File context menu - Set Icon
+      this.registerEvent(
+        this.app.workspace.on('file-menu', (menu: Menu, file: TAbstractFile) => {
+          if (!(file instanceof TFile)) return;
+
+          const cache = this.app.metadataCache.getFileCache(file);
+          const currentIcon = cache?.frontmatter?.icon as string | undefined;
+
+          menu.addItem((item) => {
+            item
+              .setTitle(currentIcon ? 'Change Icon' : 'Set Icon')
+              .setIcon('image')
+              .onClick(() => {
+                new IconPickerModal(this.app, currentIcon || null, async (iconName) => {
+                  await this.setFileIcon(file, iconName);
+                }).open();
+              });
+          });
+        })
+      );
+
       // Auto-connect
       console.debug('[VaultSync] AutoConnect:', this.settings.autoConnect, 'Token exists:', !!this.settings.token);
       if (this.settings.autoConnect && this.settings.token) {
@@ -208,6 +230,59 @@ export default class VaultSyncPlugin extends Plugin {
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+
+  /**
+   * Set or remove icon in file frontmatter.
+   */
+  async setFileIcon(file: TFile, iconName: string | null): Promise<void> {
+    try {
+      const content = await this.app.vault.read(file);
+      const newContent = this.updateFrontmatterIcon(content, iconName);
+
+      if (newContent !== content) {
+        await this.app.vault.modify(file, newContent);
+        new Notice(iconName ? `Icon set: ${iconName}` : 'Icon removed');
+      }
+    } catch (e) {
+      console.error('[VaultSync] Failed to set icon:', e);
+      new Notice('Failed to set icon');
+    }
+  }
+
+  /**
+   * Update or add icon property in frontmatter.
+   */
+  private updateFrontmatterIcon(content: string, iconName: string | null): string {
+    const frontmatterRegex = /^---\n([\s\S]*?)\n---/;
+    const match = content.match(frontmatterRegex);
+
+    if (match) {
+      // Has frontmatter
+      let frontmatter = match[1];
+      const iconRegex = /^icon:\s*.+$/m;
+
+      if (iconName) {
+        // Set icon
+        if (iconRegex.test(frontmatter)) {
+          // Replace existing
+          frontmatter = frontmatter.replace(iconRegex, `icon: ${iconName}`);
+        } else {
+          // Add new
+          frontmatter = `icon: ${iconName}\n${frontmatter}`;
+        }
+      } else {
+        // Remove icon
+        frontmatter = frontmatter.replace(/^icon:\s*.+\n?/m, '');
+      }
+
+      return content.replace(frontmatterRegex, `---\n${frontmatter}\n---`);
+    } else if (iconName) {
+      // No frontmatter, add new
+      return `---\nicon: ${iconName}\n---\n\n${content}`;
+    }
+
+    return content;
   }
 }
 
