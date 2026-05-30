@@ -1,10 +1,12 @@
 import { App, Plugin, PluginSettingTab, Setting, Notice, TFile } from 'obsidian';
 import { SyncManager } from './sync/SyncManager';
+import { DailyNotes } from './daily/DailyNotes';
 import { VaultSyncSettings, DEFAULT_SETTINGS } from './types';
 
 export default class VaultSyncPlugin extends Plugin {
   settings: VaultSyncSettings = DEFAULT_SETTINGS;
   syncManager: SyncManager | null = null;
+  dailyNotes: DailyNotes | null = null;
   statusBarItem: HTMLElement | null = null;
 
   async onload(): Promise<void> {
@@ -40,6 +42,12 @@ export default class VaultSyncPlugin extends Plugin {
         id: 'vault-sync-full-sync',
         name: 'Full Sync',
         callback: () => this.syncManager?.requestFullSync(),
+      });
+
+      this.addCommand({
+        id: 'vault-sync-create-daily',
+        name: 'Create Daily Note',
+        callback: () => this.dailyNotes?.createTodayNote(),
       });
 
       // Initialize sync manager
@@ -86,6 +94,13 @@ export default class VaultSyncPlugin extends Plugin {
           }
         })
       );
+
+      // Daily Notes - create today's note on startup
+      this.dailyNotes = new DailyNotes(this.app);
+      this.app.workspace.onLayoutReady(async () => {
+        console.debug('[VaultSync] Workspace ready, checking daily note...');
+        await this.dailyNotes?.init();
+      });
 
       // Auto-connect
       console.debug('[VaultSync] AutoConnect:', this.settings.autoConnect, 'Token exists:', !!this.settings.token);
