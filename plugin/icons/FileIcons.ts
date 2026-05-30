@@ -114,6 +114,10 @@ export class FileIcons {
         stroke-linejoin: round;
         fill: none;
       }
+      .vault-sync-emoji-icon {
+        font-size: 14px;
+        line-height: 1;
+      }
       /* Hide default file icon when custom icon is present */
       .nav-file-title.has-vault-sync-icon .nav-file-title-content::before {
         display: none !important;
@@ -204,8 +208,8 @@ export class FileIcons {
    * Apply icon to a specific element.
    */
   private applyIconToElement(el: HTMLElement, iconName: string, isFolder = false): void {
-    const iconSvg = this.getIconSvg(iconName);
-    if (!iconSvg) {
+    const iconHtml = this.getIconHtml(iconName);
+    if (!iconHtml) {
       console.debug(`[VaultSync:FileIcons] Unknown icon: ${iconName}`);
       return;
     }
@@ -213,7 +217,7 @@ export class FileIcons {
     // Create icon element
     const iconEl = document.createElement('span');
     iconEl.className = 'vault-sync-file-icon';
-    iconEl.innerHTML = iconSvg;
+    iconEl.innerHTML = iconHtml;
 
     if (isFolder) {
       // For folders, insert before the title content
@@ -233,9 +237,23 @@ export class FileIcons {
   }
 
   /**
-   * Get SVG for a Lucide icon.
+   * Check if a string is an emoji (not a Lucide icon name).
    */
-  private getIconSvg(iconName: string): string | null {
+  private isEmoji(str: string): boolean {
+    // Lucide icons are alphanumeric with dashes, emojis are not
+    return !LUCIDE_ICONS[str] && /\p{Emoji}/u.test(str);
+  }
+
+  /**
+   * Get HTML for an icon (SVG for Lucide, span for emoji).
+   */
+  private getIconHtml(iconName: string): string | null {
+    // Check if it's an emoji
+    if (this.isEmoji(iconName)) {
+      return `<span class="vault-sync-emoji-icon">${iconName}</span>`;
+    }
+
+    // Lucide icon
     const path = LUCIDE_ICONS[iconName];
     if (!path) return null;
 
