@@ -366,13 +366,15 @@ export class SyncManager {
       tombstoneList.filter(t => SyncFilter.shouldSync(t.path)).map(t => t.path)
     );
 
-    // Local files = vault-indexed files + .obsidian/* configs (we sync those too).
+    // Local files = vault-indexed files + .obsidian/* configs + hidden dirs (.trash, etc.) + hidden files in regular dirs
     const vaultFiles = this.app.vault.getFiles().filter(f => SyncFilter.shouldSync(f.path));
     const obsidianPaths = (await SyncFilter.listObsidianFiles(this.app)).filter(p => SyncFilter.shouldSync(p));
-    const localFilePaths = new Set<string>([...vaultFiles.map(f => f.path), ...obsidianPaths]);
+    const hiddenPaths = (await SyncFilter.listHiddenFiles(this.app)).filter(p => SyncFilter.shouldSync(p));
+    const allHiddenInVault = (await SyncFilter.listAllHiddenFilesInVault(this.app)).filter(p => SyncFilter.shouldSync(p));
+    const localFilePaths = new Set<string>([...vaultFiles.map(f => f.path), ...obsidianPaths, ...hiddenPaths, ...allHiddenInVault]);
     const localHashes = await this.localState.getAllHashes();
 
-    console.debug(`[VaultSync] Local state: ${localFilePaths.size} files (vault: ${vaultFiles.length}, obsidian: ${obsidianPaths.length}), ${localHashes.size} hashes`);
+    console.debug(`[VaultSync] Local state: ${localFilePaths.size} files (vault: ${vaultFiles.length}, obsidian: ${obsidianPaths.length}, hidden: ${hiddenPaths.length}, allHidden: ${allHiddenInVault.length}), ${localHashes.size} hashes`);
     new Notice(`Local: ${localFilePaths.size} files`);
 
     // Debug: count server files not on local
