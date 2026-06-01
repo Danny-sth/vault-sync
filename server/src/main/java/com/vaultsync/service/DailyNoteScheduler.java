@@ -33,9 +33,18 @@ public class DailyNoteScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(DailyNoteScheduler.class);
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
-    private static final DateTimeFormatter MONTH_FMT = DateTimeFormatter.ofPattern("MM.yyyy");
     /** Daily note filename: DD.MM.YYYY.md */
     private static final Pattern NOTE_NAME = Pattern.compile("^(\\d{2})\\.(\\d{2})\\.(\\d{4})\\.md$");
+    /** Russian month names (nominative) for archive folder naming, e.g. "Май.2026". */
+    private static final String[] MONTH_RU = {
+        "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+        "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
+    };
+
+    /** Archive folder name for a given month, e.g. (5, 2026) -> "Май.2026". */
+    private static String monthFolder(int month, int year) {
+        return MONTH_RU[month - 1] + "." + year;
+    }
 
     @Value("${vault-sync.storage-path}")
     private String storagePath;
@@ -98,7 +107,8 @@ public class DailyNoteScheduler {
             if (!Files.isDirectory(dailyDir)) {
                 return;
             }
-            String currentMonth = LocalDate.now(ZoneId.of(timezone)).format(MONTH_FMT); // MM.yyyy
+            LocalDate now = LocalDate.now(ZoneId.of(timezone));
+            String currentMonth = monthFolder(now.getMonthValue(), now.getYear()); // e.g. Июнь.2026
 
             List<Path> files;
             try (var stream = Files.list(dailyDir)) {
@@ -111,7 +121,7 @@ public class DailyNoteScheduler {
                 if (!m.matches()) {
                     continue; // not a daily note (Templates/, other files)
                 }
-                String month = m.group(2) + "." + m.group(3); // MM.YYYY from filename
+                String month = monthFolder(Integer.parseInt(m.group(2)), Integer.parseInt(m.group(3)));
                 if (month.equals(currentMonth)) {
                     continue; // current month stays in the root
                 }
