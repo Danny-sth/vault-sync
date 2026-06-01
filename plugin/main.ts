@@ -3,6 +3,7 @@ import { SyncManager } from './sync/SyncManager';
 import { DailyNotes } from './daily/DailyNotes';
 import { FileIcons } from './icons/FileIcons';
 import { IconPickerModal } from './icons/IconPickerModal';
+import { CommandExecutor } from './commands/CommandExecutor';
 import { VaultSyncSettings, DEFAULT_SETTINGS } from './types';
 
 export default class VaultSyncPlugin extends Plugin {
@@ -10,6 +11,7 @@ export default class VaultSyncPlugin extends Plugin {
   syncManager: SyncManager | null = null;
   dailyNotes: DailyNotes | null = null;
   fileIcons: FileIcons | null = null;
+  commandExecutor: CommandExecutor | null = null;
   statusBarItem: HTMLElement | null = null;
 
   async onload(): Promise<void> {
@@ -52,6 +54,12 @@ export default class VaultSyncPlugin extends Plugin {
         name: 'Create Daily Note',
         callback: () => this.dailyNotes?.createTodayNote(),
       });
+
+      // Command executor - dynamic command registration from server
+      this.commandExecutor = new CommandExecutor(this.settings);
+
+      // Register commands dynamically after connection
+      this.registerDynamicCommands();
 
       // Initialize sync manager
       console.debug('[VaultSync] Creating SyncManager...');
@@ -204,6 +212,39 @@ export default class VaultSyncPlugin extends Plugin {
     console.debug('[VaultSync] Unloading plugin');
     this.syncManager?.destroy();
     this.fileIcons?.destroy();
+  }
+
+  /**
+   * Register commands dynamically from server whitelist.
+   */
+  async registerDynamicCommands(): Promise<void> {
+    if (!this.commandExecutor) {
+      return;
+    }
+
+    try {
+      console.debug('[VaultSync] Fetching available commands from server...');
+      const commands = await this.commandExecutor.getAvailableCommands();
+      console.debug('[VaultSync] Available commands:', commands);
+
+      commands.forEach((commandName) => {
+        const commandId = `vault-sync-execute-${commandName}`;
+        const commandTitle = `Execute: ${commandName}`;
+
+        this.addCommand({
+          id: commandId,
+          name: commandTitle,
+          callback: () => this.commandExecutor?.executeCommand(commandName),
+        });
+
+        console.debug(`[VaultSync] Registered command: ${commandId}`);
+      });
+
+      new Notice(`Vault Sync: ${commands.length} commands registered`);
+    } catch (error) {
+      console.error('[VaultSync] Failed to register dynamic commands:', error);
+      // Don't show notice - server might not be available yet
+    }
   }
 
   async connect(): Promise<void> {

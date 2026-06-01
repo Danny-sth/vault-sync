@@ -45,6 +45,13 @@ vault-sync:
   oauth:
     issuer-uri: ${OAUTH_ISSUER_URI:https://on-za-menya.online/realms/duq}
     resource-url: ${MCP_RESOURCE_URL:https://on-za-menya.online/vault-mcp}
+  # Command execution (whitelist only)
+  commands-path: ${VAULT_SYNC_COMMANDS:/opt/vault-sync/commands}
+  command-timeout-seconds: ${VAULT_SYNC_COMMAND_TIMEOUT:30}
+  allowed-commands:
+    - vpn-russia
+    - git-status
+    - git-pull
 
 # OAuth2 Resource Server - validates Keycloak JWTs
 spring.security.oauth2.resourceserver.jwt:
