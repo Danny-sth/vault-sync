@@ -38,24 +38,69 @@ public class VaultNoteService {
      * @return List of relative paths to all .md files
      */
     public List<String> listNotes() throws IOException {
-        List<String> notes = new ArrayList<>();
+        return listNotes(null, false);
+    }
+
+    /**
+     * List markdown notes in the vault with optional filtering and stats.
+     *
+     * @param prefix    Optional folder prefix to filter results (e.g., "archive/2024")
+     * @param withStats If true, returns NoteInfo with size and modified time; if false, returns simple paths
+     * @return List of note paths or NoteInfo objects
+     */
+    public List<NoteInfo> listNotesWithStats(String prefix, boolean withStats) throws IOException {
+        List<NoteInfo> notes = new ArrayList<>();
 
         if (!Files.exists(storagePath)) {
             log.warn("Storage path does not exist: {}", storagePath);
             return notes;
         }
 
-        try (Stream<Path> walk = Files.walk(storagePath)) {
+        Path prefixPath = null;
+        if (prefix != null && !prefix.isBlank()) {
+            prefixPath = resolveSafePath(prefix);
+            if (!Files.exists(prefixPath) || !Files.isDirectory(prefixPath)) {
+                log.warn("Prefix path does not exist or is not a directory: {}", prefix);
+                return notes;
+            }
+        }
+
+        final Path searchRoot = prefixPath != null ? prefixPath : storagePath;
+
+        try (Stream<Path> walk = Files.walk(searchRoot)) {
             walk.filter(Files::isRegularFile)
                     .filter(p -> p.toString().endsWith(".md"))
                     .forEach(p -> {
-                        String relativePath = storagePath.relativize(p).toString().replace("\\", "/");
-                        notes.add(relativePath);
+                        try {
+                            String relativePath = storagePath.relativize(p).toString().replace("\\", "/");
+                            if (withStats) {
+                                long size = Files.size(p);
+                                long lastModified = Files.getLastModifiedTime(p).toMillis();
+                                notes.add(new NoteInfo(relativePath, size, lastModified));
+                            } else {
+                                notes.add(new NoteInfo(relativePath, 0, 0));
+                            }
+                        } catch (IOException e) {
+                            log.warn("Could not get stats for file: {}", p, e);
+                        }
                     });
         }
 
-        log.debug("Listed {} notes", notes.size());
+        log.debug("Listed {} notes (prefix={}, withStats={})", notes.size(), prefix, withStats);
         return notes;
+    }
+
+    /**
+     * List markdown notes in the vault (simple version without stats).
+     *
+     * @param prefix Optional folder prefix to filter results (e.g., "archive/2024")
+     * @param withStats Ignored (for backward compatibility)
+     * @return List of relative paths to .md files
+     */
+    private List<String> listNotes(String prefix, boolean withStats) throws IOException {
+        return listNotesWithStats(prefix, false).stream()
+                .map(NoteInfo::path)
+                .toList();
     }
 
     /**
@@ -90,6 +135,17 @@ public class VaultNoteService {
      * @return List of search results with path, title, and snippet
      */
     public List<SearchResult> searchNotes(String query) throws IOException {
+        return searchNotes(query, null);
+    }
+
+    /**
+     * Search for notes containing a query string, optionally limited to a specific folder.
+     *
+     * @param query  Search query (case-insensitive)
+     * @param folder Optional folder to limit search (e.g., "archive/2024")
+     * @return List of search results with path, title, and snippet
+     */
+    public List<SearchResult> searchNotes(String query, String folder) throws IOException {
         List<SearchResult> results = new ArrayList<>();
 
         if (query == null || query.isBlank()) {
@@ -102,7 +158,19 @@ public class VaultNoteService {
             return results;
         }
 
-        try (Stream<Path> walk = Files.walk(storagePath)) {
+        Path searchRoot = storagePath;
+        if (folder != null && !folder.isBlank()) {
+            Path folderPath = resolveSafePath(folder);
+            if (!Files.exists(folderPath) || !Files.isDirectory(folderPath)) {
+                log.warn("Folder path does not exist or is not a directory: {}", folder);
+                return results;
+            }
+            searchRoot = folderPath;
+        }
+
+        final Path finalSearchRoot = searchRoot;
+
+        try (Stream<Path> walk = Files.walk(finalSearchRoot)) {
             walk.filter(Files::isRegularFile)
                     .filter(p -> p.toString().endsWith(".md"))
                     .forEach(p -> {
@@ -122,7 +190,7 @@ public class VaultNoteService {
                     });
         }
 
-        log.debug("Search for '{}' returned {} results", query, results.size());
+        log.debug("Search for '{}' in folder '{}' returned {} results", query, folder, results.size());
         return results;
     }
 
@@ -270,5 +338,276 @@ public class VaultNoteService {
         Files.delete(resolvedPath);
         log.info("Deleted note: {}", relativePath);
         return true;
+    }
+
+    /**
+     * Delete a folder from the vault.
+     *
+     * @param relativePath Relative path to the folder (e.g., "archive/old")
+     * @param recursive    If true, deletes folder and all contents; if false, only deletes empty folders
+     * @return true if deleted, false if folder didn't exist
+     * @throws SecurityException        if path traversal is detected
+     * @throws IOException              if folder cannot be deleted (e.g., not empty when recursive=false)
+     * @throws IllegalArgumentException if path is invalid
+     */
+    public boolean deleteFolder(String relativePath, boolean recursive) throws IOException {
+        Path resolvedPath = resolveSafePath(relativePath);
+
+        if (!Files.exists(resolvedPath)) {
+            log.warn("Cannot delete non-existent folder: {}", relativePath);
+            return false;
+        }
+
+        if (!Files.isDirectory(resolvedPath)) {
+            throw new IOException("Path is not a directory: " + relativePath);
+        }
+
+        if (recursive) {
+            // Delete folder and all contents recursively
+            try (Stream<Path> walk = Files.walk(resolvedPath)) {
+                walk.sorted((p1, p2) -> p2.compareTo(p1)) // Reverse order to delete files before directories
+                        .forEach(p -> {
+                            try {
+                                Files.delete(p);
+                            } catch (IOException e) {
+                                throw new RuntimeException("Failed to delete " + p, e);
+                            }
+                        });
+            } catch (RuntimeException e) {
+                if (e.getCause() instanceof IOException) {
+                    throw (IOException) e.getCause();
+                }
+                throw e;
+            }
+            log.info("Deleted folder recursively: {}", relativePath);
+        } else {
+            // Only delete if empty
+            try {
+                Files.delete(resolvedPath);
+                log.info("Deleted empty folder: {}", relativePath);
+            } catch (java.nio.file.DirectoryNotEmptyException e) {
+                throw new IOException("Folder is not empty (use recursive=true to force): " + relativePath);
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Move or rename a note.
+     *
+     * @param fromPath Relative path to source note (e.g., "old/note.md")
+     * @param toPath   Relative path to destination (e.g., "new/note.md")
+     * @return true if moved successfully
+     * @throws SecurityException        if path traversal is detected in either path
+     * @throws IOException              if source doesn't exist or destination already exists
+     * @throws IllegalArgumentException if paths are invalid
+     */
+    public boolean moveNote(String fromPath, String toPath) throws IOException {
+        Path resolvedFrom = resolveSafePath(fromPath);
+        Path resolvedTo = resolveSafePath(toPath);
+
+        if (!Files.exists(resolvedFrom)) {
+            throw new IOException("Source note not found: " + fromPath);
+        }
+
+        if (!Files.isRegularFile(resolvedFrom)) {
+            throw new IOException("Source path is not a file: " + fromPath);
+        }
+
+        if (Files.exists(resolvedTo)) {
+            throw new IOException("Destination already exists: " + toPath);
+        }
+
+        // Create parent directories for destination if needed
+        Path parent = resolvedTo.getParent();
+        if (parent != null && !Files.exists(parent)) {
+            Files.createDirectories(parent);
+            log.debug("Created directories for move: {}", parent);
+        }
+
+        Files.move(resolvedFrom, resolvedTo);
+        log.info("Moved note: {} -> {}", fromPath, toPath);
+        return true;
+    }
+
+    /**
+     * Append content to an existing note without overwriting.
+     *
+     * @param relativePath Relative path to the note (e.g., "folder/note.md")
+     * @param content      Content to append
+     * @return true if appended successfully
+     * @throws SecurityException        if path traversal is detected
+     * @throws IOException              if file doesn't exist or cannot be written
+     * @throws IllegalArgumentException if path is invalid
+     */
+    public boolean appendNote(String relativePath, String content) throws IOException {
+        // Ensure .md extension
+        String normalizedPath = relativePath;
+        if (!normalizedPath.endsWith(".md")) {
+            normalizedPath += ".md";
+        }
+
+        Path resolvedPath = resolveSafePath(normalizedPath);
+
+        if (!Files.exists(resolvedPath)) {
+            throw new IOException("Note not found (use write_note to create): " + normalizedPath);
+        }
+
+        if (!Files.isRegularFile(resolvedPath)) {
+            throw new IOException("Path is not a file: " + normalizedPath);
+        }
+
+        // Append content to file
+        Files.writeString(resolvedPath, content, StandardCharsets.UTF_8,
+                java.nio.file.StandardOpenOption.APPEND);
+        log.info("Appended to note: {} ({} chars)", normalizedPath, content.length());
+        return true;
+    }
+
+    /**
+     * Edit a note by replacing old_string with new_string.
+     * The old_string must be unique in the file.
+     *
+     * @param relativePath Relative path to the note (e.g., "folder/note.md")
+     * @param oldString    String to find (must be unique in file)
+     * @param newString    Replacement string
+     * @return true if replaced successfully
+     * @throws SecurityException        if path traversal is detected
+     * @throws IOException              if file doesn't exist or cannot be written
+     * @throws IllegalArgumentException if old_string is not found or not unique
+     */
+    public boolean editNote(String relativePath, String oldString, String newString) throws IOException {
+        Path resolvedPath = resolveSafePath(relativePath);
+
+        if (!Files.exists(resolvedPath)) {
+            throw new IOException("Note not found: " + relativePath);
+        }
+
+        if (!Files.isRegularFile(resolvedPath)) {
+            throw new IOException("Path is not a file: " + relativePath);
+        }
+
+        String content = Files.readString(resolvedPath, StandardCharsets.UTF_8);
+
+        // Check if old_string exists
+        int firstIndex = content.indexOf(oldString);
+        if (firstIndex < 0) {
+            throw new IllegalArgumentException("String not found in note: '" + oldString + "'");
+        }
+
+        // Check if old_string is unique
+        int lastIndex = content.lastIndexOf(oldString);
+        if (firstIndex != lastIndex) {
+            throw new IllegalArgumentException("String is not unique in note (found multiple occurrences): '" + oldString + "'");
+        }
+
+        // Perform replacement
+        String newContent = content.replace(oldString, newString);
+        Files.writeString(resolvedPath, newContent, StandardCharsets.UTF_8);
+        log.info("Edited note: {} (replaced '{}' with '{}')", relativePath,
+                oldString.substring(0, Math.min(50, oldString.length())),
+                newString.substring(0, Math.min(50, newString.length())));
+        return true;
+    }
+
+    /**
+     * Create a folder in the vault.
+     *
+     * @param relativePath Relative path to the folder (e.g., "archive/2024")
+     * @return true if created, false if already exists
+     * @throws SecurityException        if path traversal is detected
+     * @throws IOException              if folder cannot be created
+     * @throws IllegalArgumentException if path is invalid
+     */
+    public boolean createFolder(String relativePath) throws IOException {
+        Path resolvedPath = resolveSafePath(relativePath);
+
+        if (Files.exists(resolvedPath)) {
+            if (Files.isDirectory(resolvedPath)) {
+                log.debug("Folder already exists: {}", relativePath);
+                return false;
+            } else {
+                throw new IOException("Path exists but is not a directory: " + relativePath);
+            }
+        }
+
+        Files.createDirectories(resolvedPath);
+        log.info("Created folder: {}", relativePath);
+        return true;
+    }
+
+    /**
+     * Get metadata for a note or folder.
+     *
+     * @param relativePath Relative path to the note or folder
+     * @return Metadata record with path info
+     * @throws SecurityException        if path traversal is detected
+     * @throws IOException              if path doesn't exist
+     * @throws IllegalArgumentException if path is invalid
+     */
+    public Metadata getMetadata(String relativePath) throws IOException {
+        Path resolvedPath = resolveSafePath(relativePath);
+
+        if (!Files.exists(resolvedPath)) {
+            throw new IOException("Path not found: " + relativePath);
+        }
+
+        boolean isDirectory = Files.isDirectory(resolvedPath);
+        long size = isDirectory ? 0 : Files.size(resolvedPath);
+        long lastModified = Files.getLastModifiedTime(resolvedPath).toMillis();
+
+        log.debug("Got metadata: {} (size={}, isDir={})", relativePath, size, isDirectory);
+        return new Metadata(relativePath, isDirectory, size, lastModified);
+    }
+
+    /**
+     * Move or rename a folder.
+     *
+     * @param fromPath Relative path to source folder (e.g., "old/archive")
+     * @param toPath   Relative path to destination (e.g., "new/archive")
+     * @return true if moved successfully
+     * @throws SecurityException        if path traversal is detected in either path
+     * @throws IOException              if source doesn't exist or destination already exists
+     * @throws IllegalArgumentException if paths are invalid
+     */
+    public boolean moveFolder(String fromPath, String toPath) throws IOException {
+        Path resolvedFrom = resolveSafePath(fromPath);
+        Path resolvedTo = resolveSafePath(toPath);
+
+        if (!Files.exists(resolvedFrom)) {
+            throw new IOException("Source folder not found: " + fromPath);
+        }
+
+        if (!Files.isDirectory(resolvedFrom)) {
+            throw new IOException("Source path is not a directory: " + fromPath);
+        }
+
+        if (Files.exists(resolvedTo)) {
+            throw new IOException("Destination already exists: " + toPath);
+        }
+
+        // Create parent directories for destination if needed
+        Path parent = resolvedTo.getParent();
+        if (parent != null && !Files.exists(parent)) {
+            Files.createDirectories(parent);
+            log.debug("Created directories for move: {}", parent);
+        }
+
+        Files.move(resolvedFrom, resolvedTo);
+        log.info("Moved folder: {} -> {}", fromPath, toPath);
+        return true;
+    }
+
+    /**
+     * Metadata record for files and folders.
+     */
+    public record Metadata(String path, boolean isDirectory, long size, long lastModified) {
+    }
+
+    /**
+     * Note information record with optional stats.
+     */
+    public record NoteInfo(String path, long size, long lastModified) {
     }
 }
