@@ -1,44 +1,43 @@
 #!/bin/bash
-# VPN Russia - Connect to Innotech Cisco VPN
-# Usage: ./vpn-russia.sh
+# VPN туннель через российский VPS (неинтерактивный режим для MCP)
 
-set -e
+VPS_HOST="147.45.102.213"
+VPS_PASS='wmTxN7P@wvSuwK'
+VPS_USER="root"
 
-VPN_SERVER="connect.inno.tech"
-VPN_USER="${VPN_USER:-INNO\DKudinov_oc}"
+is_tunnel_active() {
+    pgrep -f "sshuttle.*$VPS_HOST" > /dev/null 2>&1
+}
 
-echo "Connecting to Cisco VPN: $VPN_SERVER"
-echo "User: $VPN_USER"
-echo ""
+get_ip() {
+    curl -4 -s --max-time 3 ifconfig.me 2>/dev/null || echo "N/A"
+}
 
-# Check if openconnect is installed
-if ! command -v openconnect &> /dev/null; then
-    echo "Error: openconnect is not installed"
-    echo "Install with: sudo apt-get install openconnect"
-    exit 1
-fi
+# Запуск туннеля
+echo "Запускаю VPN туннель через $VPS_HOST..."
 
-# Check if already connected
-if ip link show tun0 &> /dev/null; then
-    echo "VPN already connected (tun0 exists)"
-    echo "Disconnect first with: sudo killall openconnect"
-    exit 1
-fi
+# Останавливаем старый туннель если есть
+sudo pkill -f "sshuttle.*$VPS_HOST" 2>/dev/null
+sleep 1
 
-# Note: This script requires sudo privileges and interactive MFA
-echo "Starting OpenConnect (requires sudo and MFA)..."
-echo "You will be prompted for:"
-echo "  1. Sudo password"
-echo "  2. VPN password"
-echo "  3. MFA token from https://mfa.inno.tech"
-echo ""
+# Запускаем новый туннель
+sudo sshpass -p "$VPS_PASS" sshuttle \
+    -e 'ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30' \
+    -r ${VPS_USER}@${VPS_HOST} \
+    0.0.0.0/0 \
+    -x $VPS_HOST \
+    --dns 2>&1 &
 
-# Run openconnect in background
-# Note: In production, this should be run via systemd or similar
-sudo openconnect \
-    --protocol=anyconnect \
-    --user="$VPN_USER" \
-    --authgroup="Многофакторная аутентификация" \
-    "$VPN_SERVER"
+# Ждем подключения
+echo "Жду подключения..."
+for i in {1..15}; do
+    sleep 1
+    IP=$(get_ip)
+    if [ "$IP" = "$VPS_HOST" ]; then
+        echo "Туннель готов! IP: $IP"
+        exit 0
+    fi
+done
 
-exit 0
+echo "Таймаут подключения"
+exit 1
