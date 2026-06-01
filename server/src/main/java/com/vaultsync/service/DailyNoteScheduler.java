@@ -35,15 +35,15 @@ public class DailyNoteScheduler {
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
     /** Daily note filename: DD.MM.YYYY.md */
     private static final Pattern NOTE_NAME = Pattern.compile("^(\\d{2})\\.(\\d{2})\\.(\\d{4})\\.md$");
-    /** Russian month names (nominative) for archive folder naming, e.g. "Май.2026". */
-    private static final String[] MONTH_RU = {
-        "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
-        "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
+    /** Latin month names for archive folder naming (Cyrillic breaks path sync). */
+    private static final String[] MONTH_NAMES = {
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
     };
 
-    /** Archive folder name for a given month, e.g. (5, 2026) -> "Май.2026". */
+    /** Archive folder name for a given month, e.g. (5, 2026) -> "May.2026". */
     private static String monthFolder(int month, int year) {
-        return MONTH_RU[month - 1] + "." + year;
+        return MONTH_NAMES[month - 1] + "." + year;
     }
 
     @Value("${vault-sync.storage-path}")
@@ -108,7 +108,7 @@ public class DailyNoteScheduler {
                 return;
             }
             LocalDate now = LocalDate.now(ZoneId.of(timezone));
-            String currentMonth = monthFolder(now.getMonthValue(), now.getYear()); // e.g. Июнь.2026
+            String currentMonth = monthFolder(now.getMonthValue(), now.getYear()); // e.g. June.2026
 
             List<Path> files;
             try (var stream = Files.list(dailyDir)) {
