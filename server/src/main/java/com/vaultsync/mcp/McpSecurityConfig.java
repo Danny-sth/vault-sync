@@ -83,7 +83,11 @@ public class McpSecurityConfig {
      */
     @Bean
     public JwtDecoder jwtDecoder() {
-        NimbusJwtDecoder decoder = JwtDecoders.fromIssuerLocation(issuerUri);
+        // Lazy issuer resolution: do NOT fetch OIDC discovery at startup.
+        // Otherwise the whole sync server fails to boot whenever the Keycloak
+        // issuer is unreachable (it once took the server down after a host move).
+        // Metadata is fetched on the first MCP token validation instead.
+        NimbusJwtDecoder decoder = NimbusJwtDecoder.withIssuerLocation(issuerUri).build();
 
         // Add audience validator
         decoder.setJwtValidator(token -> {
