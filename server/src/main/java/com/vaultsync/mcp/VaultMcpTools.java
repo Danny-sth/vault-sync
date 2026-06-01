@@ -10,7 +10,7 @@ import java.io.IOException;
 import java.util.List;
 
 /**
- * MCP Tools for full CRUD access to vault notes.
+ * MCP Tools for full CRUD access to vault notes and command execution.
  * These tools are exposed via the MCP protocol to Claude.
  *
  * Supported operations:
@@ -19,6 +19,7 @@ import java.util.List;
  * - search_notes: Full-text search
  * - write_note: Create or update a note
  * - delete_note: Delete a note
+ * - execute_command: Execute pre-approved shell commands (whitelist only)
  */
 @Component
 @RequiredArgsConstructor
@@ -26,6 +27,7 @@ import java.util.List;
 public class VaultMcpTools {
 
     private final VaultNoteService noteService;
+    private final CommandExecutionService commandService;
 
     /**
      * List all markdown notes in the vault.
@@ -170,6 +172,44 @@ public class VaultMcpTools {
         }
     }
 
+    /**
+     * Execute a pre-approved shell command.
+     * Only commands in the whitelist can be executed.
+     *
+     * @param command Name of the command to execute (e.g., "vpn-russia")
+     * @return Execution result with stdout, stderr, and exit code
+     */
+    @Tool(name = "execute_command", description = "Execute a pre-approved shell command. Only whitelisted commands can be executed. Use this to run system commands like VPN connections, git operations, or other automated tasks.")
+    public ExecuteCommandResult executeCommand(
+            @ToolParam(description = "Name of the command to execute (must be whitelisted, e.g., 'vpn-russia')") String command) {
+        log.info("MCP tool called: execute_command(command={})", command);
+
+        if (command == null || command.isBlank()) {
+            return new ExecuteCommandResult(false, null, -1, null, "Command name is required", null);
+        }
+
+        try {
+            CommandExecutionService.ExecutionResult result = commandService.executeCommand(command);
+            return new ExecuteCommandResult(
+                    result.success(),
+                    result.command(),
+                    result.exitCode(),
+                    result.stdout(),
+                    result.stderr(),
+                    null
+            );
+        } catch (SecurityException e) {
+            log.warn("Security violation in execute_command: {}", e.getMessage());
+            return new ExecuteCommandResult(false, command, -1, null, null, "Access denied: " + e.getMessage());
+        } catch (IOException e) {
+            log.error("Failed to execute command {}: {}", command, e.getMessage());
+            return new ExecuteCommandResult(false, command, -1, null, null, "Execution failed: " + e.getMessage());
+        } catch (Exception e) {
+            log.error("Unexpected error executing command {}", command, e);
+            return new ExecuteCommandResult(false, command, -1, null, null, "Unexpected error: " + e.getMessage());
+        }
+    }
+
     // Result records for structured JSON responses
 
     public record ListNotesResult(boolean success, List<String> notes, int count, String error) {
@@ -188,5 +228,8 @@ public class VaultMcpTools {
     }
 
     public record DeleteNoteResult(boolean success, String path, String error) {
+    }
+
+    public record ExecuteCommandResult(boolean success, String command, int exitCode, String stdout, String stderr, String error) {
     }
 }
