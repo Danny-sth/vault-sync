@@ -1,5 +1,7 @@
 package com.vaultsync.service;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,7 +16,9 @@ import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -35,6 +39,10 @@ public class DailyNoteScheduler {
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
     /** Daily note filename: DD.MM.YYYY.md */
     private static final Pattern NOTE_NAME = Pattern.compile("^(\\d{2})\\.(\\d{2})\\.(\\d{4})\\.md$");
+    /** Lucide icon assigned to month-archive folders (matches plugin icon set). */
+    private static final String ARCHIVE_FOLDER_ICON = "LiArchive";
+    private static final String FOLDER_ICONS_FILE = ".obsidian/folder-icons.json";
+    private final ObjectMapper json = new ObjectMapper();
     /** Latin month names for archive folder naming (Cyrillic breaks path sync). */
     private static final String[] MONTH_NAMES = {
         "January", "February", "March", "April", "May", "June",
@@ -127,6 +135,7 @@ public class DailyNoteScheduler {
                 }
                 Path archiveDir = dailyDir.resolve(month);
                 Files.createDirectories(archiveDir);
+                setFolderIcon("Daily/" + month, ARCHIVE_FOLDER_ICON);
                 Files.move(p, archiveDir.resolve(p.getFileName()), StandardCopyOption.REPLACE_EXISTING);
                 moved++;
                 log.info("[DailyNote] ({}) archived {} -> Daily/{}/", trigger, p.getFileName(), month);
@@ -134,8 +143,58 @@ public class DailyNoteScheduler {
             if (moved > 0) {
                 log.info("[DailyNote] ({}) archived {} past-month note(s)", trigger, moved);
             }
+
+            // Ensure every existing month-archive folder has its icon (backfill).
+            try (var dirs = Files.list(dailyDir)) {
+                dirs.filter(Files::isDirectory)
+                    .filter(d -> isMonthFolder(d.getFileName().toString()))
+                    .forEach(d -> setFolderIcon("Daily/" + d.getFileName(), ARCHIVE_FOLDER_ICON));
+            }
         } catch (Exception e) {
             log.error("[DailyNote] ({}) archive failed", trigger, e);
+        }
+    }
+
+    /** True for folder names like "May.2026" (Latin month name + 4-digit year). */
+    private static boolean isMonthFolder(String name) {
+        int dot = name.indexOf('.');
+        if (dot < 0 || !name.substring(dot + 1).matches("\\d{4}")) {
+            return false;
+        }
+        String mon = name.substring(0, dot);
+        for (String m : MONTH_NAMES) {
+            if (m.equals(mon)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Assign a folder icon by writing into .obsidian/folder-icons.json — the same
+     * map the plugin's FileIcons reads (folderPath -> Lucide icon name).
+     * Read-merge-write to avoid clobbering icons set on devices.
+     */
+    private void setFolderIcon(String folderPath, String iconName) {
+        try {
+            Path iconsFile = Paths.get(storagePath, FOLDER_ICONS_FILE);
+            Map<String, String> icons = new LinkedHashMap<>();
+            if (Files.exists(iconsFile)) {
+                try {
+                    icons = json.readValue(Files.readString(iconsFile), new TypeReference<LinkedHashMap<String, String>>() {});
+                } catch (Exception e) {
+                    log.warn("[DailyNote] folder-icons.json unparsable, recreating: {}", e.getMessage());
+                }
+            }
+            if (iconName.equals(icons.get(folderPath))) {
+                return; // already set, no rewrite (avoids needless sync churn)
+            }
+            icons.put(folderPath, iconName);
+            Files.createDirectories(iconsFile.getParent());
+            Files.writeString(iconsFile, json.writerWithDefaultPrettyPrinter().writeValueAsString(icons));
+            log.info("[DailyNote] folder icon set: {} -> {}", folderPath, iconName);
+        } catch (Exception e) {
+            log.error("[DailyNote] failed to set folder icon for {}", folderPath, e);
         }
     }
 
