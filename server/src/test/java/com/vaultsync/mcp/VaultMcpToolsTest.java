@@ -3,6 +3,7 @@ package com.vaultsync.mcp;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.Mockito;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -23,7 +24,8 @@ class VaultMcpToolsTest {
     @BeforeEach
     void setUp() {
         VaultNoteService service = new VaultNoteService(tempDir.toString());
-        tools = new VaultMcpTools(service);
+        CommandExecutionService commandService = Mockito.mock(CommandExecutionService.class);
+        tools = new VaultMcpTools(service, commandService);
     }
 
     // ===== LIST NOTES EXTENDED TESTS =====

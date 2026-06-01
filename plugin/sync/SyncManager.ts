@@ -484,11 +484,58 @@ export class SyncManager {
     }
 
     // Upload local-only files (any path: vault or .obsidian/*)
-    const toUpload = Array.from(localFilePaths).filter(p => !serverFiles.has(p) && !tombstones.has(p));
-    console.debug(`[VaultSync] Need to upload ${toUpload.length} local-only files`);
+    // BUT: if file was previously synced (has lastKnownHash) and now missing on server
+    // → it was deleted on server → delete locally instead of uploading
+    const toUpload: string[] = [];
+    const toDeleteLocallyOld: string[] = [];
 
+    for (const path of localFilePaths) {
+      if (serverFiles.has(path) || tombstones.has(path)) {
+        continue; // Already handled or tombstoned
+      }
+
+      // File exists locally but not on server
+      const lastKnownHash = localHashes.get(path);
+
+      if (lastKnownHash) {
+        // File was synced before but now missing on server → deleted on server → delete locally
+        console.debug(`[VaultSync] File was synced but deleted on server, removing locally: ${path}`);
+        toDeleteLocallyOld.push(path);
+      } else {
+        // File never synced before → new local file → upload to server
+        toUpload.push(path);
+      }
+    }
+
+    console.debug(`[VaultSync] Upload: ${toUpload.length} new files, Delete: ${toDeleteLocallyOld.length} old files deleted on server`);
+
+    // Delete old files that were deleted on server
+    if (toDeleteLocallyOld.length > 0) {
+      new Notice(`Removing ${toDeleteLocallyOld.length} files deleted on server...`);
+    }
+
+    for (const path of toDeleteLocallyOld) {
+      this.isProcessingRemote = true;
+      try {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) {
+          await this.app.vault.delete(file);
+        } else if (await this.app.vault.adapter.exists(path)) {
+          await this.app.vault.adapter.remove(path);
+        }
+        await this.localState.deleteFileHash(path);
+        deleted++;
+        console.debug(`[VaultSync] Deleted old file: ${path}`);
+      } catch (e) {
+        console.error(`[VaultSync] Failed to delete old file: ${path}`, e);
+      } finally {
+        this.isProcessingRemote = false;
+      }
+    }
+
+    // Upload new local files
     if (toUpload.length > 0) {
-      new Notice(`Uploading ${toUpload.length} files...`);
+      new Notice(`Uploading ${toUpload.length} new files...`);
     }
 
     for (let i = 0; i < toUpload.length; i++) {
