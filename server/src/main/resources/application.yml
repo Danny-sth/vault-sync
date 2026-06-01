@@ -41,6 +41,9 @@ vault-sync:
   storage-path: ${VAULT_SYNC_STORAGE:/opt/vault-sync/files}
   token: ${VAULT_SYNC_TOKEN:}
   tombstone-ttl-days: ${TOMBSTONE_TTL_DAYS:14}
+  # Daily note auto-creation (in-process scheduler, see DailyNoteScheduler)
+  daily-note:
+    timezone: ${VAULT_SYNC_DAILY_TZ:Asia/Almaty}
   # OAuth2 Resource Server (Keycloak)
   oauth:
     issuer-uri: ${OAUTH_ISSUER_URI:https://on-za-menya.online/realms/duq}
