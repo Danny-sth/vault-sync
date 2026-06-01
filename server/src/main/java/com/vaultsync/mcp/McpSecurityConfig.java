@@ -40,6 +40,23 @@ public class McpSecurityConfig {
     private String requiredAudience;
 
     /**
+     * Public OAuth metadata (RFC 9728/8414). Order 0, БЕЗ oauth2ResourceServer —
+     * чтобы встроенный Spring OAuth2ProtectedResourceMetadataFilter НЕ перекрывал
+     * наш ProtectedResourceMetadataController (он отдаёт правильные resource +
+     * authorization_servers для claude.ai-коннектора).
+     */
+    @Bean
+    @Order(0)
+    public SecurityFilterChain wellKnownMetadataChain(HttpSecurity http) throws Exception {
+        http
+            .securityMatcher("/.well-known/oauth-protected-resource", "/.well-known/oauth-authorization-server")
+            .csrf(csrf -> csrf.disable())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+        return http.build();
+    }
+
+    /**
      * MCP endpoints security - OAuth2 JWT required.
      * Higher priority (Order 1) than sync endpoints.
      */
@@ -47,7 +64,7 @@ public class McpSecurityConfig {
     @Order(1)
     public SecurityFilterChain mcpSecurityFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/mcp/**", "/sse", "/.well-known/oauth-protected-resource", "/.well-known/oauth-authorization-server")
+            .securityMatcher("/mcp/**", "/sse")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
