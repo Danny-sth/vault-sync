@@ -2,10 +2,11 @@ package com.vaultsync.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -61,8 +62,13 @@ public class DailyNoteScheduler {
     @Value("${vault-sync.daily-note.timezone:Asia/Almaty}")
     private String timezone;
 
-    /** On startup: create today's note if missing + archive past months. */
-    @PostConstruct
+    /**
+     * On startup: create today's note if missing + archive past months.
+     * Runs on ApplicationReadyEvent (NOT @PostConstruct) so the sync subsystem
+     * is fully up — otherwise early writes to synced files (folder-icons.json)
+     * race with device reconnects and get clobbered.
+     */
+    @EventListener(ApplicationReadyEvent.class)
     public void onStartup() {
         createTodayNote("startup");
         archivePastMonths("startup");
