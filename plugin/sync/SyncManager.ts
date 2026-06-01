@@ -499,10 +499,11 @@ export class SyncManager {
 
       if (lastKnownHash) {
         // File was synced before but now missing on server → deleted on server → delete locally
-        console.debug(`[VaultSync] File was synced but deleted on server, removing locally: ${path}`);
+        console.debug(`[VaultSync] DEBUG: File deleted on server (has lastKnownHash=${lastKnownHash.substring(0, 8)}...): ${path}`);
         toDeleteLocallyOld.push(path);
       } else {
         // File never synced before → new local file → upload to server
+        console.debug(`[VaultSync] DEBUG: New local file (no lastKnownHash), will upload: ${path}`);
         toUpload.push(path);
       }
     }
