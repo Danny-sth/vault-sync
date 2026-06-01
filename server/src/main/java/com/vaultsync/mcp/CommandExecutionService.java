@@ -31,7 +31,7 @@ public class CommandExecutionService {
 
     public CommandExecutionService(
             @Value("${vault-sync.commands-path:/opt/vault-sync/commands}") String commandsPathStr,
-            @Value("${vault-sync.allowed-commands:}") List<String> allowedCommandsList,
+            @Value("#{'${vault-sync.allowed-commands:}'.split(',')}") List<String> allowedCommandsList,
             @Value("${vault-sync.command-timeout-seconds:30}") long timeoutSeconds) {
 
         this.commandsPath = Paths.get(commandsPathStr).toAbsolutePath().normalize();
