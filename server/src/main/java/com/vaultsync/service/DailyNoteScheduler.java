@@ -40,8 +40,8 @@ public class DailyNoteScheduler {
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("dd.MM.yyyy");
     /** Daily note filename: DD.MM.YYYY.md */
     private static final Pattern NOTE_NAME = Pattern.compile("^(\\d{2})\\.(\\d{2})\\.(\\d{4})\\.md$");
-    /** Lucide icon assigned to month-archive folders (matches plugin icon set). */
-    private static final String ARCHIVE_FOLDER_ICON = "LiArchive";
+    /** Icon for month-archive folders — colourful emoji (matches existing "Archive": "📦"). */
+    private static final String ARCHIVE_FOLDER_ICON = "📦";
     private static final String FOLDER_ICONS_FILE = ".obsidian/folder-icons.json";
     private final ObjectMapper json = new ObjectMapper();
     /** Latin month names for archive folder naming (Cyrillic breaks path sync). */
@@ -209,7 +209,7 @@ public class DailyNoteScheduler {
                 ---
                 date: %s
                 processed: false
-                icon: LiCalendarDays
+                icon: 📅
                 banner: "[[attachments/banner-rubber-duck.jpg]]"
                 banner_icon: 📅
                 banner_header: %s
