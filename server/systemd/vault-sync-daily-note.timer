@@ -4,7 +4,6 @@ Requires=vault-sync-daily-note.service
 
 [Timer]
 # Run daily at 00:01
-OnCalendar=daily
 OnCalendar=*-*-* 00:01:00
 Persistent=true
 
