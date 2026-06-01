@@ -11,7 +11,9 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.security.oauth2.jwt.JwtDecoders;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
@@ -83,11 +85,32 @@ public class McpSecurityConfig {
      */
     @Bean
     public JwtDecoder jwtDecoder() {
-        // Lazy issuer resolution: do NOT fetch OIDC discovery at startup.
-        // Otherwise the whole sync server fails to boot whenever the Keycloak
-        // issuer is unreachable (it once took the server down after a host move).
-        // Metadata is fetched on the first MCP token validation instead.
-        NimbusJwtDecoder decoder = NimbusJwtDecoder.withIssuerLocation(issuerUri).build();
+        // Lazy delegate: the real Nimbus decoder (which fetches OIDC discovery
+        // from Keycloak) is built on the FIRST token validation, not at startup.
+        // Spring Security's fromIssuerLocation/withIssuerLocation resolve eagerly,
+        // which crash-looped the whole sync server whenever Keycloak was down.
+        return new JwtDecoder() {
+            private volatile JwtDecoder delegate;
+
+            @Override
+            public Jwt decode(String token) throws JwtException {
+                JwtDecoder d = delegate;
+                if (d == null) {
+                    synchronized (this) {
+                        if (delegate == null) {
+                            delegate = buildDecoder();
+                        }
+                        d = delegate;
+                    }
+                }
+                return d.decode(token);
+            }
+        };
+    }
+
+    /** Builds the real audience-validating decoder (fetches OIDC metadata on first use). */
+    private JwtDecoder buildDecoder() {
+        NimbusJwtDecoder decoder = JwtDecoders.fromIssuerLocation(issuerUri);
 
         // Add audience validator
         decoder.setJwtValidator(token -> {
