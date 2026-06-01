@@ -45,7 +45,7 @@ public class McpSecurityConfig {
     @Order(1)
     public SecurityFilterChain mcpSecurityFilterChain(HttpSecurity http) throws Exception {
         http
-            .securityMatcher("/mcp/**", "/sse", "/api/v1/commands/**", "/.well-known/oauth-protected-resource", "/.well-known/oauth-authorization-server")
+            .securityMatcher("/mcp/**", "/sse", "/.well-known/oauth-protected-resource", "/.well-known/oauth-authorization-server")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
@@ -53,8 +53,8 @@ public class McpSecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/.well-known/oauth-protected-resource").permitAll()
                 // RFC 8414: Authorization Server Metadata must be public
                 .requestMatchers(HttpMethod.GET, "/.well-known/oauth-authorization-server").permitAll()
-                // All MCP and command endpoints require OAuth2 JWT
-                .requestMatchers("/mcp/**", "/sse", "/api/v1/commands/**").authenticated()
+                // All MCP endpoints require OAuth2 JWT (/api/v1/commands/** uses simple token auth)
+                .requestMatchers("/mcp/**", "/sse").authenticated()
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2
