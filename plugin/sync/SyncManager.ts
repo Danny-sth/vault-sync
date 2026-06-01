@@ -382,8 +382,11 @@ export class SyncManager {
     const localFilePaths = new Set<string>([...vaultFiles.map(f => f.path), ...obsidianPaths, ...hiddenPaths, ...allHiddenInVault]);
     const localHashes = await this.localState.getAllHashes();
 
-    console.debug(`[VaultSync] Local state: ${localFilePaths.size} files (vault: ${vaultFiles.length}, obsidian: ${obsidianPaths.length}, hidden: ${hiddenPaths.length}, allHidden: ${allHiddenInVault.length}), ${localHashes.size} hashes`);
-    new Notice(`Local: ${localFilePaths.size} files`);
+    console.log(`[VaultSync] ========== FULL SYNC START ==========`);
+    console.log(`[VaultSync] Server: ${serverFiles.size} files, ${tombstones.size} tombstones`);
+    console.log(`[VaultSync] Local: ${localFilePaths.size} files (vault: ${vaultFiles.length}, obsidian: ${obsidianPaths.length}, hidden: ${hiddenPaths.length}, allHidden: ${allHiddenInVault.length})`);
+    console.log(`[VaultSync] LocalState: ${localHashes.size} stored hashes`);
+    new Notice(`Sync: Server=${serverFiles.size}, Local=${localFilePaths.size}, Tombstones=${tombstones.size}`);
 
     // Debug: count server files not on local
     let missingCount = 0;
@@ -483,6 +486,18 @@ export class SyncManager {
       }
     }
 
+    // CRITICAL FIX: Handle tombstones FIRST before upload/delete logic
+    // Tombstones mean file was deleted on server - ALWAYS delete locally
+    const tombstonedToDelete: string[] = [];
+    for (const path of tombstones) {
+      if (localFilePaths.has(path)) {
+        console.log(`[VaultSync] TOMBSTONE found for local file, will delete: ${path}`);
+        tombstonedToDelete.push(path);
+      } else {
+        console.debug(`[VaultSync] TOMBSTONE exists but file not local: ${path}`);
+      }
+    }
+
     // Upload local-only files (any path: vault or .obsidian/*)
     // BUT: if file was previously synced (has lastKnownHash) and now missing on server
     // → it was deleted on server → delete locally instead of uploading
@@ -490,27 +505,59 @@ export class SyncManager {
     const toDeleteLocallyOld: string[] = [];
 
     for (const path of localFilePaths) {
-      if (serverFiles.has(path) || tombstones.has(path)) {
-        continue; // Already handled or tombstoned
+      if (serverFiles.has(path)) {
+        console.debug(`[VaultSync] File exists on server, skip upload: ${path}`);
+        continue; // Already on server
       }
 
-      // File exists locally but not on server
+      if (tombstones.has(path)) {
+        console.debug(`[VaultSync] File has tombstone, already in tombstonedToDelete: ${path}`);
+        continue; // Already handled above in tombstonedToDelete
+      }
+
+      // File exists locally but not on server and no tombstone
       const lastKnownHash = localHashes.get(path);
 
       if (lastKnownHash) {
         // File was synced before but now missing on server → deleted on server → delete locally
-        console.debug(`[VaultSync] DEBUG: File deleted on server (has lastKnownHash=${lastKnownHash.substring(0, 8)}...): ${path}`);
+        console.log(`[VaultSync] File was synced but deleted on server (lastKnownHash=${lastKnownHash.substring(0, 8)}...), will delete locally: ${path}`);
         toDeleteLocallyOld.push(path);
       } else {
         // File never synced before → new local file → upload to server
-        console.debug(`[VaultSync] DEBUG: New local file (no lastKnownHash), will upload: ${path}`);
+        console.log(`[VaultSync] New local file (no lastKnownHash), will upload: ${path}`);
         toUpload.push(path);
       }
     }
 
-    console.debug(`[VaultSync] Upload: ${toUpload.length} new files, Delete: ${toDeleteLocallyOld.length} old files deleted on server`);
+    console.log(`[VaultSync] SYNC PLAN: Upload=${toUpload.length}, Delete(old)=${toDeleteLocallyOld.length}, Delete(tombstone)=${tombstonedToDelete.length}`);
 
-    // Delete old files that were deleted on server
+    // Delete tombstoned files FIRST (these have explicit tombstones from server)
+    if (tombstonedToDelete.length > 0) {
+      new Notice(`Removing ${tombstonedToDelete.length} tombstoned files...`);
+    }
+
+    for (const path of tombstonedToDelete) {
+      this.isProcessingRemote = true;
+      try {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) {
+          await this.app.vault.delete(file);
+        } else if (await this.app.vault.adapter.exists(path)) {
+          await this.app.vault.adapter.remove(path);
+        }
+        await this.localState.deleteFileHash(path);
+        // Clean up empty parent folders
+        await this.fileOps.cleanupEmptyParentFolders(path);
+        deleted++;
+        console.log(`[VaultSync] Deleted tombstoned file: ${path}`);
+      } catch (e) {
+        console.error(`[VaultSync] Failed to delete tombstoned file: ${path}`, e);
+      } finally {
+        this.isProcessingRemote = false;
+      }
+    }
+
+    // Delete old files that were deleted on server (no tombstone but had lastKnownHash)
     if (toDeleteLocallyOld.length > 0) {
       new Notice(`Removing ${toDeleteLocallyOld.length} files deleted on server...`);
     }
@@ -525,8 +572,10 @@ export class SyncManager {
           await this.app.vault.adapter.remove(path);
         }
         await this.localState.deleteFileHash(path);
+        // Clean up empty parent folders
+        await this.fileOps.cleanupEmptyParentFolders(path);
         deleted++;
-        console.debug(`[VaultSync] Deleted old file: ${path}`);
+        console.log(`[VaultSync] Deleted old file: ${path}`);
       } catch (e) {
         console.error(`[VaultSync] Failed to delete old file: ${path}`, e);
       } finally {
@@ -641,7 +690,10 @@ export class SyncManager {
     await this.fileOps.cleanupEmptyFolders();
 
     const summary = `Sync complete: ↓${downloaded}${downloadFailed > 0 ? '(❌' + downloadFailed + ')' : ''} ↑${uploaded}${uploadFailed > 0 ? '(❌' + uploadFailed + ')' : ''} ×${deleted}`;
-    console.debug(`[VaultSync] ${summary}`);
+    console.log(`[VaultSync] ========== FULL SYNC END ==========`);
+    console.log(`[VaultSync] ${summary}`);
+    console.log(`[VaultSync] Downloaded: ${downloaded}, Uploaded: ${uploaded}, Deleted: ${deleted}`);
+    console.log(`[VaultSync] Failures: download=${downloadFailed}, upload=${uploadFailed}`);
 
     if (downloadFailed > 0 || uploadFailed > 0) {
       new Notice(`Vault Sync: ${summary}`);
