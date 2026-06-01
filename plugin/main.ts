@@ -56,7 +56,7 @@ export default class VaultSyncPlugin extends Plugin {
       });
 
       // Command executor - dynamic command registration from server
-      this.commandExecutor = new CommandExecutor(this.settings);
+      this.commandExecutor = new CommandExecutor(this.app, this.settings);
 
       // Register commands dynamically after connection
       this.registerDynamicCommands();
