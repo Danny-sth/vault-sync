@@ -47,12 +47,10 @@ export class SyncFilter {
    * Handles both vault-indexed files and .obsidian/* paths.
    */
   static shouldSync(path: string): boolean {
-    // .obsidian/* paths have special handling
     if (path.startsWith('.obsidian/')) {
       return this.shouldSyncObsidianPath(path);
     }
 
-    // Check exclude patterns (includes .git, .DS_Store, etc.)
     return !this.matchesExcludePattern(path);
   }
 
@@ -60,19 +58,16 @@ export class SyncFilter {
    * Check if an .obsidian/* path should be synced.
    */
   private static shouldSyncObsidianPath(path: string): boolean {
-    // Device-specific files - never sync
     if (this.DEVICE_SPECIFIC_FILES.has(path)) {
       return false;
     }
 
-    // Device-specific prefixes - never sync
     for (const prefix of this.DEVICE_SPECIFIC_PREFIXES) {
       if (path.startsWith(prefix)) {
         return false;
       }
     }
 
-    // Check exclude patterns
     return !this.matchesExcludePattern(path);
   }
 
@@ -108,7 +103,6 @@ export class SyncFilter {
    * Used by FileWatcher for vault file scanning.
    */
   static shouldWatchVaultFile(path: string): boolean {
-    // .obsidian/* is handled separately via shouldIncludeConfigPath
     if (path.startsWith('.obsidian/')) {
       return false;
     }
@@ -130,7 +124,6 @@ export class SyncFilter {
     try {
       const listing = await app.vault.adapter.list('');
       for (const folder of listing.folders) {
-        // Include hidden folders that are not excluded
         if (folder.startsWith('.') && !this.matchesExcludePattern(folder + '/')) {
           result.push(folder);
         }
@@ -149,7 +142,6 @@ export class SyncFilter {
     const allFiles: string[] = [];
 
     for (const dir of dirs) {
-      // Skip .obsidian - handled separately
       if (dir === '.obsidian') continue;
       const files = await this.listFilesInDir(app, dir);
       allFiles.push(...files);
@@ -173,18 +165,14 @@ export class SyncFilter {
         const listing = await app.vault.adapter.list(dir);
 
         for (const file of listing.files) {
-          // Skip files already in vault.getFiles()
           if (vaultFiles.has(file)) continue;
-          // Skip .obsidian - handled separately
           if (file.startsWith('.obsidian/')) continue;
-          // Check if should sync
           if (this.shouldSync(file)) {
             result.push(file);
           }
         }
 
         for (const subdir of listing.folders) {
-          // Skip excluded directories
           if (this.matchesExcludePattern(subdir + '/')) continue;
           stack.push(subdir);
         }
@@ -217,28 +205,23 @@ export class SyncFilter {
       try {
         const listing = await app.vault.adapter.list(dir);
 
-        // Skip excluded directories
         for (const subdir of listing.folders) {
           if (this.matchesExcludePattern(subdir + '/')) continue;
-          if (subdir.startsWith('.obsidian')) continue; // .obsidian handled separately
+          if (subdir.startsWith('.obsidian')) continue;
           stack.push(subdir);
         }
 
-        // Check if folder is empty (no files except possibly .folder-marker)
         const realFiles = listing.files.filter(f => !f.endsWith(this.FOLDER_MARKER));
         const hasSubdirs = listing.folders.length > 0;
         const markerPath = dir ? `${dir}/${this.FOLDER_MARKER}` : this.FOLDER_MARKER;
         const markerExists = listing.files.includes(markerPath);
 
         if (realFiles.length === 0 && !hasSubdirs && dir !== '') {
-          // Empty folder - create marker if not exists
-          // But skip if server has a tombstone for this marker (folder was intentionally deleted)
           if (!markerExists && !tombstonePaths?.has(markerPath)) {
             await app.vault.adapter.write(markerPath, '');
             created.push(markerPath);
           }
         } else if (markerExists) {
-          // Non-empty folder - remove marker
           await app.vault.adapter.remove(markerPath);
           deleted.push(markerPath);
         }

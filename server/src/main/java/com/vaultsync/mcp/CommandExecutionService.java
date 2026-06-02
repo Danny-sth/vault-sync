@@ -59,12 +59,10 @@ public class CommandExecutionService {
     public ExecutionResult executeCommand(String commandName) throws IOException {
         log.info("Executing command: {}", commandName);
 
-        // Whitelist check
         if (!allowedCommands.contains(commandName)) {
             throw new SecurityException("Command not whitelisted: " + commandName);
         }
 
-        // Resolve command path
         Path scriptPath = resolveCommandPath(commandName);
 
         if (!Files.exists(scriptPath)) {
@@ -75,20 +73,17 @@ public class CommandExecutionService {
             throw new IOException("Command script is not executable: " + scriptPath);
         }
 
-        // Execute command
         ProcessBuilder pb = new ProcessBuilder(scriptPath.toString());
         pb.redirectErrorStream(false);
 
         Process process = pb.start();
 
-        // Read stdout and stderr
         StringBuilder stdout = new StringBuilder();
         StringBuilder stderr = new StringBuilder();
 
         try (BufferedReader outReader = new BufferedReader(new InputStreamReader(process.getInputStream()));
              BufferedReader errReader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
 
-            // Wait for completion with timeout
             boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
 
             if (!finished) {
@@ -96,7 +91,6 @@ public class CommandExecutionService {
                 throw new IOException("Command timed out after " + timeoutSeconds + " seconds");
             }
 
-            // Read all output
             outReader.lines().forEach(line -> stdout.append(line).append("\n"));
             errReader.lines().forEach(line -> stderr.append(line).append("\n"));
 
@@ -131,21 +125,17 @@ public class CommandExecutionService {
             throw new IllegalArgumentException("Command name cannot be null or empty");
         }
 
-        // Security: prevent path traversal
         if (commandName.contains("/") || commandName.contains("\\") ||
                 commandName.contains("..") || commandName.contains(":")) {
             throw new SecurityException("Invalid command name: path traversal detected in '" + commandName + "'");
         }
 
-        // Resolve script path (try .sh extension first, then without)
         Path scriptPath = commandsPath.resolve(commandName + ".sh").normalize();
 
-        // Critical security check: resolved path MUST start with commands path
         if (!scriptPath.startsWith(commandsPath)) {
             throw new SecurityException("Invalid command: attempted to access '" + commandName + "' outside commands directory");
         }
 
-        // If .sh doesn't exist, try without extension
         if (!Files.exists(scriptPath)) {
             scriptPath = commandsPath.resolve(commandName).normalize();
             if (!scriptPath.startsWith(commandsPath)) {

@@ -75,14 +75,11 @@ public class SyncController {
 
         SyncMessage.SyncResponse response;
         if (request.getLastSeq() <= 0) {
-            // Full sync
             response = syncService.getFullState();
         } else {
-            // Delta sync
             response = syncService.getChangesSince(request.getLastSeq());
         }
 
-        // Echo requestId for correlation
         response.setRequestId(request.getRequestId());
         return response;
     }

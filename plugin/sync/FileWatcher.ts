@@ -11,17 +11,12 @@ export class FileWatcher {
   private app: App;
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private isScanning = false;
-  // Vault-indexed files baseline.
   private lastScanFiles: Map<string, { mtime: number; size: number }> = new Map();
-  // .obsidian/* baseline (separate API path — adapter.list, not vault.getFiles).
   private lastScanConfigFiles: Map<string, { mtime: number; size: number }> = new Map();
-  // Hidden directories baseline (.trash, etc.)
   private lastScanHiddenFiles: Map<string, { mtime: number; size: number }> = new Map();
-  // All hidden files inside regular directories (e.g., .trashed-*, temp files)
   private lastScanAllHiddenFiles: Map<string, { mtime: number; size: number }> = new Map();
 
   onChangesDetected?: (changes: FileChange[]) => void;
-  // Filter applied to .obsidian/* paths — set by SyncManager so device-specific files are skipped.
   shouldIncludeConfigPath?: (path: string) => boolean;
 
   constructor(app: App) {
@@ -72,13 +67,11 @@ export class FileWatcher {
       }
     }
 
-    // Hidden directories (.trash, etc.)
     for (const path of await SyncFilter.listHiddenFiles(this.app)) {
       const stat = await this.app.vault.adapter.stat(path);
       if (stat) this.lastScanHiddenFiles.set(path, { mtime: stat.mtime, size: stat.size });
     }
 
-    // All hidden files inside regular directories (.trashed-*, temp files, etc.)
     for (const path of await SyncFilter.listAllHiddenFilesInVault(this.app)) {
       const stat = await this.app.vault.adapter.stat(path);
       if (stat) this.lastScanAllHiddenFiles.set(path, { mtime: stat.mtime, size: stat.size });
@@ -93,7 +86,6 @@ export class FileWatcher {
     const changes: FileChange[] = [];
 
     try {
-      // --- Vault-indexed files ---
       const currentFiles = new Map<string, TFile>();
       for (const file of this.app.vault.getFiles()) {
         if (SyncFilter.shouldWatchVaultFile(file.path)) currentFiles.set(file.path, file);
@@ -114,7 +106,6 @@ export class FileWatcher {
         this.lastScanFiles.set(path, { mtime: file.stat.mtime, size: file.stat.size });
       }
 
-      // --- .obsidian/* files via adapter ---
       const currentConfigs = new Map<string, { mtime: number; size: number }>();
       for (const path of await SyncFilter.listObsidianFiles(this.app)) {
         if (this.shouldIncludeConfigPath && !this.shouldIncludeConfigPath(path)) continue;
@@ -137,7 +128,6 @@ export class FileWatcher {
         this.lastScanConfigFiles.set(path, stat);
       }
 
-      // --- Hidden directories (.trash, etc.) via adapter ---
       const currentHidden = new Map<string, { mtime: number; size: number }>();
       for (const path of await SyncFilter.listHiddenFiles(this.app)) {
         const stat = await this.app.vault.adapter.stat(path);
@@ -159,7 +149,6 @@ export class FileWatcher {
         this.lastScanHiddenFiles.set(path, stat);
       }
 
-      // --- All hidden files inside regular directories ---
       const currentAllHidden = new Map<string, { mtime: number; size: number }>();
       for (const path of await SyncFilter.listAllHiddenFilesInVault(this.app)) {
         const stat = await this.app.vault.adapter.stat(path);
@@ -201,10 +190,8 @@ export class FileWatcher {
     if (path.startsWith('.obsidian/')) {
       this.lastScanConfigFiles.set(path, { mtime, size });
     } else if (path.startsWith('.')) {
-      // Root-level hidden directory files
       this.lastScanHiddenFiles.set(path, { mtime, size });
     } else if (this.isHiddenFileName(path)) {
-      // Hidden files inside regular directories
       this.lastScanAllHiddenFiles.set(path, { mtime, size });
     } else {
       this.lastScanFiles.set(path, { mtime, size });
@@ -223,7 +210,6 @@ export class FileWatcher {
     }
   }
 
-  // Check if the filename (not path) starts with a dot
   private isHiddenFileName(path: string): boolean {
     const parts = path.split('/');
     const filename = parts[parts.length - 1];

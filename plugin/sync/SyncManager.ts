@@ -41,19 +41,15 @@ export class SyncManager {
     this.apiClient = new SyncApiClient(settings);
     this.fileOps = new FileOperationService(app);
 
-    // Set up message handlers
     this.stompClient.setMessageHandler((msg) => this.handleServerMessage(msg));
     this.stompClient.setConnectionHandler((state) => this.handleConnectionChange(state));
 
-    // Set up file watcher handler for external FS changes
     this.fileWatcher.onChangesDetected = (changes) => this.handleFileWatcherChanges(changes);
-    // FileWatcher needs to know which .obsidian/* paths to track (skip device-specific).
     this.fileWatcher.shouldIncludeConfigPath = (path) => SyncFilter.shouldSync(path);
   }
 
   async init(): Promise<void> {
     await this.localState.init();
-    // Start file watcher (scans every 10 seconds for external changes)
     this.fileWatcher.start(10000);
   }
 
@@ -73,7 +69,6 @@ export class SyncManager {
         await this.requestFullSync();
       }
 
-      // Process any pending operations from offline queue
       await this.processPendingOperations();
 
     } catch (e) {
@@ -135,14 +130,11 @@ export class SyncManager {
       await this.localState.setLastSeq(msg.seq);
       return;
     }
-    // Allow plugin deletions to sync, block other .obsidian/* paths (workspace, cache, etc.)
     if (msg.path.startsWith('.obsidian/') && !msg.path.startsWith('.obsidian/plugins/')) {
       console.debug(`[VaultSync] Ignoring remote delete for .obsidian/* path (not plugins): ${msg.path}`);
       await this.localState.setLastSeq(msg.seq);
       return;
     }
-    // Apply remote deletes only for paths this client has previously synced (has a hash).
-    // Exception: plugins should always be deleted even if not previously synced.
     const knownHash = await this.localState.getFileHash(msg.path);
     const isPlugin = msg.path.startsWith('.obsidian/plugins/');
     if (!knownHash && !isPlugin) {
@@ -158,7 +150,6 @@ export class SyncManager {
       } else if (await this.app.vault.adapter.exists(msg.path)) {
         await this.app.vault.adapter.remove(msg.path);
       }
-      // Cleanup empty parent folders after any delete
       await this.fileOps.cleanupEmptyParentFolders(msg.path);
       await this.localState.deleteFileHash(msg.path);
       await this.localState.setLastSeq(msg.seq);
@@ -170,7 +161,6 @@ export class SyncManager {
     }
   }
 
-  // Handle external file system changes detected by FileWatcher
   private handleFileWatcherChanges(changes: FileChange[]): void {
     if (this.isProcessingRemote) return;
 
@@ -183,15 +173,10 @@ export class SyncManager {
           if (change.file) {
             this.queueFileChange(change.file);
           } else {
-            // .obsidian/* path — no TFile available, queue by path.
             this.queueUploadByPath(change.path);
           }
           break;
         case 'delete':
-          // Skip delete events for .obsidian/* paths EXCEPT plugins.
-          // Many plugins write data.json atomically via temp+rename, leaving a brief window
-          // where the file does not exist. Without this guard FileWatcher would propagate that
-          // window as a real delete. But for plugins themselves we DO want to sync deletions.
           if (change.path.startsWith('.obsidian/') && !change.path.startsWith('.obsidian/plugins/')) {
             console.debug(`[VaultSync] Suppressing transient delete for .obsidian/* path (not plugins): ${change.path}`);
             break;
@@ -202,7 +187,6 @@ export class SyncManager {
     }
   }
 
-  // Queue an upload by path with debouncing. Used for .obsidian/* paths that aren't TFile-indexed.
   queueUploadByPath(path: string): void {
     if (this.isProcessingRemote) return;
     if (!SyncFilter.shouldSync(path)) return;
@@ -219,7 +203,6 @@ export class SyncManager {
     );
   }
 
-  // File change detection
   queueFileChange(file: TFile): void {
     if (this.isProcessingRemote) return;
     if (!SyncFilter.shouldSync(file.path)) return;
@@ -255,12 +238,10 @@ export class SyncManager {
   queueFileRename(file: TFile, oldPath: string): void {
     if (this.isProcessingRemote) return;
 
-    // Delete old, upload new
     this.queueFileDelete(oldPath);
     this.queueFileChange(file);
   }
 
-  // Backwards-compat wrapper for vault-event handlers; delegates to uploadByPath which works for any path.
   private async uploadFile(file: TFile): Promise<void> {
     return this.uploadByPath(file.path);
   }
@@ -276,13 +257,10 @@ export class SyncManager {
 
         const { content, hash } = result;
 
-        // Write file (fileOps.writeBinary uses adapter for .obsidian/* paths, vault API for indexed files).
         await this.fileOps.writeBinary(path, content);
 
         await this.localState.setFileHash(path, hash);
 
-        // Update file watcher baseline so it doesn't detect this download as external change.
-        // For .obsidian/* paths getAbstractFileByPath returns null (not vault-indexed) — use adapter.stat.
         const updatedFile = this.app.vault.getAbstractFileByPath(path) as TFile | null;
         if (updatedFile) {
           this.fileWatcher.markProcessed(path, updatedFile.stat.mtime, updatedFile.stat.size);
@@ -291,7 +269,7 @@ export class SyncManager {
           if (stat) this.fileWatcher.markProcessed(path, stat.mtime, stat.size);
         }
 
-        return true; // Success
+        return true;
 
       } catch (e: any) {
         console.error(`[VaultSync] Download attempt ${attempt}/${retries} failed for ${path}:`, e);
@@ -300,7 +278,7 @@ export class SyncManager {
         }
       }
     }
-    return false; // All retries failed
+    return false;
   }
 
   private sleep(ms: number): Promise<void> {
@@ -318,7 +296,6 @@ export class SyncManager {
 
       await this.localState.deleteFileHash(path);
 
-      // Clean up empty parent folders locally
       await this.fileOps.cleanupEmptyParentFolders(path);
 
     } catch (e) {
@@ -327,14 +304,12 @@ export class SyncManager {
     }
   }
 
-  // Full sync - ALWAYS request ALL files (lastSeq=0) to ensure complete sync
   async requestFullSync(): Promise<void> {
     if (!this.isConnected()) {
       new Notice('Vault Sync: Not connected');
       return;
     }
 
-    // Prevent parallel sync requests (debounce rapid button clicks)
     if (this.isSyncing) {
       console.debug('[VaultSync] Sync already in progress, skipping');
       return;
@@ -343,8 +318,6 @@ export class SyncManager {
     this.isSyncing = true;
     try {
       new Notice('Vault Sync: Syncing...');
-      // Always request full state (lastSeq=0) to get ALL files from server
-      // This ensures we don't miss any files that were created while offline
       const response = await this.stompClient.requestSync(0);
 
       await this.processFullSync(response);
@@ -374,7 +347,6 @@ export class SyncManager {
       tombstoneList.filter(t => SyncFilter.shouldSync(t.path)).map(t => t.path)
     );
 
-    // Local files = vault-indexed files + .obsidian/* configs + hidden dirs (.trash, etc.) + hidden files in regular dirs
     const vaultFiles = this.app.vault.getFiles().filter(f => SyncFilter.shouldSync(f.path));
     const obsidianPaths = (await SyncFilter.listObsidianFiles(this.app)).filter(p => SyncFilter.shouldSync(p));
     const hiddenPaths = (await SyncFilter.listHiddenFiles(this.app)).filter(p => SyncFilter.shouldSync(p));
@@ -388,7 +360,6 @@ export class SyncManager {
     console.log(`[VaultSync] LocalState: ${localHashes.size} stored hashes`);
     new Notice(`Sync: Server=${serverFiles.size}, Local=${localFilePaths.size}, Tombstones=${tombstones.size}`);
 
-    // Debug: count server files not on local
     let missingCount = 0;
     const missingPaths: string[] = [];
     for (const [path] of serverFiles) {
@@ -411,13 +382,9 @@ export class SyncManager {
     let uploadFailed = 0;
     let deleted = 0;
 
-    // FIRST: Detect locally deleted files (in localState but not on disk)
-    // This catches deletions made outside Obsidian (rm, file manager, etc.)
-    // Allow detection for plugins, skip other .obsidian/* paths (workspace, cache, etc.)
     for (const [path] of localHashes) {
       const isProtectedObsidian = path.startsWith('.obsidian/') && !path.startsWith('.obsidian/plugins/');
       if (!localFilePaths.has(path) && !isProtectedObsidian) {
-        // File was synced before but now doesn't exist locally → deleted locally
         console.debug(`[VaultSync] Detected local deletion: ${path}`);
         try {
           await this.deleteFile(path);
@@ -429,14 +396,12 @@ export class SyncManager {
       }
     }
 
-    // Collect files to download
     const toDownload: { path: string; serverFile: { hash: string; mtime: number } }[] = [];
 
     for (const [path, serverFile] of serverFiles) {
       const localExists = localFilePaths.has(path);
 
       if (!localExists) {
-        // File only on server — download (initial pull).
         toDownload.push({ path, serverFile });
         continue;
       }
@@ -453,10 +418,8 @@ export class SyncManager {
           uploadFailed++;
         }
       }
-      // 'noop' — local already matches server.
     }
 
-    // Download files with progress logging
     console.debug(`[VaultSync] Need to download ${toDownload.length} files`);
 
     if (toDownload.length > 0) {
@@ -480,14 +443,11 @@ export class SyncManager {
         new Notice(`Failed: ${path}`);
       }
 
-      // Small delay between downloads to avoid overwhelming mobile connections
       if (i < toDownload.length - 1) {
         await this.sleep(50);
       }
     }
 
-    // CRITICAL FIX: Handle tombstones FIRST before upload/delete logic
-    // Tombstones mean file was deleted on server - ALWAYS delete locally
     const tombstonedToDelete: string[] = [];
     for (const path of tombstones) {
       if (localFilePaths.has(path)) {
@@ -498,32 +458,26 @@ export class SyncManager {
       }
     }
 
-    // Upload local-only files (any path: vault or .obsidian/*)
-    // BUT: if file was previously synced (has lastKnownHash) and now missing on server
-    // → it was deleted on server → delete locally instead of uploading
     const toUpload: string[] = [];
     const toDeleteLocallyOld: string[] = [];
 
     for (const path of localFilePaths) {
       if (serverFiles.has(path)) {
         console.debug(`[VaultSync] File exists on server, skip upload: ${path}`);
-        continue; // Already on server
+        continue;
       }
 
       if (tombstones.has(path)) {
         console.debug(`[VaultSync] File has tombstone, already in tombstonedToDelete: ${path}`);
-        continue; // Already handled above in tombstonedToDelete
+        continue;
       }
 
-      // File exists locally but not on server and no tombstone
       const lastKnownHash = localHashes.get(path);
 
       if (lastKnownHash) {
-        // File was synced before but now missing on server → deleted on server → delete locally
         console.log(`[VaultSync] File was synced but deleted on server (lastKnownHash=${lastKnownHash.substring(0, 8)}...), will delete locally: ${path}`);
         toDeleteLocallyOld.push(path);
       } else {
-        // File never synced before → new local file → upload to server
         console.log(`[VaultSync] New local file (no lastKnownHash), will upload: ${path}`);
         toUpload.push(path);
       }
@@ -531,7 +485,6 @@ export class SyncManager {
 
     console.log(`[VaultSync] SYNC PLAN: Upload=${toUpload.length}, Delete(old)=${toDeleteLocallyOld.length}, Delete(tombstone)=${tombstonedToDelete.length}`);
 
-    // Delete tombstoned files FIRST (these have explicit tombstones from server)
     if (tombstonedToDelete.length > 0) {
       new Notice(`Removing ${tombstonedToDelete.length} tombstoned files...`);
     }
@@ -546,7 +499,6 @@ export class SyncManager {
           await this.app.vault.adapter.remove(path);
         }
         await this.localState.deleteFileHash(path);
-        // Clean up empty parent folders
         await this.fileOps.cleanupEmptyParentFolders(path);
         deleted++;
         console.log(`[VaultSync] Deleted tombstoned file: ${path}`);
@@ -557,7 +509,6 @@ export class SyncManager {
       }
     }
 
-    // Delete old files that were deleted on server (no tombstone but had lastKnownHash)
     if (toDeleteLocallyOld.length > 0) {
       new Notice(`Removing ${toDeleteLocallyOld.length} files deleted on server...`);
     }
@@ -572,7 +523,6 @@ export class SyncManager {
           await this.app.vault.adapter.remove(path);
         }
         await this.localState.deleteFileHash(path);
-        // Clean up empty parent folders
         await this.fileOps.cleanupEmptyParentFolders(path);
         deleted++;
         console.log(`[VaultSync] Deleted old file: ${path}`);
@@ -583,7 +533,6 @@ export class SyncManager {
       }
     }
 
-    // Upload new local files
     if (toUpload.length > 0) {
       new Notice(`Uploading ${toUpload.length} new files...`);
     }
@@ -608,27 +557,12 @@ export class SyncManager {
       }
     }
 
-    // Apply tombstones to vault-indexed paths only.
-    //
-    // Rationale: .obsidian/* tombstones are never replayed automatically. Plugin configs are
-    // critical, easy to lose, and trivial to re-create locally if the user actually wants them
-    // gone — but server-side stale tombstones (residual from earlier bugs, atomic-write races,
-    // or fresh installs uploading empty defaults) propagated to every device cause cluster-wide
-    // config loss with high recovery cost. Vault notes on the other hand are handled the standard
-    // way (a real deletion on one device should reach others).
-    //
-    // For vault paths we still gate on (a) prior sync history, and (b) absence of a live server
-    // record for the same path.
     for (const path of tombstones) {
-      // Allow tombstones for .obsidian/plugins/* (plugins should sync deletions)
-      // But skip other .obsidian/* paths (workspace, cache, device-specific configs)
       if (path.startsWith('.obsidian/') && !path.startsWith('.obsidian/plugins/')) {
         console.debug(`[VaultSync] Tombstones never auto-apply to .obsidian/* paths (except plugins): ${path}`);
         continue;
       }
       const lastKnownHash = localHashes.get(path);
-      // For plugins, always apply tombstones even if not previously synced
-      // (old plugins installed before vault-sync was active should be removed)
       const isPlugin = path.startsWith('.obsidian/plugins/');
       if (!lastKnownHash && !isPlugin) {
         console.debug(`[VaultSync] Skipping tombstone for never-synced path: ${path}`);
@@ -651,8 +585,6 @@ export class SyncManager {
           await this.localState.deleteFileHash(path);
           deleted++;
         }
-        // If we deleted a .folder-marker, also delete the parent folder if it's now empty
-        // This prevents syncEmptyFolderMarkers from re-creating the marker
         if (path.endsWith('.folder-marker')) {
           const parentPath = path.substring(0, path.lastIndexOf('/'));
           if (parentPath) {
@@ -666,8 +598,6 @@ export class SyncManager {
       }
     }
 
-    // Sync empty folder markers - create markers for empty folders, upload them
-    // Pass tombstones to avoid re-creating markers for folders that server deleted
     const markers = await SyncFilter.syncEmptyFolderMarkers(this.app, tombstones);
     for (const markerPath of markers.created) {
       try {
@@ -686,7 +616,6 @@ export class SyncManager {
       }
     }
 
-    // Clean up empty folders (but not folders with .folder-marker)
     await this.fileOps.cleanupEmptyFolders();
 
     const summary = `Sync complete: ↓${downloaded}${downloadFailed > 0 ? '(❌' + downloadFailed + ')' : ''} ↑${uploaded}${uploadFailed > 0 ? '(❌' + uploadFailed + ')' : ''} ×${deleted}`;
@@ -705,7 +634,6 @@ export class SyncManager {
     }
   }
 
-  // Pending operations queue
   private async queuePendingOperation(type: 'upload' | 'delete', path: string): Promise<void> {
     const op: PendingOperation = {
       id: `${type}-${path}-${Date.now()}`,
@@ -734,7 +662,6 @@ export class SyncManager {
         await this.localState.removePendingOperation(op.id);
       } catch (e) {
         console.error(`[VaultSync] Failed to process pending op:`, op, e);
-        // Keep in queue for retry
       }
     }
   }
@@ -763,7 +690,6 @@ export class SyncManager {
     );
   }
 
-  // Upload by path — works for both vault-indexed files and .obsidian/* via adapter.
   private async uploadByPath(path: string): Promise<void> {
     if (this.isProcessingRemote) return;
     if (!SyncFilter.shouldSync(path)) return;
@@ -797,12 +723,9 @@ export class SyncManager {
     return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
-  // Cleanup
   destroy(): void {
-    // Stop file watcher
     this.fileWatcher.stop();
 
-    // Clear pending timeouts
     for (const timeout of this.pendingChanges.values()) {
       clearTimeout(timeout);
     }

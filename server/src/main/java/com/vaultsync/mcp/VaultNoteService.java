@@ -206,18 +206,14 @@ public class VaultNoteService {
             throw new IllegalArgumentException("Path cannot be null or empty");
         }
 
-        // Normalize separators
         String normalized = relativePath.replace("\\", "/");
 
-        // Check for obvious traversal attempts before resolving
         if (normalized.contains("..") || normalized.startsWith("/") || normalized.contains(":")) {
             throw new SecurityException("Invalid path: path traversal detected in '" + relativePath + "'");
         }
 
-        // Resolve and normalize
         Path resolved = storagePath.resolve(normalized).normalize();
 
-        // Critical security check: resolved path MUST start with storage path
         if (!resolved.startsWith(storagePath)) {
             throw new SecurityException("Invalid path: attempted to access '" + relativePath + "' outside storage directory");
         }
@@ -229,7 +225,6 @@ public class VaultNoteService {
      * Extract title from note content (first heading or filename).
      */
     private String extractTitle(String content, String path) {
-        // Try to find first H1 heading
         String[] lines = content.split("\n", 10);
         for (String line : lines) {
             if (line.startsWith("# ")) {
@@ -237,7 +232,6 @@ public class VaultNoteService {
             }
         }
 
-        // Fall back to filename without extension
         String filename = path;
         int lastSlash = path.lastIndexOf('/');
         if (lastSlash >= 0) {
@@ -271,7 +265,6 @@ public class VaultNoteService {
             snippet.append("...");
         }
 
-        // Clean up newlines for readability
         return snippet.toString().replace("\n", " ").replace("\r", "");
     }
 
@@ -293,7 +286,6 @@ public class VaultNoteService {
      * @throws IllegalArgumentException if path is invalid
      */
     public boolean writeNote(String relativePath, String content) throws IOException {
-        // Ensure .md extension
         String normalizedPath = relativePath;
         if (!normalizedPath.endsWith(".md")) {
             normalizedPath += ".md";
@@ -302,7 +294,6 @@ public class VaultNoteService {
         Path resolvedPath = resolveSafePath(normalizedPath);
         boolean isNew = !Files.exists(resolvedPath);
 
-        // Create parent directories if needed
         Path parent = resolvedPath.getParent();
         if (parent != null && !Files.exists(parent)) {
             Files.createDirectories(parent);
@@ -363,9 +354,8 @@ public class VaultNoteService {
         }
 
         if (recursive) {
-            // Delete folder and all contents recursively
             try (Stream<Path> walk = Files.walk(resolvedPath)) {
-                walk.sorted((p1, p2) -> p2.compareTo(p1)) // Reverse order to delete files before directories
+                walk.sorted((p1, p2) -> p2.compareTo(p1))
                         .forEach(p -> {
                             try {
                                 Files.delete(p);
@@ -381,7 +371,6 @@ public class VaultNoteService {
             }
             log.info("Deleted folder recursively: {}", relativePath);
         } else {
-            // Only delete if empty
             try {
                 Files.delete(resolvedPath);
                 log.info("Deleted empty folder: {}", relativePath);
@@ -419,7 +408,6 @@ public class VaultNoteService {
             throw new IOException("Destination already exists: " + toPath);
         }
 
-        // Create parent directories for destination if needed
         Path parent = resolvedTo.getParent();
         if (parent != null && !Files.exists(parent)) {
             Files.createDirectories(parent);
@@ -442,7 +430,6 @@ public class VaultNoteService {
      * @throws IllegalArgumentException if path is invalid
      */
     public boolean appendNote(String relativePath, String content) throws IOException {
-        // Ensure .md extension
         String normalizedPath = relativePath;
         if (!normalizedPath.endsWith(".md")) {
             normalizedPath += ".md";
@@ -458,7 +445,6 @@ public class VaultNoteService {
             throw new IOException("Path is not a file: " + normalizedPath);
         }
 
-        // Append content to file
         Files.writeString(resolvedPath, content, StandardCharsets.UTF_8,
                 java.nio.file.StandardOpenOption.APPEND);
         log.info("Appended to note: {} ({} chars)", normalizedPath, content.length());
@@ -490,19 +476,16 @@ public class VaultNoteService {
 
         String content = Files.readString(resolvedPath, StandardCharsets.UTF_8);
 
-        // Check if old_string exists
         int firstIndex = content.indexOf(oldString);
         if (firstIndex < 0) {
             throw new IllegalArgumentException("String not found in note: '" + oldString + "'");
         }
 
-        // Check if old_string is unique
         int lastIndex = content.lastIndexOf(oldString);
         if (firstIndex != lastIndex) {
             throw new IllegalArgumentException("String is not unique in note (found multiple occurrences): '" + oldString + "'");
         }
 
-        // Perform replacement
         String newContent = content.replace(oldString, newString);
         Files.writeString(resolvedPath, newContent, StandardCharsets.UTF_8);
         log.info("Edited note: {} (replaced '{}' with '{}')", relativePath,
@@ -587,7 +570,6 @@ public class VaultNoteService {
             throw new IOException("Destination already exists: " + toPath);
         }
 
-        // Create parent directories for destination if needed
         Path parent = resolvedTo.getParent();
         if (parent != null && !Files.exists(parent)) {
             Files.createDirectories(parent);

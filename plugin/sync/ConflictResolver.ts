@@ -46,29 +46,23 @@ export class ConflictResolver {
     server: ServerFileInfo,
     lastKnownHash: string | undefined
   ): SyncAction {
-    // Local file doesn't exist — trust server
     if (!local) {
       return 'download';
     }
 
-    // Hashes match — already in sync
     if (local.hash === server.hash) {
       return 'noop';
     }
 
-    // If we have baseline hash, use three-way merge logic
     if (lastKnownHash !== undefined) {
-      // Only server changed
       if (local.hash === lastKnownHash) {
         return 'download';
       }
-      // Only local changed
       if (server.hash === lastKnownHash) {
         return 'upload';
       }
     }
 
-    // Real conflict: both sides changed from baseline (or no baseline)
     return this.resolveConflict(path, local, server);
   }
 
@@ -81,19 +75,14 @@ export class ConflictResolver {
     local: LocalFileInfo,
     server: ServerFileInfo
   ): SyncAction {
-    // Plugin configs: newest wins (mtime-based)
-    // This allows plugin settings to sync properly across devices
     if (path.startsWith('.obsidian/plugins/') && !SyncFilter.isDeviceSpecific(path)) {
       return server.mtime > local.mtime ? 'download' : 'upload';
     }
 
-    // Other .obsidian/* paths (workspace, core settings, etc.): local wins
-    // mtime on these configs is unreliable across devices
     if (path.startsWith('.obsidian/')) {
       return 'upload';
     }
 
-    // Vault-indexed files: mtime tiebreaker
     return server.mtime > local.mtime ? 'download' : 'upload';
   }
 }

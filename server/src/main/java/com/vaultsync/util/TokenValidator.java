@@ -9,7 +9,6 @@ import java.security.MessageDigest;
 public final class TokenValidator {
 
     private TokenValidator() {
-        // Utility class
     }
 
     /**

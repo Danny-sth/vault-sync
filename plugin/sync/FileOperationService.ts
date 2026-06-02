@@ -65,10 +65,8 @@ export class FileOperationService {
         try {
           await this.app.vault.createFolder(currentPath);
         } catch (e: any) {
-          // Ignore "folder already exists" errors (race condition with parallel downloads)
           const msg = e?.message?.toLowerCase() || '';
           if (!msg.includes('already exists') && !msg.includes('folder exists')) {
-            // Check again if folder exists now - if yes, it's fine
             if (!this.app.vault.getAbstractFileByPath(currentPath)) {
               throw e;
             }
@@ -83,31 +81,28 @@ export class FileOperationService {
    */
   async cleanupEmptyParentFolders(filePath: string): Promise<void> {
     const parts = filePath.split('/');
-    parts.pop(); // Remove filename
+    parts.pop();
 
     while (parts.length > 0) {
       const folderPath = parts.join('/');
 
       try {
-        // Use adapter API to check folder contents (works for non-indexed folders)
         const listing = await this.app.vault.adapter.list(folderPath);
         const isEmpty = listing.files.length === 0 && listing.folders.length === 0;
 
         if (isEmpty) {
-          // Try vault API first (for indexed folders)
           const folder = this.app.vault.getAbstractFileByPath(folderPath);
           if (folder instanceof TFolder) {
             await this.app.vault.delete(folder);
           } else {
-            // Use adapter for non-indexed folders
             await this.app.vault.adapter.rmdir(folderPath, false);
           }
           console.debug(`[FileOperationService] Deleted empty parent folder: ${folderPath}`);
         } else {
-          break; // Folder not empty, stop
+          break;
         }
       } catch (e) {
-        break; // Stop on any error
+        break;
       }
 
       parts.pop();
@@ -122,7 +117,6 @@ export class FileOperationService {
   async cleanupEmptyFolders(): Promise<number> {
     const deletedFolders: string[] = [];
 
-    // Get all folders sorted by depth (deepest first)
     const allFolders: TFolder[] = [];
     const collectFolders = (folder: TFolder) => {
       for (const child of folder.children) {
@@ -134,21 +128,16 @@ export class FileOperationService {
     };
     collectFolders(this.app.vault.getRoot());
 
-    // Sort by path length descending (deepest first)
     allFolders.sort((a, b) => b.path.length - a.path.length);
 
     for (const folder of allFolders) {
-      // Skip hidden folders
       if (folder.path.startsWith('.') || folder.path.includes('/.')) continue;
 
-      // Check if folder is empty using adapter (to catch hidden files like .folder-marker)
       try {
         const listing = await this.app.vault.adapter.list(folder.path);
         const hasRealFiles = listing.files.some(f => !f.endsWith('.folder-marker'));
         const hasSubfolders = listing.folders.length > 0;
 
-        // Only delete if truly empty (no real files and no subfolders)
-        // Folders with .folder-marker are kept
         if (!hasRealFiles && !hasSubfolders && listing.files.length === 0) {
           await this.app.vault.delete(folder);
           deletedFolders.push(folder.path);

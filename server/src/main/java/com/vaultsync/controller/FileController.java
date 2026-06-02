@@ -42,7 +42,6 @@ public class FileController {
             long seq = syncService.nextSeq();
             FileRecord record = fileStorageService.store(path, file, hash, deviceId, seq);
 
-            // Broadcast change to WebSocket clients
             SyncMessage.FileChanged changeMsg = SyncMessage.FileChanged.builder()
                     .path(path)
                     .hash(record.getHash())
@@ -83,7 +82,6 @@ public class FileController {
                     request.path(), content, request.hash(), deviceId, seq, request.mtime()
             );
 
-            // Broadcast change to WebSocket clients
             SyncMessage.FileChanged changeMsg = SyncMessage.FileChanged.builder()
                     .path(request.path())
                     .hash(record.getHash())
@@ -122,7 +120,6 @@ public class FileController {
             @RequestHeader("X-Device-Id") String deviceId,
             jakarta.servlet.http.HttpServletRequest request) {
 
-        // Extract path from URL and decode URL-encoded characters (e.g., Cyrillic)
         String rawPath = request.getRequestURI().substring("/api/download/".length());
         String path = java.net.URLDecoder.decode(rawPath, java.nio.charset.StandardCharsets.UTF_8);
 
@@ -163,7 +160,6 @@ public class FileController {
         String path = java.net.URLDecoder.decode(rawPath, java.nio.charset.StandardCharsets.UTF_8);
 
         try {
-            // processFileDelete handles: DB removal, physical deletion, tombstone creation
             SyncMessage.FileDeleted deleteMsg = syncService.processFileDelete(path, deviceId);
             syncService.broadcastFileDelete(deleteMsg);
 
@@ -186,7 +182,6 @@ public class FileController {
             @RequestHeader("X-Device-Id") String deviceId) {
 
         try {
-            // processFileDelete handles: DB removal, physical deletion, tombstone creation
             SyncMessage.FileDeleted deleteMsg = syncService.processFileDelete(request.path(), deviceId);
             syncService.broadcastFileDelete(deleteMsg);
 

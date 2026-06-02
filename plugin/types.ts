@@ -1,4 +1,3 @@
-// Server -> Client messages
 export interface FileChangedMessage {
   type: 'file_changed';
   path: string;
@@ -38,7 +37,6 @@ export interface TombstoneInfo {
   seq: number;
 }
 
-// Client -> Server messages
 export interface FileChangeRequest {
   path: string;
   hash: string;
@@ -58,10 +56,8 @@ export interface SyncRequest {
   deviceId: string;
 }
 
-// Unified server message type
 export type ServerMessage = FileChangedMessage | FileDeletedMessage | SyncResponse;
 
-// Pending operation for offline queue
 export interface PendingOperation {
   id: string;
   type: 'upload' | 'delete';
@@ -70,7 +66,6 @@ export interface PendingOperation {
   retries: number;
 }
 
-// Plugin settings
 export interface VaultSyncSettings {
   serverUrl: string;
   token: string;
@@ -86,7 +81,7 @@ export interface VaultSyncSettings {
 }
 
 export const DEFAULT_SETTINGS: VaultSyncSettings = {
-  serverUrl: '',  // User must configure server URL
+  serverUrl: '',
   token: '',
   deviceId: `device-${Math.random().toString(36).substring(2, 10)}`,
   deviceName: '',
@@ -95,9 +90,8 @@ export const DEFAULT_SETTINGS: VaultSyncSettings = {
   debounceMs: 500,
   reconnectDelayMs: 5000,
   heartbeatIntervalMs: 10000,
-  syncTimeoutMs: 120000,  // 2 minutes for large vaults
+  syncTimeoutMs: 120000,
   retryAttempts: 3,
 };
 
-// Connection state
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
