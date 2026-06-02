@@ -34,9 +34,9 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Bean
     public ServletServerContainerFactoryBean createWebSocketContainer() {
         ServletServerContainerFactoryBean container = new ServletServerContainerFactoryBean();
-        container.setMaxTextMessageBufferSize(4 * 1024 * 1024);  // 4MB for large sync responses
-        container.setMaxBinaryMessageBufferSize(4 * 1024 * 1024); // 4MB
-        container.setMaxSessionIdleTimeout(600000L); // 10 minutes
+        container.setMaxTextMessageBufferSize(4 * 1024 * 1024);
+        container.setMaxBinaryMessageBufferSize(4 * 1024 * 1024);
+        container.setMaxSessionIdleTimeout(600000L);
         return container;
     }
 
@@ -54,14 +54,10 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
-        // Enable simple broker for subscriptions with heartbeat
-        // Using 60 seconds heartbeat to allow time for large sync responses (5000+ files)
         config.enableSimpleBroker("/topic", "/queue")
-              .setHeartbeatValue(new long[] {60000, 60000})  // server-to-client, client-to-server (ms)
+              .setHeartbeatValue(new long[] {60000, 60000})
               .setTaskScheduler(heartbeatScheduler());
-        // Prefix for messages FROM clients
         config.setApplicationDestinationPrefixes("/app");
-        // Prefix for user-specific messages
         config.setUserDestinationPrefix("/user");
     }
 
@@ -69,7 +65,6 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         registry.addEndpoint("/ws")
                 .setAllowedOriginPatterns("*");
-        // SockJS fallback for browsers that don't support WebSocket
         registry.addEndpoint("/ws")
                 .setAllowedOriginPatterns("*")
                 .withSockJS();
@@ -77,10 +72,9 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void configureWebSocketTransport(WebSocketTransportRegistration registration) {
-        // Increase buffer sizes for large sync responses (5000+ files = several MB)
-        registration.setSendBufferSizeLimit(4 * 1024 * 1024);  // 4MB send buffer
-        registration.setMessageSizeLimit(4 * 1024 * 1024);     // 4MB message size
-        registration.setSendTimeLimit(120 * 1000);              // 120 seconds send timeout (mobile networks are slow)
+        registration.setSendBufferSizeLimit(4 * 1024 * 1024);
+        registration.setMessageSizeLimit(4 * 1024 * 1024);
+        registration.setSendTimeLimit(120 * 1000);
     }
 
     @Override
@@ -98,7 +92,6 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                         throw new SecurityException("Invalid authentication token");
                     }
 
-                    // Set user principal for user-specific messaging
                     if (deviceId != null && !deviceId.isBlank()) {
                         accessor.setUser(new DevicePrincipal(deviceId));
                     }

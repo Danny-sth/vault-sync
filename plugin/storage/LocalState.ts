@@ -28,34 +28,25 @@ export class LocalState {
         const db = (event.target as IDBOpenDBRequest).result;
         const oldVersion = event.oldVersion;
 
-        // Migration: version 0 -> 1 (fresh install or first schema)
         if (oldVersion < 1) {
-          // Store for simple key-value state (lastSeq, etc)
           if (!db.objectStoreNames.contains(STORE_STATE)) {
             db.createObjectStore(STORE_STATE);
           }
 
-          // Store for file hashes
           if (!db.objectStoreNames.contains(STORE_HASHES)) {
             db.createObjectStore(STORE_HASHES);
           }
 
-          // Store for pending operations (offline queue)
           if (!db.objectStoreNames.contains(STORE_PENDING)) {
             const store = db.createObjectStore(STORE_PENDING, { keyPath: 'id' });
             store.createIndex('timestamp', 'timestamp', { unique: false });
           }
         }
 
-        // Future migrations:
-        // if (oldVersion < 2) {
-        //   // Migration from v1 to v2
-        // }
       };
     });
   }
 
-  // Generic state operations
   private async get<T>(store: string, key: string): Promise<T | null> {
     if (!this.db) throw new Error('Database not initialized');
 
@@ -92,7 +83,6 @@ export class LocalState {
     });
   }
 
-  // Sequence number
   async getLastSeq(): Promise<number> {
     return (await this.get<number>(STORE_STATE, 'lastSeq')) ?? 0;
   }
@@ -101,7 +91,6 @@ export class LocalState {
     await this.set(STORE_STATE, 'lastSeq', seq);
   }
 
-  // File hashes
   async getFileHash(path: string): Promise<string | null> {
     return this.get<string>(STORE_HASHES, path);
   }
@@ -135,7 +124,6 @@ export class LocalState {
     });
   }
 
-  // Pending operations queue
   async addPendingOperation(op: PendingOperation): Promise<void> {
     if (!this.db) throw new Error('Database not initialized');
 
@@ -176,7 +164,6 @@ export class LocalState {
     });
   }
 
-  // Cleanup
   close(): void {
     if (this.db) {
       this.db.close();

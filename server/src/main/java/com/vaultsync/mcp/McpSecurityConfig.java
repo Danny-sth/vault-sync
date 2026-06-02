@@ -68,22 +68,17 @@ public class McpSecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                // RFC 9728: Protected Resource Metadata must be public
                 .requestMatchers(HttpMethod.GET, "/.well-known/oauth-protected-resource").permitAll()
-                // RFC 8414: Authorization Server Metadata must be public
                 .requestMatchers(HttpMethod.GET, "/.well-known/oauth-authorization-server").permitAll()
-                // All MCP endpoints require OAuth2 JWT (/api/v1/commands/** uses simple token auth)
                 .requestMatchers("/mcp/**", "/sse").authenticated()
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2
                 .jwt(jwt -> {})
-                // Custom 401 response with WWW-Authenticate header (RFC 9728)
                 .authenticationEntryPoint((request, response, authException) -> {
                     log.warn("MCP auth failed: {} from {}", authException.getMessage(), request.getRemoteAddr());
                     response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                     response.setContentType("application/json");
-                    // RFC 9728: Include resource_metadata URL in WWW-Authenticate
                     response.setHeader("WWW-Authenticate",
                         "Bearer resource_metadata=\"" + resourceUrl + "/.well-known/oauth-protected-resource\"");
                     response.getWriter().write(
@@ -102,10 +97,6 @@ public class McpSecurityConfig {
      */
     @Bean
     public JwtDecoder jwtDecoder() {
-        // Lazy delegate: the real Nimbus decoder (which fetches OIDC discovery
-        // from Keycloak) is built on the FIRST token validation, not at startup.
-        // Spring Security's fromIssuerLocation/withIssuerLocation resolve eagerly,
-        // which crash-looped the whole sync server whenever Keycloak was down.
         return new JwtDecoder() {
             private volatile JwtDecoder delegate;
 
@@ -129,15 +120,12 @@ public class McpSecurityConfig {
     private JwtDecoder buildDecoder() {
         NimbusJwtDecoder decoder = JwtDecoders.fromIssuerLocation(issuerUri);
 
-        // Add audience validator
         decoder.setJwtValidator(token -> {
-            // First validate standard claims (issuer, expiration, etc.)
             var defaultResult = JwtValidators.createDefaultWithIssuer(issuerUri).validate(token);
             if (defaultResult.hasErrors()) {
                 return defaultResult;
             }
 
-            // Then validate audience
             var audience = token.getAudience();
             if (audience == null || !audience.contains(requiredAudience)) {
                 log.warn("Token rejected: missing required audience '{}', got: {}", requiredAudience, audience);

@@ -32,25 +32,20 @@ public class FileStorageService {
     public FileRecord store(String path, MultipartFile file, String expectedHash, String deviceId, long seq) throws IOException {
         Path targetPath = getFullPath(path);
 
-        // Create parent directories if needed
         Files.createDirectories(targetPath.getParent());
 
-        // Write file
         try (InputStream is = file.getInputStream()) {
             Files.copy(is, targetPath, StandardCopyOption.REPLACE_EXISTING);
         }
 
-        // Compute hash
         String actualHash = HashUtil.sha256(targetPath);
         if (expectedHash != null && !expectedHash.equals(actualHash)) {
             log.warn("Hash mismatch for {}: expected={}, actual={}", path, expectedHash, actualHash);
         }
 
-        // Get file info
         long size = Files.size(targetPath);
         long mtime = Files.getLastModifiedTime(targetPath).toMillis();
 
-        // Save to database
         FileRecord record = FileRecord.builder()
                 .path(path)
                 .hash(actualHash)
@@ -67,23 +62,18 @@ public class FileStorageService {
     public FileRecord storeBytes(String path, byte[] content, String expectedHash, String deviceId, long seq, long mtime) throws IOException {
         Path targetPath = getFullPath(path);
 
-        // Create parent directories if needed
         Files.createDirectories(targetPath.getParent());
 
-        // Write file
         Files.write(targetPath, content, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
-        // Compute hash
         String actualHash = HashUtil.sha256(content);
         if (expectedHash != null && !expectedHash.isEmpty() && !expectedHash.equals(actualHash)) {
             log.warn("Hash mismatch for {}: expected={}, actual={}", path, expectedHash, actualHash);
         }
 
-        // Get file info
         long size = content.length;
         long actualMtime = mtime > 0 ? mtime : System.currentTimeMillis();
 
-        // Save to database
         FileRecord record = FileRecord.builder()
                 .path(path)
                 .hash(actualHash)
@@ -119,7 +109,6 @@ public class FileStorageService {
         Files.deleteIfExists(filePath);
         fileRepository.deleteById(path);
 
-        // Clean up empty parent directories
         cleanupEmptyParentDirectories(filePath.getParent());
     }
 
@@ -154,7 +143,6 @@ public class FileStorageService {
     }
 
     private Path getFullPath(String relativePath) {
-        // Normalize path and prevent directory traversal
         String normalized = relativePath.replace("\\", "/");
         if (normalized.contains("..")) {
             throw new IllegalArgumentException("Invalid path: " + relativePath);

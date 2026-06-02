@@ -155,18 +155,15 @@ export class FileIcons {
         }
       }
       if (shouldUpdate) {
-        // Debounce updates
         requestAnimationFrame(() => this.applyAllIcons());
       }
     });
 
-    // Observe file explorer containers
     const containers = document.querySelectorAll('.nav-files-container, .tree-item-children');
     containers.forEach(container => {
       this.observer?.observe(container, { childList: true, subtree: true });
     });
 
-    // Also observe workspace for view changes
     const workspace = document.querySelector('.workspace');
     if (workspace) {
       this.observer.observe(workspace, { childList: true, subtree: true });
@@ -177,7 +174,6 @@ export class FileIcons {
    * Apply icons to all visible files and folders.
    */
   applyAllIcons(): void {
-    // Find all file items in file explorer
     const fileItems = document.querySelectorAll('.nav-file-title, .tree-item-self');
     fileItems.forEach(item => {
       const el = item as HTMLElement;
@@ -195,7 +191,6 @@ export class FileIcons {
       this.applyIconToElement(el, iconName);
     });
 
-    // Find all folder items in file explorer
     const folderItems = document.querySelectorAll('.nav-folder-title');
     folderItems.forEach(item => {
       const el = item as HTMLElement;
@@ -220,20 +215,17 @@ export class FileIcons {
       return;
     }
 
-    // Create icon element
     const iconEl = document.createElement('span');
     iconEl.className = 'vault-sync-file-icon';
     iconEl.innerHTML = iconHtml;
 
     if (isFolder) {
-      // For folders, insert before the title content
       const content = el.querySelector('.nav-folder-title-content');
       if (content) {
         content.parentElement?.insertBefore(iconEl, content);
         el.classList.add('has-vault-sync-icon');
       }
     } else {
-      // For files
       const content = el.querySelector('.nav-file-title-content, .tree-item-inner');
       if (content) {
         content.parentElement?.insertBefore(iconEl, content);
@@ -246,22 +238,18 @@ export class FileIcons {
    * Get HTML for an icon (SVG for Lucide/Brand/Dev, span for emoji).
    */
   private getIconHtml(iconName: string): string | null {
-    // Check Lucide icons (stroke-based)
     if (LUCIDE_ICONS[iconName]) {
       return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${LUCIDE_ICONS[iconName]}</svg>`;
     }
 
-    // Check Brand icons (fill-based)
     if (BRAND_ICONS[iconName]) {
       return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="vault-sync-fill-icon">${BRAND_ICONS[iconName]}</svg>`;
     }
 
-    // Check Dev icons (fill-based)
     if (DEV_ICONS[iconName]) {
       return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="vault-sync-fill-icon">${DEV_ICONS[iconName]}</svg>`;
     }
 
-    // Assume it's an emoji if it contains emoji characters
     if (/\p{Emoji}/u.test(iconName)) {
       return `<span class="vault-sync-emoji-icon">${iconName}</span>`;
     }
@@ -277,11 +265,9 @@ export class FileIcons {
     fileItems.forEach(item => {
       const el = item as HTMLElement;
 
-      // Remove existing icon
       el.querySelector('.vault-sync-file-icon')?.remove();
       el.classList.remove('has-vault-sync-icon');
 
-      // Get new icon
       const file = this.app.vault.getAbstractFileByPath(filePath);
       if (!(file instanceof TFile)) return;
 
@@ -302,11 +288,9 @@ export class FileIcons {
     folderItems.forEach(item => {
       const el = item as HTMLElement;
 
-      // Remove existing icon
       el.querySelector('.vault-sync-file-icon')?.remove();
       el.classList.remove('has-vault-sync-icon');
 
-      // Get new icon
       const iconName = this.folderIcons[folderPath];
       if (iconName) {
         this.applyIconToElement(el, iconName, true);

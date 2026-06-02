@@ -53,9 +53,9 @@ export class StompClient {
 
         webSocketFactory: () => new WebSocket(serverUrl),
 
-        reconnectDelay: 10000,         // Wait 10 seconds before reconnecting (was 5s - too aggressive)
-        heartbeatIncoming: 60000,      // 60 seconds - must match server heartbeat for large sync responses
-        heartbeatOutgoing: 60000,      // 60 seconds
+        reconnectDelay: 10000,
+        heartbeatIncoming: 60000,
+        heartbeatOutgoing: 60000,
 
         onConnect: () => {
           this.connectionHandler?.('connected');
@@ -90,12 +90,10 @@ export class StompClient {
   private setupSubscriptions(): void {
     if (!this.client || !this.client.connected) return;
 
-    // Subscribe to broadcast channel
     const broadcastSub = this.client.subscribe('/topic/sync', (message: IMessage) => {
       try {
         const data = JSON.parse(message.body) as ServerMessage;
 
-        // Skip messages from this device
         if ('deviceId' in data && data.deviceId === this.deviceId) {
           return;
         }
@@ -107,7 +105,6 @@ export class StompClient {
     });
     this.subscriptions.push(broadcastSub);
 
-    // Subscribe to private sync response queue
     const syncSub = this.client.subscribe('/user/queue/sync', (message: IMessage) => {
       console.debug('[VaultSync] Received sync response message');
       try {
@@ -129,15 +126,12 @@ export class StompClient {
     });
     this.subscriptions.push(syncSub);
 
-    // Subscribe to pong for heartbeat
     const pongSub = this.client.subscribe('/user/queue/pong', () => {
-      // Heartbeat received
     });
     this.subscriptions.push(pongSub);
   }
 
   disconnect(): void {
-    // Cancel all pending requests
     for (const [requestId, pending] of this.pendingRequests) {
       clearTimeout(pending.timeout);
       pending.reject(new Error('Disconnected'));
@@ -196,11 +190,10 @@ export class StompClient {
       const timeout = setTimeout(() => {
         this.pendingRequests.delete(requestId);
         reject(new Error('Sync request timeout'));
-      }, 120000);  // 2 minutes timeout for large vaults
+      }, 120000);
 
       this.pendingRequests.set(requestId, { resolve, reject, timeout });
 
-      // Send sync request with requestId
       this.client!.publish({
         destination: '/app/sync.request',
         body: JSON.stringify({

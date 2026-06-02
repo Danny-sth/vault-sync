@@ -14,7 +14,6 @@ public class JacksonConfig {
     public ObjectMapper objectMapper() {
         ObjectMapper mapper = new ObjectMapper();
 
-        // Increase max string length to 50MB for large base64 encoded files
         mapper.getFactory().setStreamReadConstraints(
             StreamReadConstraints.builder()
                 .maxStringLength(50_000_000)

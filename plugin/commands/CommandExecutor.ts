@@ -59,13 +59,13 @@ export class CommandExecutor {
       }
       for (const entry of entries) {
         if (entry.name.startsWith('.')) {
-          continue; // skip .obsidian, .git, etc.
+          continue;
         }
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) {
           walk(full);
         } else if (entry.isFile() && entry.name.endsWith('.sh')) {
-          const name = entry.name.slice(0, -3); // strip ".sh"
+          const name = entry.name.slice(0, -3);
           if (!this.scripts.has(name)) {
             this.scripts.set(name, full);
           }
@@ -98,7 +98,6 @@ export class CommandExecutor {
       return { success: false, stdout: '', stderr: '', exitCode: -1, error: String(e) };
     }
 
-    // Resolve the script path (rescan if registry is empty, e.g. after reload).
     let scriptPath = this.scripts.get(commandName);
     if (!scriptPath) {
       await this.getAvailableCommands();

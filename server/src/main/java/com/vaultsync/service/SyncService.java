@@ -39,18 +39,15 @@ public class SyncService {
 
     private final AtomicLong sequenceCounter = new AtomicLong(0);
 
-    // Directories to exclude from sync (system/IDE/temp folders)
     private static final Set<String> EXCLUDED_DIRS = Set.of(
             ".git", ".idea", ".smart-env", ".DS_Store", "node_modules"
     );
 
-    // File patterns to exclude
     private static final Set<String> EXCLUDED_PATTERNS = Set.of(
             ".DS_Store", "Thumbs.db", ".tmp", ".temp"
     );
 
     private boolean shouldExcludePath(String path) {
-        // Check excluded directories
         for (String excluded : EXCLUDED_DIRS) {
             if (path.startsWith(excluded + "/") || path.equals(excluded)) {
                 return true;
@@ -59,7 +56,6 @@ public class SyncService {
                 return true;
             }
         }
-        // Check excluded patterns
         for (String pattern : EXCLUDED_PATTERNS) {
             if (path.contains(pattern)) {
                 return true;
@@ -75,7 +71,6 @@ public class SyncService {
     @jakarta.annotation.PostConstruct
     public void init() {
         initializeSequenceCounter();
-        // Scan existing files if database is empty
         if (fileRepository.count() == 0) {
             scanExistingFiles();
         }
@@ -83,7 +78,6 @@ public class SyncService {
 
     @Transactional(readOnly = true)
     protected void initializeSequenceCounter() {
-        // Initialize sequence counter from database (transactional to ensure consistency)
         long maxFileSeq = fileRepository.findMaxSeq();
         long maxTombstoneSeq = tombstoneRepository.findMaxSeq();
         sequenceCounter.set(Math.max(maxFileSeq, maxTombstoneSeq));
@@ -107,18 +101,15 @@ public class SyncService {
                     try {
                         String relativePath = root.relativize(file).toString().replace("\\", "/");
 
-                        // Check exclusion list instead of skipping all hidden files
                         if (shouldExcludePath(relativePath)) {
                             return FileVisitResult.CONTINUE;
                         }
 
-                        // Compute hash
                         byte[] content = Files.readAllBytes(file);
                         String hash = HashUtil.sha256(content);
                         long mtime = attrs.lastModifiedTime().toMillis();
                         long size = attrs.size();
 
-                        // Save to database
                         long seq = nextSeq();
                         FileRecord record = FileRecord.builder()
                                 .path(relativePath)
@@ -143,7 +134,6 @@ public class SyncService {
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
                     String name = dir.getFileName() != null ? dir.getFileName().toString() : "";
-                    // Only skip explicitly excluded directories, not all hidden dirs
                     if (shouldExcludeDir(name)) {
                         return FileVisitResult.SKIP_SUBTREE;
                     }
@@ -169,10 +159,8 @@ public class SyncService {
     public SyncMessage.FileChanged processFileChange(String path, String hash, long mtime, long size, String deviceId) {
         long seq = nextSeq();
 
-        // Remove from tombstones if exists
         tombstoneRepository.deleteById(path);
 
-        // Update or create file record
         FileRecord record = FileRecord.builder()
                 .path(path)
                 .hash(hash)
@@ -185,7 +173,6 @@ public class SyncService {
 
         log.info("File changed: {} by {} (seq={})", path, deviceId, seq);
 
-        // Create broadcast message
         return SyncMessage.FileChanged.builder()
                 .path(path)
                 .hash(hash)
@@ -200,22 +187,18 @@ public class SyncService {
     public SyncMessage.FileDeleted processFileDelete(String path, String deviceId) {
         long seq = nextSeq();
 
-        // Remove file record
         fileRepository.deleteById(path);
 
-        // Delete file from disk
         try {
             Path filePath = Paths.get(storagePath).resolve(path);
             if (Files.deleteIfExists(filePath)) {
                 log.debug("Physically deleted file: {}", path);
-                // Clean up empty parent directories
                 cleanupEmptyParentDirectories(filePath.getParent());
             }
         } catch (IOException e) {
             log.warn("Could not delete file from disk: {} - {}", path, e.getMessage());
         }
 
-        // Create tombstone
         Tombstone tombstone = Tombstone.builder()
                 .path(path)
                 .deletedAt(System.currentTimeMillis())
@@ -317,7 +300,6 @@ public class SyncService {
         messagingTemplate.convertAndSend("/topic/sync", message);
     }
 
-    // Clean up old tombstones every hour
     @Scheduled(fixedRate = 3600000)
     @Transactional
     public void cleanupTombstones() {
@@ -328,8 +310,7 @@ public class SyncService {
         }
     }
 
-    // Periodic filesystem scan - detects files added/modified/deleted directly on disk
-    @Scheduled(fixedRate = 30000) // Every 30 seconds
+    @Scheduled(fixedRate = 30000)
     @Transactional
     public void periodicFilesystemScan() {
         Path root = Paths.get(storagePath);
@@ -341,7 +322,6 @@ public class SyncService {
         AtomicInteger modified = new AtomicInteger(0);
         AtomicInteger deleted = new AtomicInteger(0);
 
-        // Track files found on disk
         java.util.Set<String> diskFiles = new java.util.HashSet<>();
 
         try {
@@ -351,26 +331,21 @@ public class SyncService {
                     try {
                         String relativePath = root.relativize(file).toString().replace("\\", "/");
 
-                        // Check exclusion list instead of skipping all hidden files
                         if (shouldExcludePath(relativePath)) {
                             return FileVisitResult.CONTINUE;
                         }
 
                         diskFiles.add(relativePath);
 
-                        // Check if file exists in database
                         var existingRecord = fileRepository.findById(relativePath);
                         long diskMtime = attrs.lastModifiedTime().toMillis();
 
                         if (existingRecord.isEmpty()) {
-                            // If there's a tombstone but file exists on disk, the file was re-created
-                            // Remove tombstone and treat as new file
                             if (tombstoneRepository.existsById(relativePath)) {
                                 tombstoneRepository.deleteById(relativePath);
                                 log.info("Removed stale tombstone for re-created file: {}", relativePath);
                             }
 
-                            // New file on disk - add to database and broadcast
                             byte[] content = Files.readAllBytes(file);
                             String hash = HashUtil.sha256(content);
                             long size = attrs.size();
@@ -386,7 +361,6 @@ public class SyncService {
                                     .build();
                             fileRepository.save(record);
 
-                            // Broadcast to connected clients
                             SyncMessage.FileChanged changeMsg = SyncMessage.FileChanged.builder()
                                     .path(relativePath)
                                     .hash(hash)
@@ -401,14 +375,11 @@ public class SyncService {
                             log.info("Filesystem scan: new file detected: {}", relativePath);
 
                         } else {
-                            // File exists - check if modified (mtime changed)
                             FileRecord existing = existingRecord.get();
-                            if (Math.abs(existing.getMtime() - diskMtime) > 1000) { // 1 second tolerance
-                                // File modified on disk
+                            if (Math.abs(existing.getMtime() - diskMtime) > 1000) {
                                 byte[] content = Files.readAllBytes(file);
                                 String hash = HashUtil.sha256(content);
 
-                                // Only update if hash actually changed
                                 if (!hash.equals(existing.getHash())) {
                                     long size = attrs.size();
                                     long seq = nextSeq();
@@ -423,7 +394,6 @@ public class SyncService {
                                             .build();
                                     fileRepository.save(record);
 
-                                    // Broadcast to connected clients
                                     SyncMessage.FileChanged changeMsg = SyncMessage.FileChanged.builder()
                                             .path(relativePath)
                                             .hash(hash)
@@ -448,7 +418,6 @@ public class SyncService {
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
                     String name = dir.getFileName() != null ? dir.getFileName().toString() : "";
-                    // Only skip explicitly excluded directories, not all hidden dirs
                     if (shouldExcludeDir(name)) {
                         return FileVisitResult.SKIP_SUBTREE;
                     }
@@ -456,11 +425,9 @@ public class SyncService {
                 }
             });
 
-            // Check for files in database that no longer exist on disk
             List<FileRecord> dbFiles = fileRepository.findAll();
             for (FileRecord dbFile : dbFiles) {
                 if (!diskFiles.contains(dbFile.getPath())) {
-                    // File deleted from disk - remove from DB and broadcast tombstone
                     long seq = nextSeq();
                     fileRepository.deleteById(dbFile.getPath());
 
@@ -472,7 +439,6 @@ public class SyncService {
                             .build();
                     tombstoneRepository.save(tombstone);
 
-                    // Broadcast deletion
                     SyncMessage.FileDeleted deleteMsg = SyncMessage.FileDeleted.builder()
                             .path(dbFile.getPath())
                             .seq(seq)
@@ -493,7 +459,6 @@ public class SyncService {
             log.info("Filesystem scan complete: {} added, {} modified, {} deleted", added.get(), modified.get(), deleted.get());
         }
 
-        // Sync empty folder markers
         syncEmptyFolderMarkers();
     }
 
@@ -539,7 +504,6 @@ public class SyncService {
                         Path markerPath = dir.resolve(FOLDER_MARKER);
                         String markerRelativePath = root.relativize(markerPath).toString().replace("\\", "/");
 
-                        // Count real files (not .folder-marker)
                         long realFileCount;
                         long subdirCount;
                         try (var stream = Files.list(dir)) {
@@ -555,12 +519,10 @@ public class SyncService {
                         boolean markerExists = Files.exists(markerPath);
 
                         if (realFileCount == 0 && subdirCount == 0) {
-                            // Empty folder - create marker if not exists
                             if (!markerExists) {
                                 Files.createFile(markerPath);
                                 log.info("Created folder marker: {}", markerRelativePath);
 
-                                // Add to database and broadcast
                                 long seq = nextSeq();
                                 String hash = HashUtil.sha256(new byte[0]);
                                 FileRecord record = FileRecord.builder()
@@ -585,7 +547,6 @@ public class SyncService {
                                 markersCreated.incrementAndGet();
                             }
                         } else if (markerExists) {
-                            // Non-empty folder - remove marker
                             Files.delete(markerPath);
                             fileRepository.deleteById(markerRelativePath);
 

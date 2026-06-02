@@ -9,7 +9,6 @@ import java.util.List;
 
 public class SyncMessage {
 
-    // Client -> Server messages
     @Data
     @Builder
     @NoArgsConstructor
@@ -41,7 +40,6 @@ public class SyncMessage {
         private String deviceId;
     }
 
-    // Server -> Client messages
     @Data
     @Builder
     @NoArgsConstructor

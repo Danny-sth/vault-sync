@@ -13,7 +13,6 @@ import java.util.HexFormat;
 public final class HashUtil {
 
     private HashUtil() {
-        // Utility class
     }
 
     /**

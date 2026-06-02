@@ -122,7 +122,7 @@ public class DailyNoteScheduler {
                 return;
             }
             LocalDate now = LocalDate.now(ZoneId.of(timezone));
-            String currentMonth = monthFolder(now.getMonthValue(), now.getYear()); // e.g. June.2026
+            String currentMonth = monthFolder(now.getMonthValue(), now.getYear());
 
             List<Path> files;
             try (var stream = Files.list(dailyDir)) {
@@ -133,11 +133,11 @@ public class DailyNoteScheduler {
             for (Path p : files) {
                 Matcher m = NOTE_NAME.matcher(p.getFileName().toString());
                 if (!m.matches()) {
-                    continue; // not a daily note (Templates/, other files)
+                    continue;
                 }
                 String month = monthFolder(Integer.parseInt(m.group(2)), Integer.parseInt(m.group(3)));
                 if (month.equals(currentMonth)) {
-                    continue; // current month stays in the root
+                    continue;
                 }
                 Path archiveDir = dailyDir.resolve(month);
                 Files.createDirectories(archiveDir);
@@ -150,7 +150,6 @@ public class DailyNoteScheduler {
                 log.info("[DailyNote] ({}) archived {} past-month note(s)", trigger, moved);
             }
 
-            // Ensure every existing month-archive folder has its icon (backfill).
             try (var dirs = Files.list(dailyDir)) {
                 dirs.filter(Files::isDirectory)
                     .filter(d -> isMonthFolder(d.getFileName().toString()))
@@ -193,7 +192,7 @@ public class DailyNoteScheduler {
                 }
             }
             if (iconName.equals(icons.get(folderPath))) {
-                return; // already set, no rewrite (avoids needless sync churn)
+                return;
             }
             icons.put(folderPath, iconName);
             Files.createDirectories(iconsFile.getParent());

@@ -65,21 +65,17 @@ export class DailyNotes {
     const filename = today.format(this.settings.format) + '.md';
     const filePath = `${this.settings.folder}/${filename}`;
 
-    // Check if exists
     const existing = this.app.vault.getAbstractFileByPath(filePath);
     if (existing instanceof TFile) {
       console.debug('[VaultSync:DailyNotes] Already exists:', filePath);
       return existing;
     }
 
-    // Ensure folder exists
     await this.ensureFolder(this.settings.folder);
 
-    // Get template and replace placeholders
     let content = await this.getTemplateContent();
     content = this.replacePlaceholders(content, today);
 
-    // Create file
     try {
       const file = await this.app.vault.create(filePath, content);
       console.debug('[VaultSync:DailyNotes] Created:', filePath);
@@ -104,7 +100,6 @@ export class DailyNotes {
         try {
           await this.app.vault.createFolder(current);
         } catch {
-          // May already exist
         }
       }
     }
@@ -134,16 +129,12 @@ export class DailyNotes {
    * Replace {{date:FORMAT}}, {{time:FORMAT}} placeholders.
    */
   private replacePlaceholders(content: string, date: moment.Moment): string {
-    // {{date:FORMAT}}
     content = content.replace(/\{\{date:([^}]+)\}\}/g, (_, fmt) => date.format(fmt));
 
-    // {{date}}
     content = content.replace(/\{\{date\}\}/g, date.format(this.settings.format));
 
-    // {{time:FORMAT}}
     content = content.replace(/\{\{time:([^}]+)\}\}/g, (_, fmt) => date.format(fmt));
 
-    // {{time}}
     content = content.replace(/\{\{time\}\}/g, date.format('HH:mm'));
 
     return content;

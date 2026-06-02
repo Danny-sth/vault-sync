@@ -46,8 +46,6 @@ public class ProtectedResourceMetadataController {
     public ResponseEntity<Map<String, Object>> getProtectedResourceMetadata() {
         log.info("Protected Resource Metadata requested");
 
-        // Point to our own AS metadata endpoint (same domain as resource)
-        // This makes claude.ai fetch /.well-known/oauth-authorization-server from us
         String authorizationServer = resourceUrl.replace("/vault-mcp", "");
 
         Map<String, Object> metadata = Map.of(
@@ -81,23 +79,19 @@ public class ProtectedResourceMetadataController {
 
         String baseUrl = resourceUrl.replace("/vault-mcp", "");
 
-        // Build metadata with explicit ordering (issuer first per RFC 8414)
         Map<String, Object> metadata = new LinkedHashMap<>();
 
-        // Required fields (RFC 8414)
         metadata.put("issuer", baseUrl);
         metadata.put("authorization_endpoint", keycloakIssuer + "/protocol/openid-connect/auth");
         metadata.put("token_endpoint", keycloakIssuer + "/protocol/openid-connect/token");
         metadata.put("jwks_uri", keycloakIssuer + "/protocol/openid-connect/certs");
 
-        // Supported features
         metadata.put("response_types_supported", List.of("code"));
         metadata.put("grant_types_supported", List.of("authorization_code", "refresh_token"));
         metadata.put("token_endpoint_auth_methods_supported", List.of("none", "client_secret_basic", "client_secret_post"));
         metadata.put("code_challenge_methods_supported", List.of("S256"));
         metadata.put("scopes_supported", List.of("openid", "profile", "email", "offline_access"));
 
-        // NO registration_endpoint - forces pre-registered client usage
 
         log.info("AS Metadata: issuer={}, auth={}, token={} (NO registration_endpoint)",
             baseUrl, metadata.get("authorization_endpoint"), metadata.get("token_endpoint"));

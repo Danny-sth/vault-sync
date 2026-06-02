@@ -1,6 +1,4 @@
-// Developer/Nerd icons - programming languages, tools, file types
 export const DEV_ICONS: Record<string, string> = {
-  // File types
   'FileJson': '<path d="M4 2h12l4 4v16H4zm8 10v4m-2-2h4"/><rect x="8" y="14" width="8" height="4" rx="1"/>',
   'FileYaml': '<path d="M4 2h12l4 4v16H4z"/><path d="M9 10l3 3 3-3M12 13v5"/>',
   'FileXml': '<path d="M4 2h12l4 4v16H4z"/><path d="M8 10l4 4 4-4M8 14l4-4 4 4"/>',
@@ -21,14 +19,12 @@ export const DEV_ICONS: Record<string, string> = {
   'FileShell': '<path d="M4 2h12l4 4v16H4z"/><path d="M8 11l3 3-3 3m5 0h4"/>',
   'FileConfig': '<path d="M4 2h12l4 4v16H4z"/><circle cx="12" cy="14" r="2"/><path d="M12 10v2m0 4v2m-4-4h2m4 0h2"/>',
 
-  // Terminals & Shells
   'Terminal': '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 9l3 3-3 3m5 0h4"/>',
   'Console': '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 9l3 3-3 3"/>',
   'Bash': '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 9l2 3-2 3m4 0h3"/>',
   'Zsh': '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 9l5 6m0-6l-5 6"/>',
   'PowerShell': '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 15l5-6M6 9h6"/>',
 
-  // Frameworks
   'React': '<circle cx="12" cy="12" r="2"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4" transform="rotate(-60 12 12)"/><ellipse cx="12" cy="12" rx="10" ry="4"/>',
   'Vue': '<path d="M2 3h4l6 10 6-10h4L12 21z"/><path d="M7 3l5 8.5L17 3"/>',
   'Angular': '<path d="M12 2L2 6l1.5 13L12 22l8.5-3L22 6z"/><path d="M12 2v20M7 18l5-10 5 10"/>',
@@ -43,7 +39,6 @@ export const DEV_ICONS: Record<string, string> = {
   'FastAPI': '<path d="M13 2L3 14h9l-1 8 10-12h-9z"/>',
   'GraphQL': '<path d="M12 2l9 5v10l-9 5-9-5V7z"/><circle cx="12" cy="12" r="2"/><path d="M12 2v4m0 12v4M3 7l4 2m10 6l4 2M21 7l-4 2m-10 6l-4 2"/>',
 
-  // Databases
   'Database': '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>',
   'MySQL': '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/><path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/>',
   'Postgres': '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/><path d="M20 12c0 1.66-3.58 3-8 3s-8-1.34-8-3"/>',
@@ -51,7 +46,6 @@ export const DEV_ICONS: Record<string, string> = {
   'Redis': '<path d="M12 3L3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
   'Elasticsearch': '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/>',
 
-  // DevOps & Cloud
   'Cloud': '<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>',
   'Server': '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><circle cx="6" cy="6" r="1"/><circle cx="6" cy="18" r="1"/>',
   'Container': '<rect x="2" y="6" width="20" height="14" rx="2"/><path d="M6 6V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/>',
@@ -64,39 +58,33 @@ export const DEV_ICONS: Record<string, string> = {
   'CircleCI': '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>',
   'TravisCI': '<path d="M2 12h4l2-4 3 8 2-4h9"/>',
 
-  // Testing
   'Jest': '<circle cx="12" cy="12" r="10"/><path d="M8 10l4 4 4-4"/>',
   'Cypress': '<circle cx="12" cy="12" r="10"/><path d="M8 12h8m-4-4v8"/>',
   'Playwright': '<rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="8" cy="12" r="2"/><circle cx="16" cy="12" r="2"/>',
   'Selenium': '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 12h10M12 7v10"/>',
 
-  // Monitoring
   'Grafana': '<rect x="2" y="2" width="20" height="20" rx="2"/><path d="M6 14l3-4 3 2 3-4 3 6"/>',
   'Prometheus': '<circle cx="12" cy="12" r="10"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>',
   'Datadog': '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M8 14c1.5 0 2.5-1.5 4-1.5s2.5 1.5 4 1.5"/>',
   'NewRelic': '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1"/>',
 
-  // Security
   'Shield': '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
   'Lock': '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
   'Key': '<path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>',
   'Vault': '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M12 9v6M9 12h6"/>',
 
-  // APIs & Integration
   'API': '<path d="M4 4h16v16H4z"/><path d="M8 8h2v2H8zm4 0h2v2h-2zm4 0h2v2h-2zm-8 4h2v2H8zm4 0h2v2h-2zm4 0h2v2h-2z"/>',
   'Webhook': '<path d="M18 16v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/><path d="M8 12h14l-4-4m4 4l-4 4"/>',
   'REST': '<path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="1"/><circle cx="16" cy="12" r="1"/><circle cx="8" cy="18" r="1"/>',
   'gRPC': '<path d="M4 4h16v16H4z"/><path d="M8 10h8M8 14h8"/><circle cx="6" cy="10" r="1"/><circle cx="6" cy="14" r="1"/>',
   'SOAP': '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="M6 8h12M6 12h8M6 16h10"/>',
 
-  // Version Control
   'GitBranch': '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
   'GitCommit': '<circle cx="12" cy="12" r="3"/><line x1="3" y1="12" x2="9" y2="12"/><line x1="15" y1="12" x2="21" y2="12"/>',
   'GitMerge': '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
   'GitPullRequest': '<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/>',
   'GitFork': '<circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/>',
 
-  // Package Managers
   'Npm': '<rect x="2" y="6" width="20" height="12" rx="1"/><path d="M6 10v4h3v-3h2v3h2v-4"/>',
   'Yarn': '<circle cx="12" cy="12" r="10"/><path d="M12 6v12M8 10c2 0 3 2 4 2s2-2 4-2"/>',
   'Pip': '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8v2H8zm0 4h6v2H8zm0 4h4v2H8z"/>',
@@ -104,7 +92,6 @@ export const DEV_ICONS: Record<string, string> = {
   'Gradle': '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/><path d="M8 14l4-4 4 4"/>',
   'Cargo': '<rect x="3" y="6" width="18" height="14" rx="2"/><path d="M3 10h18"/><circle cx="8" cy="14" r="2"/><circle cx="16" cy="14" r="2"/>',
 
-  // IDEs & Editors
   'VSCode': '<rect x="2" y="2" width="20" height="20" rx="2"/><path d="M16 3v18M7 8l4 4-4 4"/>',
   'IntelliJ': '<rect x="2" y="2" width="20" height="20" rx="2"/><path d="M6 6h4v4H6zm8 0h4M6 14h6"/>',
   'Vim': '<path d="M2 6l10 6-10 6z"/><path d="M12 6l10 6-10 6z"/>',

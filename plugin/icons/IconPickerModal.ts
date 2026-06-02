@@ -3,7 +3,6 @@ import { LUCIDE_ICONS } from './LucideIcons';
 import { BRAND_ICONS } from './BrandIcons';
 import { DEV_ICONS } from './DevIcons';
 
-// Popular emojis organized by category
 const EMOJI_CATEGORIES: Record<string, string[]> = {
   'Smileys': ['😀', '😃', '😄', '😁', '😅', '😂', '🤣', '😊', '😇', '🙂', '😉', '😌', '😍', '🥰', '😘', '😎', '🤩', '🥳', '😏', '🤔', '🤨', '😐', '😑', '😶', '🙄', '😮', '😲', '😳', '🥺', '😢', '😭', '😤', '😠', '🤬', '😈', '👿', '💀', '☠️', '💩', '🤡', '👹', '👺', '👻', '👽', '🤖'],
   'Gestures': ['👋', '🤚', '🖐️', '✋', '🖖', '👌', '🤌', '🤏', '✌️', '🤞', '🤟', '🤘', '🤙', '👈', '👉', '👆', '👇', '☝️', '👍', '👎', '✊', '👊', '🤛', '🤜', '👏', '🙌', '👐', '🤲', '🤝', '🙏', '✍️', '💪'],
@@ -34,7 +33,6 @@ export class IconPickerModal extends Modal {
     super(app);
     this.currentIcon = currentIcon;
     this.onSelect = onSelect;
-    // Detect icon type
     if (currentIcon) {
       if (LUCIDE_ICONS[currentIcon]) {
         this.activeTab = 'lucide';
@@ -53,14 +51,11 @@ export class IconPickerModal extends Modal {
     contentEl.empty();
     contentEl.addClass('vault-sync-icon-picker');
 
-    // Title
     contentEl.createEl('h2', { text: 'Choose Icon' });
 
-    // Tabs
     this.tabContainer = contentEl.createDiv({ cls: 'icon-picker-tabs' });
     this.renderTabs();
 
-    // Search
     const searchContainer = contentEl.createDiv({ cls: 'icon-picker-search' });
     this.searchInput = searchContainer.createEl('input', {
       type: 'text',
@@ -69,7 +64,6 @@ export class IconPickerModal extends Modal {
     });
     this.searchInput.addEventListener('input', () => this.renderGrid());
 
-    // Remove icon button
     if (this.currentIcon) {
       new Setting(contentEl)
         .setName('Remove current icon')
@@ -82,14 +76,11 @@ export class IconPickerModal extends Modal {
           }));
     }
 
-    // Grid container
     this.gridContainer = contentEl.createDiv({ cls: 'icon-picker-grid' });
     this.renderGrid();
 
-    // Styles
     this.injectStyles();
 
-    // Focus search
     this.searchInput.focus();
   }
 
@@ -184,7 +175,6 @@ export class IconPickerModal extends Modal {
       }
 
       const svgPath = icons[iconName];
-      // Brand/Dev icons use fill, not stroke
       iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">${svgPath}</svg>`;
       iconEl.setAttribute('title', iconName);
 
@@ -209,11 +199,9 @@ export class IconPickerModal extends Modal {
 
       if (filtered.length === 0) continue;
 
-      // Category header
       const categoryHeader = this.gridContainer.createDiv({ cls: 'icon-picker-category' });
       categoryHeader.setText(category);
 
-      // Emoji grid for this category
       const categoryGrid = this.gridContainer.createDiv({ cls: 'icon-picker-category-grid' });
 
       for (const emoji of filtered) {
@@ -232,7 +220,6 @@ export class IconPickerModal extends Modal {
       }
     }
 
-    // Check if anything was rendered
     if (this.gridContainer.children.length === 0) {
       this.gridContainer.createEl('p', { text: 'No emojis found', cls: 'icon-picker-empty' });
     }

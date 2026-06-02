@@ -26,11 +26,9 @@ export default class VaultSyncPlugin extends Plugin {
 
       this.addSettingTab(new VaultSyncSettingTab(this.app, this));
 
-      // Status bar
       this.statusBarItem = this.addStatusBarItem();
       this.updateStatusBar(false);
 
-      // Commands
       this.addCommand({
         id: 'vault-sync-connect',
         name: 'Connect',
@@ -55,13 +53,10 @@ export default class VaultSyncPlugin extends Plugin {
         callback: () => this.dailyNotes?.createTodayNote(),
       });
 
-      // Command executor - dynamic command registration from server
       this.commandExecutor = new CommandExecutor(this.app, this.settings);
 
-      // Register commands dynamically after connection
       this.registerDynamicCommands();
 
-      // Initialize sync manager
       console.debug('[VaultSync] Creating SyncManager...');
       this.syncManager = new SyncManager(this.app, this.settings);
       this.syncManager.onConnectionChange = (connected) => {
@@ -73,7 +68,6 @@ export default class VaultSyncPlugin extends Plugin {
       await this.syncManager.init();
       console.debug('[VaultSync] SyncManager initialized');
 
-      // Register vault events
       this.registerEvent(
         this.app.vault.on('create', (file) => {
           if (file instanceof TFile) {
@@ -106,10 +100,8 @@ export default class VaultSyncPlugin extends Plugin {
         })
       );
 
-      // Daily Notes - create today's note on startup
       this.dailyNotes = new DailyNotes(this.app);
 
-      // File Icons - display icons from frontmatter
       this.fileIcons = new FileIcons(this.app);
 
       this.app.workspace.onLayoutReady(async () => {
@@ -118,18 +110,15 @@ export default class VaultSyncPlugin extends Plugin {
         await this.fileIcons?.init();
       });
 
-      // Refresh icons when metadata changes
       this.registerEvent(
         this.app.metadataCache.on('changed', (file) => {
           this.fileIcons?.refreshFile(file.path);
         })
       );
 
-      // File/Folder context menu - Set Icon
       this.registerEvent(
         this.app.workspace.on('file-menu', (menu: Menu, file: TAbstractFile) => {
           if (file instanceof TFile) {
-            // File icon from frontmatter
             const cache = this.app.metadataCache.getFileCache(file);
             const currentIcon = cache?.frontmatter?.icon as string | undefined;
 
@@ -144,7 +133,6 @@ export default class VaultSyncPlugin extends Plugin {
                 });
             });
           } else if (file instanceof TFolder) {
-            // Folder icon from folder-icons.json
             const currentIcon = this.fileIcons?.getFolderIcon(file.path) || null;
 
             menu.addItem((item) => {
@@ -162,7 +150,6 @@ export default class VaultSyncPlugin extends Plugin {
         })
       );
 
-      // Auto-connect
       console.debug('[VaultSync] AutoConnect:', this.settings.autoConnect, 'Token exists:', !!this.settings.token);
       if (this.settings.autoConnect && this.settings.token) {
         console.debug('[VaultSync] Will auto-connect in 2 seconds...');
@@ -172,18 +159,15 @@ export default class VaultSyncPlugin extends Plugin {
         }, 2000);
       }
 
-      // Reconnect on window focus (for mobile)
       this.registerDomEvent(document, 'visibilitychange', () => {
         console.debug('[VaultSync] Visibility changed:', document.visibilityState);
         if (document.visibilityState === 'visible' && this.settings.autoConnect) {
-          // Always try to reconnect when becoming visible - connection might be stale
           console.debug('[VaultSync] App visible, forcing reconnect check...');
           setTimeout(() => {
             if (!this.syncManager?.isConnected()) {
               console.debug('[VaultSync] Not connected, reconnecting...');
               this.connect().catch(e => console.error('[VaultSync] Reconnect failed:', e));
             } else {
-              // Even if "connected", do a full sync to catch up
               console.debug('[VaultSync] Connected, requesting full sync...');
               this.syncManager?.requestFullSync();
             }
@@ -191,7 +175,6 @@ export default class VaultSyncPlugin extends Plugin {
         }
       });
 
-      // Periodic connection check every 30 seconds (mobile connections can silently die)
       this.registerInterval(
         window.setInterval(() => {
           if (this.settings.autoConnect && !this.syncManager?.isConnected()) {
@@ -243,7 +226,6 @@ export default class VaultSyncPlugin extends Plugin {
       new Notice(`Vault Sync: ${commands.length} commands registered`);
     } catch (error) {
       console.error('[VaultSync] Failed to register dynamic commands:', error);
-      // Don't show notice - server might not be available yet
     }
   }
 
@@ -315,27 +297,21 @@ export default class VaultSyncPlugin extends Plugin {
     const match = content.match(frontmatterRegex);
 
     if (match) {
-      // Has frontmatter
       let frontmatter = match[1];
       const iconRegex = /^icon:\s*.+$/m;
 
       if (iconName) {
-        // Set icon
         if (iconRegex.test(frontmatter)) {
-          // Replace existing
           frontmatter = frontmatter.replace(iconRegex, `icon: ${iconName}`);
         } else {
-          // Add new
           frontmatter = `icon: ${iconName}\n${frontmatter}`;
         }
       } else {
-        // Remove icon
         frontmatter = frontmatter.replace(/^icon:\s*.+\n?/m, '');
       }
 
       return content.replace(frontmatterRegex, `---\n${frontmatter}\n---`);
     } else if (iconName) {
-      // No frontmatter, add new
       return `---\nicon: ${iconName}\n---\n\n${content}`;
     }
 

@@ -47,31 +47,26 @@ public class SecurityConfig {
                                             FilterChain filterChain) throws ServletException, IOException {
                 String path = request.getRequestURI();
 
-                // Skip auth for health check and actuator
                 if (path.equals("/health") || path.startsWith("/actuator")) {
                     filterChain.doFilter(request, response);
                     return;
                 }
 
-                // Skip auth for WebSocket (handled by WebSocketConfig)
                 if (path.startsWith("/ws")) {
                     filterChain.doFilter(request, response);
                     return;
                 }
 
-                // Skip auth for MCP endpoints (handled by Spring Security OAuth2)
                 if (path.startsWith("/mcp") || path.equals("/sse") || path.startsWith("/.well-known")) {
                     filterChain.doFilter(request, response);
                     return;
                 }
 
-                // Check token for API endpoints
                 if (path.startsWith("/api")) {
                     String token = request.getHeader("X-Auth-Token");
                     if (token == null) {
                         token = request.getParameter("token");
                     }
-                    // Also check Authorization: Bearer header
                     if (token == null) {
                         String authHeader = request.getHeader("Authorization");
                         if (authHeader != null && authHeader.startsWith("Bearer ")) {

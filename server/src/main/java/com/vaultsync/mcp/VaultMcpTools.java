@@ -515,7 +515,6 @@ public class VaultMcpTools {
         }
     }
 
-    // Result records for structured JSON responses
 
     public record ListNotesResult(boolean success, List<String> notes, int count, List<NoteInfoItem> notesWithStats,
                                    String error) {
