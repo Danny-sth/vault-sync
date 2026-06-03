@@ -530,7 +530,10 @@ public class SyncService {
                         boolean markerExists = Files.exists(markerPath);
 
                         if (realFileCount == 0 && subdirCount == 0) {
-                            if (!markerExists) {
+                            // Do NOT recreate a marker that was deliberately deleted (live tombstone),
+                            // otherwise the server resurrects empty folders the user just removed.
+                            // Mirrors the client's syncEmptyFolderMarkers tombstone check.
+                            if (!markerExists && !tombstoneRepository.existsById(markerRelativePath)) {
                                 Files.createFile(markerPath);
                                 log.info("Created folder marker: {}", markerRelativePath);
 
