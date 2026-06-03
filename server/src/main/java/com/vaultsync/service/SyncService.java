@@ -40,7 +40,7 @@ public class SyncService {
     private final AtomicLong sequenceCounter = new AtomicLong(0);
 
     private static final Set<String> EXCLUDED_DIRS = Set.of(
-            ".git", ".idea", ".smart-env", ".DS_Store", "node_modules"
+            ".git", ".idea", ".smart-env", ".DS_Store", "node_modules", ".vault-sync-versions"
     );
 
     private static final Set<String> EXCLUDED_PATTERNS = Set.of(

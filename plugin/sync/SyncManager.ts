@@ -3,7 +3,7 @@ import { StompClient } from './StompClient';
 import { FileWatcher, FileChange } from './FileWatcher';
 import { LocalState } from '../storage/LocalState';
 import { SyncFilter } from './SyncFilter';
-import { SyncApiClient } from './SyncApiClient';
+import { SyncApiClient, ConflictError } from './SyncApiClient';
 import { ConflictResolver, SyncAction } from './ConflictResolver';
 import { FileOperationService } from './FileOperationService';
 import {
@@ -708,12 +708,46 @@ export class SyncManager {
         return;
       }
 
-      await this.apiClient.upload(path, content, hash, mtime);
+      await this.apiClient.upload(path, content, hash, mtime, existingHash ?? '');
 
       await this.localState.setFileHash(path, hash);
     } catch (e) {
+      if (e instanceof ConflictError) {
+        await this.reconcileConflict(path, content);
+        return;
+      }
       console.error(`[VaultSync] uploadByPath failed for ${path}:`, e);
       await this.queuePendingOperation('upload', path);
+    }
+  }
+
+  /**
+   * The server rejected our upload (HTTP 409) because it holds a newer version and we
+   * were editing a stale base. Adopt the server version (agreed source of truth) and
+   * preserve our rejected local content as a side "conflict" copy so nothing is lost.
+   * This is what stops a stale/desynced device from clobbering newer notes.
+   */
+  private async reconcileConflict(path: string, localContent: ArrayBuffer): Promise<void> {
+    console.warn(`[VaultSync] Upload conflict for ${path} — adopting server version, preserving local copy`);
+
+    this.isProcessingRemote = true;
+    try {
+      await this.downloadFile(path);
+    } finally {
+      this.isProcessingRemote = false;
+    }
+
+    const serverContent = await this.fileOps.readBinary(path);
+    const sameAsServer = serverContent
+      && (await this.computeHash(serverContent.content)) === (await this.computeHash(localContent));
+
+    if (localContent.byteLength > 0 && !sameAsServer) {
+      const dot = path.lastIndexOf('.');
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      const suffix = ` (conflict ${this.settings.deviceId} ${stamp})`;
+      const conflictPath = dot > 0 ? `${path.slice(0, dot)}${suffix}${path.slice(dot)}` : `${path}${suffix}`;
+      await this.fileOps.writeBinary(conflictPath, localContent);
+      new Notice(`Vault Sync: conflict on ${path.split('/').pop()} — took server version, saved your copy`);
     }
   }
 

@@ -2,6 +2,17 @@ import { requestUrl } from 'obsidian';
 import { VaultSyncSettings } from '../types';
 
 /**
+ * Thrown when the server rejects an upload (HTTP 409) because this device was
+ * editing a stale base version. Carries the server's current hash for reconciliation.
+ */
+export class ConflictError extends Error {
+  constructor(public readonly path: string, public readonly currentHash: string) {
+    super(`Upload conflict for ${path}: server has a newer version`);
+    this.name = 'ConflictError';
+  }
+}
+
+/**
  * HTTP client for vault-sync server API.
  * Consolidates all REST API calls (upload, download, delete).
  */
@@ -37,8 +48,13 @@ export class SyncApiClient {
 
   /**
    * Upload a file to the server.
+   *
+   * @param baseHash - the server hash this device last saw for the path. The server
+   *   uses it for optimistic concurrency: if the server has since moved to a different
+   *   version, the upload is rejected with HTTP 409 (thrown as ConflictError) so we
+   *   reconcile instead of clobbering newer content.
    */
-  async upload(path: string, content: ArrayBuffer, hash: string, mtime: number): Promise<void> {
+  async upload(path: string, content: ArrayBuffer, hash: string, mtime: number, baseHash = ''): Promise<void> {
     const base64Content = this.arrayBufferToBase64(content);
 
     const response = await requestUrl({
@@ -48,8 +64,14 @@ export class SyncApiClient {
         ...this.headers,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ path, content: base64Content, hash, mtime }),
+      body: JSON.stringify({ path, content: base64Content, hash, mtime, baseHash }),
+      throw: false,
     });
+
+    if (response.status === 409) {
+      const currentHash = (response.json && response.json.currentHash) || '';
+      throw new ConflictError(path, currentHash);
+    }
 
     if (response.status !== 200) {
       throw new Error(`Upload failed: ${response.status}`);
