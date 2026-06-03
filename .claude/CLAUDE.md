@@ -29,19 +29,30 @@ vault-sync/
 
 ## Деплой
 
+Сервер — Spring Boot (Java 21), не Go. Запущен как **systemd-сервис** `vault-sync`
+на ЖИВОМ VPS `88.222.245.74` (домен on-za-menya.online). Старый IP `90.156.230.49` МЁРТВ.
+Сборка тяжёлая — собирать на VPS, не локально.
+
 ```bash
-# Сборка
-cd server
-GOOS=linux GOARCH=amd64 go build -o vault-sync .
+# 1) локально: правка → commit → push
+git push origin main
 
-# Деплой
-scp vault-sync root@90.156.230.49:/opt/vault-sync/
-ssh root@90.156.230.49 "systemctl restart vault-sync"
+# 2) на VPS: pull + maven build + замена jar + рестарт
+ssh root@88.222.245.74   # пароль (ключей нет), см. ~/.claude/CLAUDE.md
+cd /root/vault-sync && git pull
+cd server && mvn -q -DskipTests clean package
+cp target/vault-sync-server-2.0.0.jar /opt/vault-sync/vault-sync.jar
+systemctl restart vault-sync
 
-# Проверка
-ssh root@90.156.230.49 "systemctl status vault-sync"
-ssh root@90.156.230.49 "journalctl -u vault-sync -n 20"
+# 3) проверка
+systemctl is-active vault-sync
+journalctl -u vault-sync -n 20 --no-pager
+# health (HTTP, порт 8444, требует X-Auth-Token из /opt/vault-sync/application.yml):
+curl -s http://localhost:8444/api/health -H "X-Auth-Token: <token>" -H "X-Device-Id: chk"
 ```
+
+Конфиг прод: `/opt/vault-sync/application.yml` (порт 8444, токены, storage-path=/opt/obsidian-vault).
+Бэкапы версий перед перезаписью: `/opt/obsidian-vault/.vault-sync-versions/` (TTL 30 дней).
 
 ## Важно
 
