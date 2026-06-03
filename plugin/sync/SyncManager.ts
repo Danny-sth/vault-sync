@@ -694,22 +694,21 @@ export class SyncManager {
     if (this.isProcessingRemote) return;
     if (!SyncFilter.shouldSync(path)) return;
 
+    const read = await this.fileOps.readBinary(path);
+    if (!read) return;
+    const { content, mtime } = read;
+
+    const hash = await this.computeHash(content);
+    const existingHash = await this.localState.getFileHash(path);
+    if (existingHash === hash) return;
+
+    if (!this.isConnected()) {
+      await this.queuePendingOperation('upload', path);
+      return;
+    }
+
     try {
-      const read = await this.fileOps.readBinary(path);
-      if (!read) return;
-      const { content, mtime } = read;
-
-      const hash = await this.computeHash(content);
-      const existingHash = await this.localState.getFileHash(path);
-      if (existingHash === hash) return;
-
-      if (!this.isConnected()) {
-        await this.queuePendingOperation('upload', path);
-        return;
-      }
-
       await this.apiClient.upload(path, content, hash, mtime, existingHash ?? '');
-
       await this.localState.setFileHash(path, hash);
     } catch (e) {
       if (e instanceof ConflictError) {
