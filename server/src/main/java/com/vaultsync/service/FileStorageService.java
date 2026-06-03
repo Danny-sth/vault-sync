@@ -28,11 +28,20 @@ public class FileStorageService {
     @Value("${vault-sync.storage-path}")
     private String storagePath;
 
+    /** Directory (inside the vault root, excluded from sync) holding pre-overwrite backups. */
+    public static final String VERSIONS_DIR = ".vault-sync-versions";
+
+    /** How long version backups are kept before the scheduled cleanup removes them. */
+    @Value("${vault-sync.versions-ttl-days:30}")
+    private int versionsTtlDays;
+
     @Transactional
     public FileRecord store(String path, MultipartFile file, String expectedHash, String deviceId, long seq) throws IOException {
         Path targetPath = getFullPath(path);
 
         Files.createDirectories(targetPath.getParent());
+
+        backupExisting(targetPath, path);
 
         try (InputStream is = file.getInputStream()) {
             Files.copy(is, targetPath, StandardCopyOption.REPLACE_EXISTING);
@@ -63,6 +72,8 @@ public class FileStorageService {
         Path targetPath = getFullPath(path);
 
         Files.createDirectories(targetPath.getParent());
+
+        backupExisting(targetPath, path);
 
         Files.write(targetPath, content, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
 
@@ -160,5 +171,59 @@ public class FileStorageService {
 
     public long getMtime(String path) throws IOException {
         return Files.getLastModifiedTime(getFullPath(path)).toMillis();
+    }
+
+    /**
+     * Copy the current on-disk file to {@code .vault-sync-versions/<path>/<epochMillis>.bak}
+     * before it is overwritten, so a clobber (e.g. a stale device uploading an empty
+     * note) is always recoverable. Skipped when the target is missing or empty, or
+     * when the new content is byte-identical to the existing file.
+     */
+    private void backupExisting(Path targetPath, String relativePath) {
+        try {
+            if (relativePath.startsWith(VERSIONS_DIR + "/") || relativePath.equals(VERSIONS_DIR)) {
+                return;
+            }
+            if (!Files.exists(targetPath) || Files.size(targetPath) == 0) {
+                return;
+            }
+            Path dest = Paths.get(storagePath, VERSIONS_DIR)
+                    .resolve(relativePath)
+                    .resolve(System.currentTimeMillis() + ".bak");
+            Files.createDirectories(dest.getParent());
+            Files.copy(targetPath, dest, StandardCopyOption.REPLACE_EXISTING);
+            log.debug("Versioned {} -> {}", relativePath, dest);
+        } catch (IOException e) {
+            log.warn("Could not version {}: {}", relativePath, e.getMessage());
+        }
+    }
+
+    /** Purge version backups older than {@code versions-ttl-days}. Runs hourly. */
+    @org.springframework.scheduling.annotation.Scheduled(fixedRate = 3600000)
+    public void cleanupVersions() {
+        Path versionsRoot = Paths.get(storagePath, VERSIONS_DIR);
+        if (!Files.exists(versionsRoot)) {
+            return;
+        }
+        long cutoff = System.currentTimeMillis() - (versionsTtlDays * 24L * 60L * 60L * 1000L);
+        try (var walk = Files.walk(versionsRoot)) {
+            walk.filter(Files::isRegularFile)
+                .filter(p -> {
+                    try {
+                        return Files.getLastModifiedTime(p).toMillis() < cutoff;
+                    } catch (IOException e) {
+                        return false;
+                    }
+                })
+                .forEach(p -> {
+                    try {
+                        Files.delete(p);
+                    } catch (IOException e) {
+                        log.debug("Could not delete old version {}: {}", p, e.getMessage());
+                    }
+                });
+        } catch (IOException e) {
+            log.warn("Version cleanup failed: {}", e.getMessage());
+        }
     }
 }

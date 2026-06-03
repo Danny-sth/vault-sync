@@ -4,10 +4,12 @@ import com.vaultsync.model.FileRecord;
 import com.vaultsync.model.SyncMessage;
 import com.vaultsync.service.FileStorageService;
 import com.vaultsync.service.SyncService;
+import com.vaultsync.util.HashUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -77,6 +79,29 @@ public class FileController {
 
         try {
             byte[] content = java.util.Base64.getDecoder().decode(request.content());
+
+            // Optimistic concurrency (compare-and-swap): a client sends baseHash = the
+            // server hash it last saw. If the server has since moved to a different
+            // version, the client was editing a stale base — reject so it can reconcile
+            // instead of silently clobbering newer content (the empty-note data-loss bug).
+            FileRecord existing = fileStorageService.getFileInfo(request.path());
+            String baseHash = request.baseHash();
+            if (existing != null && baseHash != null && !baseHash.isBlank()) {
+                String incomingHash = HashUtil.sha256(content);
+                if (!existing.getHash().equals(incomingHash)
+                        && !existing.getHash().equals(baseHash)) {
+                    log.warn("Upload conflict for {} by {}: base={} but server={} ({} bytes) — rejected",
+                            request.path(), deviceId, baseHash, existing.getHash(), existing.getSize());
+                    return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                            "error", "conflict",
+                            "currentHash", existing.getHash(),
+                            "currentSeq", existing.getSeq(),
+                            "currentMtime", existing.getMtime(),
+                            "currentSize", existing.getSize()
+                    ));
+                }
+            }
+
             long seq = syncService.nextSeq();
             FileRecord record = fileStorageService.storeBytes(
                     request.path(), content, request.hash(), deviceId, seq, request.mtime()
@@ -110,7 +135,7 @@ public class FileController {
         }
     }
 
-    public record JsonUploadRequest(String path, String content, String hash, long mtime) {}
+    public record JsonUploadRequest(String path, String content, String hash, long mtime, String baseHash) {}
 
     /**
      * Download a file
