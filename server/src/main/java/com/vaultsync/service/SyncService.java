@@ -292,6 +292,17 @@ public class SyncService {
                 .build();
     }
 
+    /** Live tombstone for a path, or null. Used to block stale devices from resurrecting deletes. */
+    public Tombstone getTombstone(String path) {
+        return tombstoneRepository.findById(path).orElse(null);
+    }
+
+    /** Clear a tombstone (a genuine re-creation supersedes the prior deletion). */
+    @Transactional
+    public void clearTombstone(String path) {
+        tombstoneRepository.deleteById(path);
+    }
+
     public void broadcastFileChange(SyncMessage.FileChanged message) {
         messagingTemplate.convertAndSend("/topic/sync", message);
     }
