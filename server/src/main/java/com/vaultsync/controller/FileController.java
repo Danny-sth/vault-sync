@@ -79,13 +79,31 @@ public class FileController {
 
         try {
             byte[] content = java.util.Base64.getDecoder().decode(request.content());
+            String baseHash = request.baseHash();
+
+            // Deletion-resurrection guard: a live tombstone means this path was deleted.
+            // A device that still "remembers" a prior synced version (baseHash set) is just
+            // re-pushing stale state — reject so it deletes locally instead of resurrecting
+            // (the "deleted folders keep coming back" bug). An empty baseHash means a genuine
+            // (re)creation, which supersedes the tombstone.
+            com.vaultsync.model.Tombstone tomb = syncService.getTombstone(request.path());
+            if (tomb != null) {
+                if (baseHash != null && !baseHash.isBlank()) {
+                    log.warn("Resurrection blocked for {} by {}: live tombstone (seq={}) — rejected",
+                            request.path(), deviceId, tomb.getSeq());
+                    return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                            "error", "deleted",
+                            "deletedSeq", tomb.getSeq()
+                    ));
+                }
+                syncService.clearTombstone(request.path());
+            }
 
             // Optimistic concurrency (compare-and-swap): a client sends baseHash = the
             // server hash it last saw. If the server has since moved to a different
             // version, the client was editing a stale base — reject so it can reconcile
             // instead of silently clobbering newer content (the empty-note data-loss bug).
             FileRecord existing = fileStorageService.getFileInfo(request.path());
-            String baseHash = request.baseHash();
             if (existing != null && baseHash != null && !baseHash.isBlank()) {
                 String incomingHash = HashUtil.sha256(content);
                 if (!existing.getHash().equals(incomingHash)

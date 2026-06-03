@@ -712,7 +712,7 @@ export class SyncManager {
       await this.localState.setFileHash(path, hash);
     } catch (e) {
       if (e instanceof ConflictError) {
-        await this.reconcileConflict(path, content);
+        await this.reconcileConflict(path, content, e.deleted);
         return;
       }
       console.error(`[VaultSync] uploadByPath failed for ${path}:`, e);
@@ -726,7 +726,30 @@ export class SyncManager {
    * preserve our rejected local content as a side "conflict" copy so nothing is lost.
    * This is what stops a stale/desynced device from clobbering newer notes.
    */
-  private async reconcileConflict(path: string, localContent: ArrayBuffer): Promise<void> {
+  private async reconcileConflict(path: string, localContent: ArrayBuffer, deleted = false): Promise<void> {
+    // Server deleted this path elsewhere (live tombstone) — honor the deletion locally
+    // instead of resurrecting it. This stops the "deleted folders keep coming back" loop.
+    if (deleted) {
+      console.warn(`[VaultSync] ${path} was deleted on server — removing local copy (no resurrection)`);
+      this.isProcessingRemote = true;
+      try {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) {
+          await this.app.vault.delete(file);
+        } else if (await this.app.vault.adapter.exists(path)) {
+          await this.app.vault.adapter.remove(path);
+        }
+        await this.localState.deleteFileHash(path);
+        await this.fileOps.cleanupEmptyParentFolders(path);
+        this.fileWatcher.removeFromBaseline(path);
+      } catch (e) {
+        console.error(`[VaultSync] Failed to honor remote deletion of ${path}:`, e);
+      } finally {
+        this.isProcessingRemote = false;
+      }
+      return;
+    }
+
     console.warn(`[VaultSync] Upload conflict for ${path} — adopting server version, preserving local copy`);
 
     this.isProcessingRemote = true;

@@ -6,8 +6,16 @@ import { VaultSyncSettings } from '../types';
  * editing a stale base version. Carries the server's current hash for reconciliation.
  */
 export class ConflictError extends Error {
-  constructor(public readonly path: string, public readonly currentHash: string) {
-    super(`Upload conflict for ${path}: server has a newer version`);
+  /**
+   * @param deleted - true when the server rejected the upload because the path has a live
+   *   tombstone (it was deleted elsewhere). The client should delete locally, not download.
+   */
+  constructor(
+    public readonly path: string,
+    public readonly currentHash: string,
+    public readonly deleted: boolean = false,
+  ) {
+    super(`Upload conflict for ${path}: server ${deleted ? 'deleted this path' : 'has a newer version'}`);
     this.name = 'ConflictError';
   }
 }
@@ -69,8 +77,9 @@ export class SyncApiClient {
     });
 
     if (response.status === 409) {
-      const currentHash = (response.json && response.json.currentHash) || '';
-      throw new ConflictError(path, currentHash);
+      const body = response.json || {};
+      const deleted = body.error === 'deleted';
+      throw new ConflictError(path, body.currentHash || '', deleted);
     }
 
     if (response.status !== 200) {
