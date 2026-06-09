@@ -47,7 +47,7 @@ public class SyncService {
             ".DS_Store", "Thumbs.db", ".tmp", ".temp"
     );
 
-    private boolean shouldExcludePath(String path) {
+    public boolean shouldExcludePath(String path) {
         for (String excluded : EXCLUDED_DIRS) {
             if (path.startsWith(excluded + "/") || path.equals(excluded)) {
                 return true;
@@ -64,7 +64,7 @@ public class SyncService {
         return false;
     }
 
-    private boolean shouldExcludeDir(String dirName) {
+    public boolean shouldExcludeDir(String dirName) {
         return EXCLUDED_DIRS.contains(dirName);
     }
 
@@ -105,8 +105,7 @@ public class SyncService {
                             return FileVisitResult.CONTINUE;
                         }
 
-                        byte[] content = Files.readAllBytes(file);
-                        String hash = HashUtil.sha256(content);
+                        String hash = HashUtil.sha256(file);
                         long mtime = attrs.lastModifiedTime().toMillis();
                         long size = attrs.size();
 
@@ -321,17 +320,130 @@ public class SyncService {
         }
     }
 
-    @Scheduled(fixedRate = 30000)
+    /**
+     * Index a single path against its current on-disk state and broadcast the change.
+     * This is the real-time entry point called by {@code VaultWatcherService} after an
+     * inotify event settles. If the file is gone, it is treated as a deletion. Hashing is
+     * streamed (constant memory) and skipped entirely when size+mtime are unchanged.
+     */
     @Transactional
-    public void periodicFilesystemScan() {
+    public void indexPath(String relativePath) {
+        if (shouldExcludePath(relativePath)) {
+            return;
+        }
+        Path file = Paths.get(storagePath).resolve(relativePath);
+        try {
+            if (!Files.isRegularFile(file)) {
+                indexDeletionInternal(relativePath, "filesystem");
+                return;
+            }
+            BasicFileAttributes attrs = Files.readAttributes(file, BasicFileAttributes.class);
+            upsertFromDisk(relativePath, file, attrs);
+        } catch (NoSuchFileException e) {
+            indexDeletionInternal(relativePath, "filesystem");
+        } catch (IOException e) {
+            log.warn("indexPath failed for {}: {}", relativePath, e.getMessage());
+        }
+    }
+
+    /** Real-time entry point for a deletion detected by the watcher. */
+    @Transactional
+    public void indexDeletion(String relativePath) {
+        if (shouldExcludePath(relativePath)) {
+            return;
+        }
+        indexDeletionInternal(relativePath, "filesystem");
+    }
+
+    /**
+     * Upsert one file from disk: skip when size+mtime are unchanged; otherwise stream-hash
+     * and, only when the hash actually differs, persist a new {@link FileRecord} and
+     * broadcast. When the content matches but mtime drifted, refresh mtime quietly (no
+     * broadcast, no seq bump) so reconciliation doesn't re-hash it forever.
+     */
+    private void upsertFromDisk(String relativePath, Path file, BasicFileAttributes attrs) throws IOException {
+        long diskMtime = attrs.lastModifiedTime().toMillis();
+        long size = attrs.size();
+        var existingRecord = fileRepository.findById(relativePath);
+
+        if (existingRecord.isEmpty()) {
+            if (tombstoneRepository.existsById(relativePath)) {
+                tombstoneRepository.deleteById(relativePath);
+                log.info("Removed stale tombstone for re-created file: {}", relativePath);
+            }
+            String hash = HashUtil.sha256(file);
+            saveAndBroadcastChange(relativePath, hash, diskMtime, size);
+            log.info("Indexed new file: {}", relativePath);
+            return;
+        }
+
+        FileRecord existing = existingRecord.get();
+        if (existing.getSize() == size && Math.abs(existing.getMtime() - diskMtime) <= 1000) {
+            return;
+        }
+        String hash = HashUtil.sha256(file);
+        if (hash.equals(existing.getHash())) {
+            existing.setMtime(diskMtime);
+            fileRepository.save(existing);
+            return;
+        }
+        saveAndBroadcastChange(relativePath, hash, diskMtime, size);
+        log.info("Indexed modified file: {}", relativePath);
+    }
+
+    private void saveAndBroadcastChange(String relativePath, String hash, long mtime, long size) {
+        long seq = nextSeq();
+        fileRepository.save(FileRecord.builder()
+                .path(relativePath)
+                .hash(hash)
+                .mtime(mtime)
+                .size(size)
+                .seq(seq)
+                .lastModifiedBy("filesystem")
+                .build());
+        messagingTemplate.convertAndSend("/topic/sync", SyncMessage.FileChanged.builder()
+                .path(relativePath)
+                .hash(hash)
+                .mtime(mtime)
+                .size(size)
+                .seq(seq)
+                .deviceId("filesystem")
+                .build());
+    }
+
+    private void indexDeletionInternal(String relativePath, String deletedBy) {
+        if (fileRepository.findById(relativePath).isEmpty()) {
+            return;
+        }
+        long seq = nextSeq();
+        fileRepository.deleteById(relativePath);
+        tombstoneRepository.save(Tombstone.builder()
+                .path(relativePath)
+                .deletedAt(System.currentTimeMillis())
+                .deletedBy(deletedBy)
+                .seq(seq)
+                .build());
+        messagingTemplate.convertAndSend("/topic/sync", SyncMessage.FileDeleted.builder()
+                .path(relativePath)
+                .seq(seq)
+                .deviceId(deletedBy)
+                .build());
+        log.info("Indexed deletion: {} (seq={})", relativePath, seq);
+    }
+
+    /**
+     * Low-frequency reconciliation safety net (default every 5 min). The real-time watcher
+     * does the heavy lifting; this catches anything missed while the service was down or on
+     * an inotify-queue overflow. Streams hashes, pre-filtered by size+mtime, so it never
+     * loads a whole file into the heap.
+     */
+    @Scheduled(fixedRateString = "${vault-sync.reconcile-interval-ms:300000}")
+    @Transactional
+    public void reconcile() {
         Path root = Paths.get(storagePath);
         if (!Files.exists(root)) {
             return;
         }
-
-        AtomicInteger added = new AtomicInteger(0);
-        AtomicInteger modified = new AtomicInteger(0);
-        AtomicInteger deleted = new AtomicInteger(0);
 
         java.util.Set<String> diskFiles = new java.util.HashSet<>();
 
@@ -341,87 +453,13 @@ public class SyncService {
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                     try {
                         String relativePath = root.relativize(file).toString().replace("\\", "/");
-
                         if (shouldExcludePath(relativePath)) {
                             return FileVisitResult.CONTINUE;
                         }
-
                         diskFiles.add(relativePath);
-
-                        var existingRecord = fileRepository.findById(relativePath);
-                        long diskMtime = attrs.lastModifiedTime().toMillis();
-
-                        if (existingRecord.isEmpty()) {
-                            if (tombstoneRepository.existsById(relativePath)) {
-                                tombstoneRepository.deleteById(relativePath);
-                                log.info("Removed stale tombstone for re-created file: {}", relativePath);
-                            }
-
-                            byte[] content = Files.readAllBytes(file);
-                            String hash = HashUtil.sha256(content);
-                            long size = attrs.size();
-                            long seq = nextSeq();
-
-                            FileRecord record = FileRecord.builder()
-                                    .path(relativePath)
-                                    .hash(hash)
-                                    .mtime(diskMtime)
-                                    .size(size)
-                                    .seq(seq)
-                                    .lastModifiedBy("filesystem")
-                                    .build();
-                            fileRepository.save(record);
-
-                            SyncMessage.FileChanged changeMsg = SyncMessage.FileChanged.builder()
-                                    .path(relativePath)
-                                    .hash(hash)
-                                    .mtime(diskMtime)
-                                    .size(size)
-                                    .seq(seq)
-                                    .deviceId("filesystem")
-                                    .build();
-                            messagingTemplate.convertAndSend("/topic/sync", changeMsg);
-
-                            added.incrementAndGet();
-                            log.info("Filesystem scan: new file detected: {}", relativePath);
-
-                        } else {
-                            FileRecord existing = existingRecord.get();
-                            if (Math.abs(existing.getMtime() - diskMtime) > 1000) {
-                                byte[] content = Files.readAllBytes(file);
-                                String hash = HashUtil.sha256(content);
-
-                                if (!hash.equals(existing.getHash())) {
-                                    long size = attrs.size();
-                                    long seq = nextSeq();
-
-                                    FileRecord record = FileRecord.builder()
-                                            .path(relativePath)
-                                            .hash(hash)
-                                            .mtime(diskMtime)
-                                            .size(size)
-                                            .seq(seq)
-                                            .lastModifiedBy("filesystem")
-                                            .build();
-                                    fileRepository.save(record);
-
-                                    SyncMessage.FileChanged changeMsg = SyncMessage.FileChanged.builder()
-                                            .path(relativePath)
-                                            .hash(hash)
-                                            .mtime(diskMtime)
-                                            .size(size)
-                                            .seq(seq)
-                                            .deviceId("filesystem")
-                                            .build();
-                                    messagingTemplate.convertAndSend("/topic/sync", changeMsg);
-
-                                    modified.incrementAndGet();
-                                    log.info("Filesystem scan: file modified: {}", relativePath);
-                                }
-                            }
-                        }
+                        upsertFromDisk(relativePath, file, attrs);
                     } catch (Exception e) {
-                        log.error("Error scanning file: {}", file, e);
+                        log.error("Error reconciling file: {}", file, e);
                     }
                     return FileVisitResult.CONTINUE;
                 }
@@ -436,38 +474,13 @@ public class SyncService {
                 }
             });
 
-            List<FileRecord> dbFiles = fileRepository.findAll();
-            for (FileRecord dbFile : dbFiles) {
+            for (FileRecord dbFile : fileRepository.findAll()) {
                 if (!diskFiles.contains(dbFile.getPath())) {
-                    long seq = nextSeq();
-                    fileRepository.deleteById(dbFile.getPath());
-
-                    Tombstone tombstone = Tombstone.builder()
-                            .path(dbFile.getPath())
-                            .deletedAt(System.currentTimeMillis())
-                            .deletedBy("filesystem")
-                            .seq(seq)
-                            .build();
-                    tombstoneRepository.save(tombstone);
-
-                    SyncMessage.FileDeleted deleteMsg = SyncMessage.FileDeleted.builder()
-                            .path(dbFile.getPath())
-                            .seq(seq)
-                            .deviceId("filesystem")
-                            .build();
-                    messagingTemplate.convertAndSend("/topic/sync", deleteMsg);
-
-                    deleted.incrementAndGet();
-                    log.info("Filesystem scan: file deleted: {}", dbFile.getPath());
+                    indexDeletionInternal(dbFile.getPath(), "filesystem");
                 }
             }
-
         } catch (IOException e) {
-            log.error("Error during periodic filesystem scan", e);
-        }
-
-        if (added.get() > 0 || modified.get() > 0 || deleted.get() > 0) {
-            log.info("Filesystem scan complete: {} added, {} modified, {} deleted", added.get(), modified.get(), deleted.get());
+            log.error("Error during reconciliation scan", e);
         }
 
         syncEmptyFolderMarkers();

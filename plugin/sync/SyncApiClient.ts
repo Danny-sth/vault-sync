@@ -89,7 +89,9 @@ export class SyncApiClient {
 
   /**
    * Download a file from the server.
-   * @returns File content and hash, or null if download failed.
+   * @returns File content and hash on success, or `null` when the server returns 404
+   *   (the path was already deleted upstream — a benign race, not an error). Any other
+   *   non-200 status throws so the caller can retry.
    */
   async download(path: string): Promise<{ content: ArrayBuffer; hash: string } | null> {
     const encodedPath = this.encodePathForUrl(path);
@@ -99,7 +101,12 @@ export class SyncApiClient {
       url,
       method: 'GET',
       headers: this.headers,
+      throw: false,
     });
+
+    if (response.status === 404) {
+      return null;
+    }
 
     if (response.status !== 200) {
       throw new Error(`Download failed: ${response.status}`);
