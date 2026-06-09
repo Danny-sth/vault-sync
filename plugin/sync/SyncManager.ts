@@ -6,6 +6,7 @@ import { SyncFilter } from './SyncFilter';
 import { SyncApiClient, ConflictError } from './SyncApiClient';
 import { ConflictResolver, SyncAction } from './ConflictResolver';
 import { FileOperationService } from './FileOperationService';
+import { SyncStatusNotice } from './SyncStatusNotice';
 import {
   VaultSyncSettings,
   ServerMessage,
@@ -24,6 +25,7 @@ export class SyncManager {
   private localState: LocalState;
   private apiClient: SyncApiClient;
   private fileOps: FileOperationService;
+  private readonly status = new SyncStatusNotice();
 
   private pendingChanges: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private isProcessingRemote = false;
@@ -73,7 +75,7 @@ export class SyncManager {
 
     } catch (e) {
       console.error('[VaultSync] Connection failed:', e);
-      new Notice('Vault Sync: Connection failed');
+      this.status.error('нет связи с сервером');
     }
   }
 
@@ -89,7 +91,7 @@ export class SyncManager {
     this.connectionState = state;
 
     if (state === 'connected') {
-      new Notice('Vault Sync: Connected');
+      console.debug('[VaultSync] Connected');
       this.onConnectionChange?.(true);
     } else if (state === 'disconnected') {
       this.onConnectionChange?.(false);
@@ -311,7 +313,7 @@ export class SyncManager {
 
   async requestFullSync(): Promise<void> {
     if (!this.isConnected()) {
-      new Notice('Vault Sync: Not connected');
+      this.status.error('не подключено');
       return;
     }
 
@@ -321,29 +323,28 @@ export class SyncManager {
     }
 
     this.isSyncing = true;
+    this.status.begin('синхронизация…');
     try {
-      new Notice('Vault Sync: Syncing...');
       const response = await this.stompClient.requestSync(0);
 
-      await this.processFullSync(response);
+      const summary = await this.processFullSync(response);
       await this.localState.setLastSeq(response.currentSeq);
 
-      new Notice('Vault Sync: Sync complete');
+      this.status.done(summary);
     } catch (e) {
       console.error('[VaultSync] Full sync failed:', e);
-      new Notice('Vault Sync: Sync failed');
+      this.status.error('синхронизация не удалась');
     } finally {
       this.isSyncing = false;
     }
   }
 
-  private async processFullSync(response: SyncResponse): Promise<void> {
+  private async processFullSync(response: SyncResponse): Promise<string> {
     try {
       const files = response.files || [];
       const tombstoneList = response.tombstones || [];
 
       console.debug(`[VaultSync] Full sync received: ${files.length} files, ${tombstoneList.length} tombstones, currentSeq=${response.currentSeq}`);
-      new Notice(`Sync: Server has ${files.length} files`);
 
     const serverFiles = new Map(
       files.filter(f => SyncFilter.shouldSync(f.path)).map(f => [f.path, f])
@@ -363,7 +364,6 @@ export class SyncManager {
     console.log(`[VaultSync] Server: ${serverFiles.size} files, ${tombstones.size} tombstones`);
     console.log(`[VaultSync] Local: ${localFilePaths.size} files (vault: ${vaultFiles.length}, obsidian: ${obsidianPaths.length}, hidden: ${hiddenPaths.length}, allHidden: ${allHiddenInVault.length})`);
     console.log(`[VaultSync] LocalState: ${localHashes.size} stored hashes`);
-    new Notice(`Sync: Server=${serverFiles.size}, Local=${localFilePaths.size}, Tombstones=${tombstones.size}`);
 
     let missingCount = 0;
     const missingPaths: string[] = [];
@@ -378,7 +378,6 @@ export class SyncManager {
     console.debug(`[VaultSync] DEBUG: ${missingCount} files on server but not local`);
     if (missingCount > 0) {
       console.debug(`[VaultSync] DEBUG: Missing examples: ${missingPaths.join(', ')}`);
-      new Notice(`Sync: Need to download ${missingCount} files`);
     }
 
     let downloaded = 0;
@@ -428,7 +427,7 @@ export class SyncManager {
     console.debug(`[VaultSync] Need to download ${toDownload.length} files`);
 
     if (toDownload.length > 0) {
-      new Notice(`Downloading ${toDownload.length} files...`);
+      this.status.update(`загрузка ${toDownload.length} файлов…`);
     }
 
     for (let i = 0; i < toDownload.length; i++) {
@@ -436,7 +435,7 @@ export class SyncManager {
 
       if ((i + 1) % 10 === 0 || i === toDownload.length - 1) {
         console.debug(`[VaultSync] Downloading progress: ${i + 1}/${toDownload.length}`);
-        new Notice(`Download: ${i + 1}/${toDownload.length}`);
+        this.status.update(`загрузка ${i + 1}/${toDownload.length}…`);
       }
 
       const success = await this.downloadFile(path);
@@ -445,7 +444,6 @@ export class SyncManager {
       } else {
         downloadFailed++;
         console.error(`[VaultSync] Failed to download after retries: ${path}`);
-        new Notice(`Failed: ${path}`);
       }
 
       if (i < toDownload.length - 1) {
@@ -491,7 +489,7 @@ export class SyncManager {
     console.log(`[VaultSync] SYNC PLAN: Upload=${toUpload.length}, Delete(old)=${toDeleteLocallyOld.length}, Delete(tombstone)=${tombstonedToDelete.length}`);
 
     if (tombstonedToDelete.length > 0) {
-      new Notice(`Removing ${tombstonedToDelete.length} tombstoned files...`);
+      this.status.update(`удаление ${tombstonedToDelete.length}…`);
     }
 
     for (const path of tombstonedToDelete) {
@@ -515,7 +513,7 @@ export class SyncManager {
     }
 
     if (toDeleteLocallyOld.length > 0) {
-      new Notice(`Removing ${toDeleteLocallyOld.length} files deleted on server...`);
+      this.status.update(`удаление ${toDeleteLocallyOld.length}…`);
     }
 
     for (const path of toDeleteLocallyOld) {
@@ -539,7 +537,7 @@ export class SyncManager {
     }
 
     if (toUpload.length > 0) {
-      new Notice(`Uploading ${toUpload.length} new files...`);
+      this.status.update(`отправка ${toUpload.length}…`);
     }
 
     for (let i = 0; i < toUpload.length; i++) {
@@ -623,18 +621,17 @@ export class SyncManager {
 
     await this.fileOps.cleanupEmptyFolders();
 
+    const failed = downloadFailed + uploadFailed;
     const summary = `Sync complete: ↓${downloaded}${downloadFailed > 0 ? '(❌' + downloadFailed + ')' : ''} ↑${uploaded}${uploadFailed > 0 ? '(❌' + uploadFailed + ')' : ''} ×${deleted}`;
     console.log(`[VaultSync] ========== FULL SYNC END ==========`);
     console.log(`[VaultSync] ${summary}`);
     console.log(`[VaultSync] Downloaded: ${downloaded}, Uploaded: ${uploaded}, Deleted: ${deleted}`);
     console.log(`[VaultSync] Failures: download=${downloadFailed}, upload=${uploadFailed}`);
 
-    if (downloadFailed > 0 || uploadFailed > 0) {
-      new Notice(`Vault Sync: ${summary}`);
-    }
+    const toast = `↓${downloaded} ↑${uploaded} ×${deleted}` + (failed > 0 ? ` · ⚠️ ${failed} с ошибкой` : '');
+    return failed > 0 ? toast : `готово · ${toast}`;
     } catch (e: any) {
       console.error('[VaultSync] processFullSync error:', e);
-      new Notice(`Sync error: ${e?.message || 'Unknown error'}`);
       throw e;
     }
   }
