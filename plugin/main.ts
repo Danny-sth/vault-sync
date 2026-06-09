@@ -18,7 +18,6 @@ export default class VaultSyncPlugin extends Plugin {
     console.debug('[VaultSync] ========================================');
     console.debug('[VaultSync] Loading plugin v2.0');
     console.debug('[VaultSync] ========================================');
-    new Notice('VaultSync: Loading plugin...');
 
     try {
       await this.loadSettings();
@@ -223,7 +222,7 @@ export default class VaultSyncPlugin extends Plugin {
         console.debug(`[VaultSync] Registered command: ${commandId}`);
       });
 
-      new Notice(`Vault Sync: ${commands.length} commands registered`);
+      console.debug(`[VaultSync] ${commands.length} commands registered`);
     } catch (error) {
       console.error('[VaultSync] Failed to register dynamic commands:', error);
     }
