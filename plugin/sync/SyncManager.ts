@@ -251,8 +251,13 @@ export class SyncManager {
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
         const result = await this.apiClient.download(path);
-        if (!result) {
-          throw new Error('Download returned null');
+        if (result === null) {
+          // Server returned 404 — the file was already deleted upstream (a benign race,
+          // typically from a rapidly create+deleted file). Don't retry, don't log an error:
+          // the matching file_deleted broadcast will remove any local copy. This is the fix
+          // for the Android "Failed to download after retries" error storm.
+          console.debug(`[VaultSync] ${path} gone upstream (404) — skipping download`);
+          return true;
         }
 
         const { content, hash } = result;
