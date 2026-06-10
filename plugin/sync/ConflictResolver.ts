@@ -54,13 +54,18 @@ export class ConflictResolver {
       return 'noop';
     }
 
-    if (lastKnownHash !== undefined) {
-      if (local.hash === lastKnownHash) {
-        return 'download';
-      }
-      if (server.hash === lastKnownHash) {
-        return 'upload';
-      }
+    // File was never synced from server on this device → server is source of truth.
+    // Don't use mtime tiebreaker: local mtime is always "newer" for files created by
+    // Obsidian plugins (daily notes, templates) after the server already has content.
+    if (lastKnownHash === undefined) {
+      return 'download';
+    }
+
+    if (local.hash === lastKnownHash) {
+      return 'download'; // only server changed
+    }
+    if (server.hash === lastKnownHash) {
+      return 'upload'; // only we changed
     }
 
     return this.resolveConflict(path, local, server);
