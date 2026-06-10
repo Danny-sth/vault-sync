@@ -2,6 +2,7 @@ import { App, Modal, Setting } from 'obsidian';
 import { LUCIDE_ICONS } from './LucideIcons';
 import { BRAND_ICONS } from './BrandIcons';
 import { DEV_ICONS } from './DevIcons';
+import { BRAND_COLORS, DEV_ICON_COLORS } from './IconColors';
 
 const EMOJI_CATEGORIES: Record<string, string[]> = {
   '★ Quick': ['🧠', '💡', '🎯', '🏆', '🔑', '📝', '📚', '🔬', '🎨', '💰', '📊', '🌍', '🚀', '⚡', '🔐', '🛡️', '🤖', '💎', '🌱', '🎮', '🎵', '📷', '🏋️', '✈️', '🏔️', '🌊', '🧬', '💊', '🎸', '🕯️', '🗺️', '⏰', '🎁', '👑', '🦁', '🐉', '🔭', '🧩', '🌸', '⚽', '🍕', '☕', '🍷', '🎬', '🎤', '🎧', '🖥️', '📱', '🔧', '🏠'],
@@ -120,10 +121,10 @@ export class IconPickerModal extends Modal {
         this.renderLucideGrid(searchTerm);
         break;
       case 'brand':
-        this.renderSvgIconGrid(BRAND_ICONS, searchTerm);
+        this.renderSvgIconGrid(BRAND_ICONS, searchTerm, BRAND_COLORS);
         break;
       case 'dev':
-        this.renderSvgIconGrid(DEV_ICONS, searchTerm);
+        this.renderSvgIconGrid(DEV_ICONS, searchTerm, DEV_ICON_COLORS);
         break;
       default:
         this.renderEmojiGrid(searchTerm);
@@ -160,7 +161,7 @@ export class IconPickerModal extends Modal {
     }
   }
 
-  private renderSvgIconGrid(icons: Record<string, string>, searchTerm: string): void {
+  private renderSvgIconGrid(icons: Record<string, string>, searchTerm: string, colorMap?: Record<string, string>): void {
     if (!this.gridContainer) return;
 
     const iconNames = Object.keys(icons);
@@ -176,7 +177,9 @@ export class IconPickerModal extends Modal {
       }
 
       const svgPath = icons[iconName];
-      iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" fill="currentColor">${svgPath}</svg>`;
+      const color = colorMap?.[iconName];
+      const fillAttr = color ? `fill="${color}" style="color:${color}"` : 'fill="currentColor"';
+      iconEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="20" height="20" ${fillAttr}>${svgPath}</svg>`;
       iconEl.setAttribute('title', iconName);
 
       iconEl.addEventListener('click', () => {

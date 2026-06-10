@@ -2,6 +2,7 @@ import { App, TFile, TFolder } from 'obsidian';
 import { LUCIDE_ICONS } from './LucideIcons';
 import { BRAND_ICONS } from './BrandIcons';
 import { DEV_ICONS } from './DevIcons';
+import { BRAND_COLORS, DEV_ICON_COLORS } from './IconColors';
 
 const FOLDER_ICONS_PATH = '.obsidian/folder-icons.json';
 
@@ -243,11 +244,15 @@ export class FileIcons {
     }
 
     if (BRAND_ICONS[iconName]) {
-      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="vault-sync-fill-icon">${BRAND_ICONS[iconName]}</svg>`;
+      const color = BRAND_COLORS[iconName];
+      const style = color ? ` style="color:${color};fill:${color}"` : '';
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="vault-sync-fill-icon"${style}>${BRAND_ICONS[iconName]}</svg>`;
     }
 
     if (DEV_ICONS[iconName]) {
-      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="vault-sync-fill-icon">${DEV_ICONS[iconName]}</svg>`;
+      const color = DEV_ICON_COLORS[iconName];
+      const style = color ? ` style="color:${color};fill:${color}"` : '';
+      return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="vault-sync-fill-icon"${style}>${DEV_ICONS[iconName]}</svg>`;
     }
 
     if (/\p{Emoji}/u.test(iconName)) {
