@@ -1,6 +1,5 @@
 import { App, Plugin, PluginSettingTab, Setting, Notice, TFile, TFolder, Menu, TAbstractFile } from 'obsidian';
 import { SyncManager } from './sync/SyncManager';
-import { DailyNotes } from './daily/DailyNotes';
 import { FileIcons } from './icons/FileIcons';
 import { IconPickerModal } from './icons/IconPickerModal';
 import { CommandExecutor } from './commands/CommandExecutor';
@@ -9,7 +8,6 @@ import { VaultSyncSettings, DEFAULT_SETTINGS } from './types';
 export default class VaultSyncPlugin extends Plugin {
   settings: VaultSyncSettings = DEFAULT_SETTINGS;
   syncManager: SyncManager | null = null;
-  dailyNotes: DailyNotes | null = null;
   fileIcons: FileIcons | null = null;
   commandExecutor: CommandExecutor | null = null;
   statusBarItem: HTMLElement | null = null;
@@ -48,8 +46,8 @@ export default class VaultSyncPlugin extends Plugin {
 
       this.addCommand({
         id: 'vault-sync-create-daily',
-        name: 'Create Daily Note',
-        callback: () => this.dailyNotes?.createTodayNote(),
+        name: 'Sync Daily Note (pull from server)',
+        callback: () => this.syncManager?.requestFullSync(),
       });
 
       this.commandExecutor = new CommandExecutor(this.app, this.settings);
@@ -99,13 +97,10 @@ export default class VaultSyncPlugin extends Plugin {
         })
       );
 
-      this.dailyNotes = new DailyNotes(this.app);
-
       this.fileIcons = new FileIcons(this.app);
 
       this.app.workspace.onLayoutReady(async () => {
         console.debug('[VaultSync] Workspace ready, initializing modules...');
-        await this.dailyNotes?.init();
         await this.fileIcons?.init();
       });
 
