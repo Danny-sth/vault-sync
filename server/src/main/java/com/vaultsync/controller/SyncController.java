@@ -30,7 +30,7 @@ public class SyncController {
             @Payload SyncMessage.FileChange message,
             Principal principal) {
 
-        log.debug("File change from {}: {}", message.getDeviceId(), message.getPath());
+        log.info("STOMP change from {}: {}", message.getDeviceId(), message.getPath());
 
         return syncService.processFileChange(
                 message.getPath(),
@@ -51,7 +51,7 @@ public class SyncController {
             @Payload SyncMessage.FileDelete message,
             Principal principal) {
 
-        log.debug("File delete from {}: {}", message.getDeviceId(), message.getPath());
+        log.info("STOMP delete from {}: {}", message.getDeviceId(), message.getPath());
 
         return syncService.processFileDelete(
                 message.getPath(),
@@ -81,6 +81,10 @@ public class SyncController {
         }
 
         response.setRequestId(request.getRequestId());
+        int fileCount = response.getFiles() != null ? response.getFiles().size() : 0;
+        int tombCount = response.getTombstones() != null ? response.getTombstones().size() : 0;
+        log.info("Sync response to {} → {} files, {} tombstones, currentSeq={}",
+                request.getDeviceId(), fileCount, tombCount, response.getCurrentSeq());
         return response;
     }
 
