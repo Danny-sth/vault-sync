@@ -177,12 +177,15 @@ public class FileController {
                 headers.add("X-File-Size", String.valueOf(info.getSize()));
             }
 
+            long size = info != null ? info.getSize() : -1;
+            log.info("File downloaded: {} by {} ({} bytes)", path, deviceId, size);
             return ResponseEntity.ok()
                     .headers(headers)
                     .contentType(MediaType.APPLICATION_OCTET_STREAM)
                     .body(resource);
 
         } catch (NoSuchFileException e) {
+            log.warn("File download 404: {} by {}", path, deviceId);
             return ResponseEntity.notFound().build();
         } catch (IOException e) {
             log.error("Failed to download file: {}", path, e);
