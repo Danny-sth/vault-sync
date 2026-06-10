@@ -171,8 +171,23 @@ export class FileWatcher {
       }
 
       if (changes.length > 0 && this.onChangesDetected) {
-        console.debug(`[FileWatcher] Detected ${changes.length} changes`);
-        this.onChangesDetected(changes);
+        // Deduplicate: for the same path, create/modify beats delete.
+        // This prevents false deletes when a file transitions from being discovered
+        // via adapter scan (lastScanAllHiddenFiles) to being indexed by Obsidian's
+        // vault (vault.getFiles()) — a transition that generates both a CREATE and a
+        // DELETE in the same scan batch (e.g. .asc or other non-standard extensions).
+        const dedupMap = new Map<string, FileChange>();
+        for (const change of changes) {
+          const existing = dedupMap.get(change.path);
+          if (!existing || (existing.type === 'delete' && change.type !== 'delete')) {
+            dedupMap.set(change.path, change);
+          }
+        }
+        const dedupedChanges = Array.from(dedupMap.values());
+        if (dedupedChanges.length !== changes.length) {
+          console.debug(`[FileWatcher] Deduped ${changes.length} → ${dedupedChanges.length} changes`);
+        }
+        this.onChangesDetected(dedupedChanges);
       }
     } catch (e) {
       console.error('[FileWatcher] Scan error:', e);
@@ -191,10 +206,19 @@ export class FileWatcher {
       this.lastScanConfigFiles.set(path, { mtime, size });
     } else if (path.startsWith('.')) {
       this.lastScanHiddenFiles.set(path, { mtime, size });
-    } else if (this.isHiddenFileName(path)) {
-      this.lastScanAllHiddenFiles.set(path, { mtime, size });
     } else {
-      this.lastScanFiles.set(path, { mtime, size });
+      // Use vault API to determine the correct baseline bucket.
+      // Files with non-standard extensions (e.g. .asc, .gpg) may not be tracked
+      // by vault.getFiles() until Obsidian explicitly indexes them. Putting such a
+      // file in lastScanFiles (which is checked against vault.getFiles()) would
+      // cause a false delete on the next scan. Using lastScanAllHiddenFiles keeps
+      // it consistent with how listAllHiddenFilesInVault discovers it.
+      const isVaultTracked = this.app.vault.getAbstractFileByPath(path) instanceof TFile;
+      if (isVaultTracked) {
+        this.lastScanFiles.set(path, { mtime, size });
+      } else {
+        this.lastScanAllHiddenFiles.set(path, { mtime, size });
+      }
     }
   }
 
@@ -203,10 +227,11 @@ export class FileWatcher {
       this.lastScanConfigFiles.delete(path);
     } else if (path.startsWith('.')) {
       this.lastScanHiddenFiles.delete(path);
-    } else if (this.isHiddenFileName(path)) {
-      this.lastScanAllHiddenFiles.delete(path);
     } else {
+      // Remove from both possible buckets: the file may have been in either one
+      // depending on whether Obsidian had indexed it at the time it was added.
       this.lastScanFiles.delete(path);
+      this.lastScanAllHiddenFiles.delete(path);
     }
   }
 
