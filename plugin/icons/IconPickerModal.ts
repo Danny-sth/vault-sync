@@ -234,23 +234,27 @@ export class IconPickerModal extends Modal {
     style.textContent = `
       .vault-sync-icon-picker {
         padding: 16px;
-        min-width: 400px;
+        min-width: 480px;
       }
       .vault-sync-icon-picker h2 {
         margin-top: 0;
-        margin-bottom: 16px;
+        margin-bottom: 12px;
+        font-size: 16px;
       }
       .icon-picker-tabs {
         display: flex;
-        gap: 8px;
-        margin-bottom: 16px;
+        gap: 6px;
+        margin-bottom: 12px;
+        flex-wrap: wrap;
       }
       .icon-picker-tab {
-        padding: 8px 16px;
-        border-radius: 4px;
+        padding: 6px 14px;
+        border-radius: 6px;
         cursor: pointer;
         background: var(--background-secondary);
+        font-size: 13px;
         transition: background 0.15s;
+        user-select: none;
       }
       .icon-picker-tab:hover {
         background: var(--background-modifier-hover);
@@ -260,46 +264,53 @@ export class IconPickerModal extends Modal {
         color: var(--text-on-accent);
       }
       .icon-picker-search {
-        margin-bottom: 16px;
+        margin-bottom: 12px;
       }
       .icon-picker-search-input {
         width: 100%;
-        padding: 8px 12px;
+        padding: 7px 12px;
         font-size: 14px;
         border: 1px solid var(--background-modifier-border);
-        border-radius: 4px;
+        border-radius: 6px;
         background: var(--background-primary);
         color: var(--text-normal);
+        box-sizing: border-box;
       }
       .icon-picker-grid {
-        max-height: 400px;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(40px, 1fr));
+        gap: 4px;
+        max-height: 420px;
         overflow-y: auto;
-        padding: 4px;
+        padding: 2px;
       }
       .icon-picker-category {
+        grid-column: 1 / -1;
         font-weight: 600;
-        margin: 12px 0 8px 0;
+        margin: 10px 0 4px 0;
         color: var(--text-muted);
-        font-size: 12px;
+        font-size: 11px;
         text-transform: uppercase;
+        letter-spacing: 0.05em;
       }
       .icon-picker-category:first-child {
         margin-top: 0;
       }
       .icon-picker-category-grid {
+        grid-column: 1 / -1;
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(40px, 1fr));
         gap: 4px;
       }
       .icon-picker-item {
         display: flex;
         align-items: center;
         justify-content: center;
-        width: 36px;
-        height: 36px;
-        border-radius: 4px;
+        height: 40px;
+        border-radius: 6px;
         cursor: pointer;
-        transition: background 0.15s;
+        transition: background 0.12s;
+        min-width: 0;
       }
       .icon-picker-item:hover {
         background: var(--background-modifier-hover);
@@ -311,14 +322,18 @@ export class IconPickerModal extends Modal {
       .icon-picker-item svg {
         width: 20px;
         height: 20px;
+        flex-shrink: 0;
       }
       .icon-picker-emoji {
         font-size: 20px;
+        line-height: 1;
       }
       .icon-picker-empty {
+        grid-column: 1 / -1;
         text-align: center;
         color: var(--text-muted);
-        padding: 20px;
+        padding: 24px;
+        font-size: 14px;
       }
     `;
     document.head.appendChild(style);
