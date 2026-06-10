@@ -73,12 +73,31 @@ export class SyncFilter {
 
   /**
    * Check if path matches any exclude pattern.
+   *
+   * For extension-like patterns (start with '.' and contain no '/'), we do a
+   * word-boundary check: the character immediately after the match must be
+   * end-of-string, another '.', or '/'. This prevents false positives like
+   * '.temp' inadvertently excluding 'note.template.md' or '.temporary.txt'.
    */
   private static matchesExcludePattern(path: string): boolean {
     for (const pattern of this.EXCLUDE_PATTERNS) {
-      if (path.includes(pattern)) {
-        return true;
+      if (!path.includes(pattern)) continue;
+
+      // Extension patterns need a tighter check to avoid substring false matches.
+      if (pattern.startsWith('.') && !pattern.includes('/')) {
+        let idx = path.indexOf(pattern);
+        while (idx !== -1) {
+          const after = idx + pattern.length;
+          const charAfter = after < path.length ? path[after] : '';
+          if (!charAfter || charAfter === '.' || charAfter === '/') {
+            return true;
+          }
+          idx = path.indexOf(pattern, idx + 1);
+        }
+        continue;
       }
+
+      return true;
     }
     return false;
   }
