@@ -28,6 +28,8 @@ certs/
 # Test data
 test-vault/
 server/vault-sync
+data/
+*.mv.db
 
 # Maven wrapper junk
 .mvn/
