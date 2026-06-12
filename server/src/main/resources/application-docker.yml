@@ -5,6 +5,15 @@ server:
 spring:
   datasource:
     url: jdbc:h2:file:/data/metadata;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://on-za-menya.online/realms/duq
+          jwk-set-uri: https://on-za-menya.online/realms/duq/protocol/openid-connect/certs
 
 vault-sync:
   storage-path: /data/files
