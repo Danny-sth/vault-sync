@@ -208,18 +208,19 @@ export class PdfProgress {
     // An elegant rounded "pill" near the RIGHT edge, inset top/bottom so it
     // clears the PDF toolbar above and the floating mobile toolbar below.
     // Fills top→bottom as you read; theme accent colour so it blends in.
-    const bar = container.createDiv({ cls: 'vs-read-pill-v7' });
+    const bar = container.createDiv({ cls: 'vs-read-pill-v8' });
     bar.style.cssText =
       'position:absolute;right:12px;top:50%;height:210px;margin-top:-105px;width:30px;z-index:50;' +
-      'border-radius:15px;overflow:hidden;pointer-events:none;opacity:0;' +
+      'border-radius:15px;overflow:hidden;pointer-events:none;opacity:0;transform:translateX(14px);' +
       'background:var(--background-secondary-alt);border:1px solid var(--background-modifier-border);' +
-      'box-shadow:0 3px 12px rgba(0,0,0,0.35);transition:opacity 0.55s ease;' +
+      'box-shadow:0 3px 12px rgba(0,0,0,0.35);' +
+      'transition:opacity 0.6s cubic-bezier(0.22,1,0.36,1),transform 0.6s cubic-bezier(0.22,1,0.36,1);' +
       'backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)';
     const fill = bar.createDiv();
     fill.style.cssText =
       'position:absolute;top:0;left:0;width:100%;height:0%;' +
       'background:linear-gradient(180deg,var(--interactive-accent-hover,#6b8fe0),var(--interactive-accent));' +
-      'transition:height 0.3s ease';
+      'transition:height 0.55s cubic-bezier(0.22,1,0.36,1)';
     // Percent label INSIDE the pill, centred, with a shadow so it stays
     // readable over both the filled (accent) and empty (track) parts.
     const label = bar.createSpan({ cls: 'vs-read-pct' });
@@ -246,9 +247,13 @@ export class PdfProgress {
     const bar = this.barEl;
     if (!bar) return;
     bar.style.opacity = '1';
+    bar.style.transform = 'translateX(0)';
     if (this.fadeTimer !== null) window.clearTimeout(this.fadeTimer);
     this.fadeTimer = window.setTimeout(() => {
-      if (this.barEl) this.barEl.style.opacity = '0';
+      if (this.barEl) {
+        this.barEl.style.opacity = '0';
+        this.barEl.style.transform = 'translateX(14px)';
+      }
       this.fadeTimer = null;
     }, 5000);
   }
