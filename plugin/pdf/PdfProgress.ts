@@ -77,6 +77,15 @@ export class PdfProgress {
     );
     // The active leaf at load time won't fire the event above.
     this.app.workspace.onLayoutReady(() => this.onLeafChange(this.app.workspace.activeLeaf ?? null));
+
+    // Gravity: tilt the water with the phone, like a real liquid in a vial.
+    this.plugin.registerDomEvent(window, 'deviceorientation', (e: DeviceOrientationEvent) => {
+      if (!this.barFill) return;
+      const gamma = e.gamma ?? 0; // left/right tilt, −90..90
+      const ang = Math.max(-20, Math.min(20, -gamma * 0.55));
+      this.barFill.style.setProperty('--vs-tilt', `${ang}deg`);
+      this.barFill.style.transform = `rotate(var(--vs-tilt,0deg))`;
+    });
   }
 
   /** Flush any pending save when the plugin unloads. */
@@ -210,7 +219,7 @@ export class PdfProgress {
     // clears the PDF toolbar above and the floating mobile toolbar below.
     // Fills top→bottom as you read; theme accent colour so it blends in.
     this.injectStyle();
-    const bar = container.createDiv({ cls: 'vs-read-pill-v14' });
+    const bar = container.createDiv({ cls: 'vs-read-pill-v16' });
     // Glassy translucent vial.
     bar.style.cssText =
       'position:absolute;right:12px;top:160px;bottom:112px;width:30px;z-index:50;' +
@@ -226,8 +235,12 @@ export class PdfProgress {
     const water = bar.createDiv({ cls: 'vs-water' });
     water.style.cssText =
       'position:absolute;left:0;right:0;bottom:0;height:0%;overflow:visible;' +
-      'background:hsla(205,72%,56%,0.55);' +
-      'transition:height 0.6s cubic-bezier(0.22,1,0.36,1),background-color 0.7s ease';
+      'background:linear-gradient(180deg,hsla(0,85%,58%,0.6),hsla(40,88%,56%,0.6),' +
+      'hsla(90,75%,50%,0.6),hsla(150,72%,48%,0.6),hsla(195,82%,55%,0.6),' +
+      'hsla(235,80%,60%,0.6),hsla(285,75%,62%,0.6),hsla(325,82%,60%,0.6),hsla(360,85%,58%,0.6));' +
+      'background-size:100% 320%;animation:vsRainbow 9s linear infinite;' +
+      'transform-origin:50% 100%;' +
+      'transition:height 0.6s cubic-bezier(0.22,1,0.36,1),transform 0.45s cubic-bezier(0.34,1.4,0.5,1)';
 
     // Two overlapping foamy wave surfaces (white, translucent) for a живой top.
     // Each SVG is 200% wide and scrolls left by 50% on loop → seamless ripple.
@@ -278,10 +291,7 @@ export class PdfProgress {
     // read. The label is the remaining percent (100 → 0).
     const remaining = 100 - pct;
     this.barFill.style.height = `${remaining}%`;
-    // Hue sweeps the entire rainbow (0→360) with reading progress, and the
-    // background-color transition (0.7s) keeps the change smooth between pages.
-    const hue = Math.round((pct / 100) * 360);
-    this.barFill.style.backgroundColor = `hsla(${hue},80%,56%,0.55)`;
+    // Water itself is a shimmering rainbow (all colours at once, animated).
     this.barLabel.setText(`${remaining}%`);
     this.showBar();
   }
@@ -296,46 +306,18 @@ export class PdfProgress {
       '.vs-wave-a{animation:vsWave 2.6s linear infinite}' +
       '.vs-wave-b{animation:vsWave 1.8s linear infinite}' +
       '@keyframes vsBubble{0%{transform:translateY(0);opacity:0}' +
-      '15%{opacity:0.7}90%{opacity:0.25}100%{transform:translateY(-150px);opacity:0}}';
+      '15%{opacity:0.7}90%{opacity:0.25}100%{transform:translateY(-150px);opacity:0}}' +
+      '@keyframes vsRainbow{0%{background-position:0% 0%}100%{background-position:0% 100%}}';
     document.head.appendChild(s);
   }
 
-  /**
-   * Reveal the pill, then after an idle "drain" the water down and fade the
-   * capsule, so it never covers text while reading.
-   */
+  /** Ensure the vial is visible (it stays on screen while a PDF is open). */
   private showBar(): void {
     const bar = this.barEl;
     if (!bar) return;
+    // The vial stays visible while a PDF is open — just ensure it's shown.
     bar.style.opacity = '1';
     bar.style.transform = 'translateX(0)';
-    // Quick rise when refilling on a page change.
-    if (this.barFill) {
-      this.barFill.style.transition =
-        'height 0.6s cubic-bezier(0.22,1,0.36,1),background-color 0.7s ease';
-    }
-    if (this.fadeTimer !== null) window.clearTimeout(this.fadeTimer);
-    if (this.drainTimer !== null) {
-      window.clearTimeout(this.drainTimer);
-      this.drainTimer = null;
-    }
-    this.fadeTimer = window.setTimeout(() => {
-      // Phase 1: the water drains away slowly and smoothly.
-      if (this.barFill) {
-        this.barFill.style.transition =
-          'height 1.6s cubic-bezier(0.45,0,0.2,1),background-color 0.7s ease';
-        this.barFill.style.height = '0%';
-      }
-      // Phase 2: once empty, the capsule itself fades out.
-      this.drainTimer = window.setTimeout(() => {
-        if (this.barEl) {
-          this.barEl.style.opacity = '0';
-          this.barEl.style.transform = 'translateX(14px)';
-        }
-        this.drainTimer = null;
-      }, 1500);
-      this.fadeTimer = null;
-    }, 5000);
   }
 
   private removeBar(): void {
