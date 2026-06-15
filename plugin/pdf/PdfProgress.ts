@@ -62,6 +62,8 @@ export class PdfProgress {
   private barLabel: HTMLElement | null = null;
   private fadeTimer: number | null = null;
   private drainTimer: number | null = null;
+  /** Water level (% remaining). */
+  private level = 0;
   /** Epoch ms of the last "bookmark saved" notice, for throttling. */
   private lastNoticeAt = 0;
 
@@ -78,14 +80,6 @@ export class PdfProgress {
     // The active leaf at load time won't fire the event above.
     this.app.workspace.onLayoutReady(() => this.onLeafChange(this.app.workspace.activeLeaf ?? null));
 
-    // Gravity: tilt the water with the phone, like a real liquid in a vial.
-    this.plugin.registerDomEvent(window, 'deviceorientation', (e: DeviceOrientationEvent) => {
-      if (!this.barFill) return;
-      const gamma = e.gamma ?? 0; // left/right tilt, −90..90
-      const ang = Math.max(-20, Math.min(20, -gamma * 0.55));
-      this.barFill.style.setProperty('--vs-tilt', `${ang}deg`);
-      this.barFill.style.transform = `rotate(var(--vs-tilt,0deg))`;
-    });
   }
 
   /** Flush any pending save when the plugin unloads. */
@@ -219,10 +213,10 @@ export class PdfProgress {
     // clears the PDF toolbar above and the floating mobile toolbar below.
     // Fills top→bottom as you read; theme accent colour so it blends in.
     this.injectStyle();
-    const bar = container.createDiv({ cls: 'vs-read-pill-v16' });
+    const bar = container.createDiv({ cls: 'vs-read-pill-v19' });
     // Glassy translucent vial.
     bar.style.cssText =
-      'position:absolute;right:12px;top:160px;bottom:112px;width:30px;z-index:50;' +
+      'position:absolute;right:14px;top:50%;height:360px;margin-top:-180px;width:26px;z-index:50;' +
       'border-radius:15px;overflow:hidden;pointer-events:none;opacity:0;transform:translateX(14px);' +
       'background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.30);' +
       'box-shadow:0 4px 16px rgba(0,0,0,0.4),inset 0 1px 6px rgba(255,255,255,0.28),' +
@@ -232,32 +226,29 @@ export class PdfProgress {
 
     // Translucent water that rises from the BOTTOM; height = reading %, and its
     // hue shifts with progress. Drains away on fade.
+    // Water body rising from the bottom; height = level, colour by progress.
     const water = bar.createDiv({ cls: 'vs-water' });
     water.style.cssText =
       'position:absolute;left:0;right:0;bottom:0;height:0%;overflow:visible;' +
-      'background:linear-gradient(180deg,hsla(0,85%,58%,0.6),hsla(40,88%,56%,0.6),' +
-      'hsla(90,75%,50%,0.6),hsla(150,72%,48%,0.6),hsla(195,82%,55%,0.6),' +
-      'hsla(235,80%,60%,0.6),hsla(285,75%,62%,0.6),hsla(325,82%,60%,0.6),hsla(360,85%,58%,0.6));' +
-      'background-size:100% 320%;animation:vsRainbow 9s linear infinite;' +
-      'transform-origin:50% 100%;' +
-      'transition:height 0.6s cubic-bezier(0.22,1,0.36,1),transform 0.45s cubic-bezier(0.34,1.4,0.5,1)';
+      'background:hsla(205,80%,56%,0.62);' +
+      'transition:height 0.6s cubic-bezier(0.22,1,0.36,1),background-color 0.7s ease';
 
-    // Two overlapping foamy wave surfaces (white, translucent) for a живой top.
-    // Each SVG is 200% wide and scrolls left by 50% on loop → seamless ripple.
+    // Two offset sine waves scrolling across the surface — the standard
+    // liquid-fill wave pattern (what wavify draws), animated purely in CSS.
     const wave = (cls: string, opacity: number, fillCol: string) =>
       `<svg class="${cls}" viewBox="0 0 120 20" preserveAspectRatio="none" ` +
       `style="position:absolute;left:0;top:-8px;width:200%;height:14px;opacity:${opacity}">` +
       `<path d="M0 12 Q15 4 30 12 T60 12 T90 12 T120 12 V20 H0 Z" fill="${fillCol}"/></svg>`;
     const surface = water.createDiv({ cls: 'vs-surface' });
     surface.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:0';
-    surface.innerHTML = wave('vs-wave-a', 0.5, 'rgba(255,255,255,0.5)') +
-      wave('vs-wave-b', 0.75, 'rgba(255,255,255,0.7)');
+    surface.innerHTML = wave('vs-wave-a', 0.5, 'rgba(255,255,255,0.55)') +
+      wave('vs-wave-b', 0.8, 'rgba(255,255,255,0.75)');
 
     // A few rising bubbles for detail.
     for (let i = 0; i < 3; i++) {
       const b = water.createSpan({ cls: 'vs-bubble' });
       const size = 3 + i;
-      const left = 6 + i * 7;
+      const left = 5 + i * 7;
       b.style.cssText =
         `position:absolute;bottom:6px;left:${left}px;width:${size}px;height:${size}px;` +
         'border-radius:50%;background:rgba(255,255,255,0.5);' +
@@ -270,13 +261,12 @@ export class PdfProgress {
       'position:absolute;left:4px;top:7px;width:6px;height:55%;border-radius:4px;z-index:3;pointer-events:none;' +
       'background:linear-gradient(180deg,rgba(255,255,255,0.55),rgba(255,255,255,0))';
 
-    // Percent label, centred, readable over water or empty track.
+    // Percent label, centred, readable over the water.
     const label = bar.createSpan({ cls: 'vs-read-pct' });
     label.style.cssText =
       'position:absolute;top:50%;left:0;right:0;transform:translateY(-50%);text-align:center;z-index:4;' +
       'font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;color:#fff;' +
       'text-shadow:0 0 3px rgba(0,0,0,0.7),0 1px 2px rgba(0,0,0,0.5);pointer-events:none';
-    // barFill points at the water layer so renderStatus controls its level.
     const fill = water;
     this.barEl = bar;
     this.barFill = fill;
@@ -290,8 +280,12 @@ export class PdfProgress {
     // Water shows how much is LEFT: full at the start, draining to empty as you
     // read. The label is the remaining percent (100 → 0).
     const remaining = 100 - pct;
+    this.level = remaining;
     this.barFill.style.height = `${remaining}%`;
-    // Water itself is a shimmering rainbow (all colours at once, animated).
+    // One colour, chosen by reading progress across the whole spectrum
+    // (red→…→violet); the background-color transition keeps it smooth.
+    const hue = Math.round((pct / 100) * 360);
+    this.barFill.style.backgroundColor = `hsla(${hue},80%,56%,0.62)`;
     this.barLabel.setText(`${remaining}%`);
     this.showBar();
   }
