@@ -1,0 +1,261 @@
+import { App, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
+import { PROGRESS_DIR, progressFilePath, buildEntry, serialize, parse } from './PdfProgressStore';
+
+/**
+ * Remembers the last page you were on in any PDF and restores it next time the
+ * same PDF is opened — including on other devices, because the progress files
+ * live in the vault and ride the existing vault-sync channel.
+ *
+ * A "book" is simply any `.pdf` file in the vault; its vault-relative path is
+ * the identity. Progress is stored one-file-per-PDF under `_pdf-progress/`
+ * (see PdfProgressStore for why per-file beats a single shared file).
+ *
+ * The current page is read from / written to Obsidian's built-in PDF viewer
+ * via its internal (undocumented) pdf.js structures. Obsidian's core is closed
+ * source, so this surface can shift between releases — every access is wrapped
+ * in try/catch, and a break disables only this feature, never the whole plugin.
+ */
+
+/** Idle time after the last page change before progress is persisted. */
+const SAVE_DEBOUNCE_MS = 1500;
+/** Viewer-readiness polling. */
+const POLL_INTERVAL_MS = 200;
+const POLL_MAX_TRIES = 30; // ~6s
+
+interface MinimalEventBus {
+  on(name: string, cb: (data: any) => void): void;
+  off(name: string, cb: (data: any) => void): void;
+}
+
+/** The slice of Obsidian's internal PDF viewer we actually touch. */
+interface PdfChild {
+  pdfViewer?: {
+    eventBus?: MinimalEventBus;
+    pagesCount?: number;
+    pdfViewer?: { currentPageNumber?: number } | null;
+  };
+}
+
+interface Attached {
+  leaf: WorkspaceLeaf;
+  path: string;
+  eventBus: MinimalEventBus;
+  onPageChanging: (data: any) => void;
+  onPagesLoaded: (data: any) => void;
+  restoreDone: boolean;
+}
+
+export class PdfProgress {
+  private app: App;
+  private plugin: Plugin;
+  private attached: Attached | null = null;
+  private pollTimer: number | null = null;
+  private saveTimer: number | null = null;
+  /** Last page persisted per book, to skip redundant writes. */
+  private lastSaved = new Map<string, number>();
+  private dirEnsured = false;
+
+  constructor(plugin: Plugin) {
+    this.plugin = plugin;
+    this.app = plugin.app;
+  }
+
+  /** Begin watching the workspace for PDF views. */
+  start(): void {
+    this.plugin.registerEvent(
+      this.app.workspace.on('active-leaf-change', (leaf) => this.onLeafChange(leaf)),
+    );
+    // The active leaf at load time won't fire the event above.
+    this.app.workspace.onLayoutReady(() => this.onLeafChange(this.app.workspace.activeLeaf ?? null));
+  }
+
+  /** Flush any pending save when the plugin unloads. */
+  destroy(): void {
+    this.detach();
+  }
+
+  // --- leaf lifecycle -----------------------------------------------------
+
+  private onLeafChange(leaf: WorkspaceLeaf | null): void {
+    if (this.attached && this.attached.leaf === leaf) return;
+    this.detach();
+
+    const path = this.pdfPathOf(leaf);
+    if (!leaf || !path) return;
+
+    this.waitForViewer(leaf, path, 0);
+  }
+
+  /** Returns the vault path if the leaf shows a `.pdf`, else null. */
+  private pdfPathOf(leaf: WorkspaceLeaf | null): string | null {
+    try {
+      const view: any = leaf?.view;
+      if (!view || view.getViewType?.() !== 'pdf') return null;
+      const file: TFile | undefined = view.file;
+      if (!file || file.extension?.toLowerCase() !== 'pdf') return null;
+      return file.path;
+    } catch {
+      return null;
+    }
+  }
+
+  private getChild(leaf: WorkspaceLeaf): PdfChild | null {
+    try {
+      return ((leaf.view as any)?.viewer?.child as PdfChild) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Poll until the viewer's eventBus exists, then attach handlers. */
+  private waitForViewer(leaf: WorkspaceLeaf, path: string, tries: number): void {
+    const child = this.getChild(leaf);
+    const eventBus = child?.pdfViewer?.eventBus;
+    if (eventBus) {
+      this.attach(leaf, path, child!, eventBus);
+      return;
+    }
+    if (tries >= POLL_MAX_TRIES) return; // viewer never became ready; give up quietly
+    this.pollTimer = window.setTimeout(
+      () => this.waitForViewer(leaf, path, tries + 1),
+      POLL_INTERVAL_MS,
+    );
+    this.plugin.registerInterval(this.pollTimer); // ensure cleanup on unload
+  }
+
+  private attach(leaf: WorkspaceLeaf, path: string, child: PdfChild, eventBus: MinimalEventBus): void {
+    const state: Attached = {
+      leaf,
+      path,
+      eventBus,
+      restoreDone: false,
+      onPageChanging: (data: any) => {
+        // Ignore the viewer's initial auto-scroll before we've restored.
+        if (!state.restoreDone) return;
+        const page = typeof data?.pageNumber === 'number' ? data.pageNumber : undefined;
+        if (page && page >= 1) this.scheduleSave(path, page);
+      },
+      onPagesLoaded: () => {
+        this.restore(path, child);
+        state.restoreDone = true;
+      },
+    };
+
+    try {
+      eventBus.on('pagechanging', state.onPageChanging);
+      eventBus.on('pagesloaded', state.onPagesLoaded);
+    } catch (e) {
+      console.error('[VaultSync][pdf] failed to subscribe to viewer events:', e);
+      return;
+    }
+    this.attached = state;
+
+    // If the document is already loaded, 'pagesloaded' won't fire again.
+    if ((child.pdfViewer?.pagesCount ?? 0) > 0) {
+      this.restore(path, child);
+      state.restoreDone = true;
+    }
+  }
+
+  private detach(): void {
+    if (this.pollTimer !== null) {
+      window.clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
+    // Persist a pending page immediately so a fast tab switch doesn't lose it.
+    if (this.saveTimer !== null) {
+      window.clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+      if (this.pendingSave) {
+        const { path, page } = this.pendingSave;
+        this.pendingSave = null;
+        void this.save(path, page);
+      }
+    }
+    const a = this.attached;
+    if (a) {
+      try {
+        a.eventBus.off('pagechanging', a.onPageChanging);
+        a.eventBus.off('pagesloaded', a.onPagesLoaded);
+      } catch {
+        /* viewer already torn down */
+      }
+      this.attached = null;
+    }
+  }
+
+  // --- restore / save -----------------------------------------------------
+
+  private restore(path: string, child: PdfChild): void {
+    void this.readSaved(path).then((entry) => {
+      if (!entry) return;
+      try {
+        const viewer = child.pdfViewer?.pdfViewer;
+        const total = child.pdfViewer?.pagesCount ?? 0;
+        if (!viewer) return;
+        const target = total > 0 ? Math.min(entry.page, total) : entry.page;
+        // Pre-seed lastSaved so the restore's own pagechanging isn't re-written.
+        this.lastSaved.set(path, target);
+        viewer.currentPageNumber = target;
+      } catch (e) {
+        console.error('[VaultSync][pdf] failed to restore page:', e);
+      }
+    });
+  }
+
+  private pendingSave: { path: string; page: number } | null = null;
+
+  private scheduleSave(path: string, page: number): void {
+    this.pendingSave = { path, page };
+    if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
+    this.saveTimer = window.setTimeout(() => {
+      this.saveTimer = null;
+      const pending = this.pendingSave;
+      this.pendingSave = null;
+      if (pending) void this.save(pending.path, pending.page);
+    }, SAVE_DEBOUNCE_MS);
+    this.plugin.registerInterval(this.saveTimer);
+  }
+
+  private async save(path: string, page: number): Promise<void> {
+    if (this.lastSaved.get(path) === page) return;
+    this.lastSaved.set(path, page);
+    try {
+      await this.ensureDir();
+      const filePath = progressFilePath(path);
+      const content = serialize(buildEntry(path, page, Date.now()));
+      const existing = this.app.vault.getAbstractFileByPath(filePath);
+      if (existing instanceof TFile) {
+        await this.app.vault.modify(existing, content);
+      } else {
+        await this.app.vault.create(filePath, content);
+      }
+    } catch (e) {
+      console.error('[VaultSync][pdf] failed to save progress:', e);
+    }
+  }
+
+  private async readSaved(path: string) {
+    try {
+      const filePath = progressFilePath(path);
+      const f = this.app.vault.getAbstractFileByPath(filePath);
+      if (!(f instanceof TFile)) return null;
+      return parse(await this.app.vault.read(f));
+    } catch (e) {
+      console.error('[VaultSync][pdf] failed to read progress:', e);
+      return null;
+    }
+  }
+
+  private async ensureDir(): Promise<void> {
+    if (this.dirEnsured) return;
+    if (!this.app.vault.getAbstractFileByPath(PROGRESS_DIR)) {
+      try {
+        await this.app.vault.createFolder(PROGRESS_DIR);
+      } catch {
+        /* already exists / created concurrently */
+      }
+    }
+    this.dirEnsured = true;
+  }
+}

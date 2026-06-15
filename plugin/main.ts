@@ -3,6 +3,7 @@ import { SyncManager } from './sync/SyncManager';
 import { FileIcons } from './icons/FileIcons';
 import { IconPickerModal } from './icons/IconPickerModal';
 import { CommandExecutor } from './commands/CommandExecutor';
+import { PdfProgress } from './pdf/PdfProgress';
 import { VaultSyncSettings, DEFAULT_SETTINGS } from './types';
 
 export default class VaultSyncPlugin extends Plugin {
@@ -10,6 +11,7 @@ export default class VaultSyncPlugin extends Plugin {
   syncManager: SyncManager | null = null;
   fileIcons: FileIcons | null = null;
   commandExecutor: CommandExecutor | null = null;
+  pdfProgress: PdfProgress | null = null;
   statusBarItem: HTMLElement | null = null;
 
   async onload(): Promise<void> {
@@ -98,6 +100,9 @@ export default class VaultSyncPlugin extends Plugin {
       );
 
       this.fileIcons = new FileIcons(this.app);
+
+      this.pdfProgress = new PdfProgress(this);
+      this.pdfProgress.start();
 
       this.app.workspace.onLayoutReady(async () => {
         console.debug('[VaultSync] Workspace ready, initializing modules...');
@@ -189,6 +194,7 @@ export default class VaultSyncPlugin extends Plugin {
     console.debug('[VaultSync] Unloading plugin');
     this.syncManager?.destroy();
     this.fileIcons?.destroy();
+    this.pdfProgress?.destroy();
   }
 
   /**
