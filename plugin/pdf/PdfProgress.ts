@@ -61,6 +61,7 @@ export class PdfProgress {
   private barFill: HTMLElement | null = null;
   private barLabel: HTMLElement | null = null;
   private fadeTimer: number | null = null;
+  private drainTimer: number | null = null;
   /** Epoch ms of the last "bookmark saved" notice, for throttling. */
   private lastNoticeAt = 0;
 
@@ -208,7 +209,8 @@ export class PdfProgress {
     // An elegant rounded "pill" near the RIGHT edge, inset top/bottom so it
     // clears the PDF toolbar above and the floating mobile toolbar below.
     // Fills top→bottom as you read; theme accent colour so it blends in.
-    const bar = container.createDiv({ cls: 'vs-read-pill-v8' });
+    this.injectStyle();
+    const bar = container.createDiv({ cls: 'vs-read-pill-v9' });
     bar.style.cssText =
       'position:absolute;right:12px;top:50%;height:210px;margin-top:-105px;width:30px;z-index:50;' +
       'border-radius:15px;overflow:hidden;pointer-events:none;opacity:0;transform:translateX(14px);' +
@@ -216,18 +218,50 @@ export class PdfProgress {
       'box-shadow:0 3px 12px rgba(0,0,0,0.35);' +
       'transition:opacity 0.6s cubic-bezier(0.22,1,0.36,1),transform 0.6s cubic-bezier(0.22,1,0.36,1);' +
       'backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)';
-    const fill = bar.createDiv();
-    fill.style.cssText =
-      'position:absolute;top:0;left:0;width:100%;height:0%;' +
+
+    // Water body: rises from the BOTTOM, height = reading %. Drains away on fade.
+    const water = bar.createDiv({ cls: 'vs-water' });
+    water.style.cssText =
+      'position:absolute;left:0;right:0;bottom:0;height:0%;overflow:visible;' +
       'background:linear-gradient(180deg,var(--interactive-accent-hover,#6b8fe0),var(--interactive-accent));' +
-      'transition:height 0.55s cubic-bezier(0.22,1,0.36,1)';
-    // Percent label INSIDE the pill, centred, with a shadow so it stays
-    // readable over both the filled (accent) and empty (track) parts.
+      'transition:height 0.6s cubic-bezier(0.22,1,0.36,1)';
+
+    // Two overlapping wavy surfaces (different speed/opacity) for a живой water top.
+    // Each SVG is 200% wide and scrolls left by 50% on loop → seamless ripple.
+    const wave = (cls: string, opacity: number, fillCol: string) =>
+      `<svg class="${cls}" viewBox="0 0 120 20" preserveAspectRatio="none" ` +
+      `style="position:absolute;left:0;top:-8px;width:200%;height:14px;opacity:${opacity}">` +
+      `<path d="M0 12 Q15 4 30 12 T60 12 T90 12 T120 12 V20 H0 Z" fill="${fillCol}"/></svg>`;
+    const surface = water.createDiv({ cls: 'vs-surface' });
+    surface.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:0';
+    surface.innerHTML = wave('vs-wave-a', 0.55, 'var(--interactive-accent-hover,#7ea2e8)') +
+      wave('vs-wave-b', 0.9, 'var(--interactive-accent)');
+
+    // A few rising bubbles for detail.
+    for (let i = 0; i < 3; i++) {
+      const b = water.createSpan({ cls: 'vs-bubble' });
+      const size = 3 + i;
+      const left = 6 + i * 7;
+      b.style.cssText =
+        `position:absolute;bottom:6px;left:${left}px;width:${size}px;height:${size}px;` +
+        'border-radius:50%;background:rgba(255,255,255,0.55);' +
+        `animation:vsBubble ${2.6 + i * 0.8}s ease-in ${i * 0.9}s infinite`;
+    }
+
+    // Highlight glare down the left side of the water.
+    const glare = water.createDiv();
+    glare.style.cssText =
+      'position:absolute;left:3px;top:0;bottom:0;width:5px;border-radius:3px;' +
+      'background:linear-gradient(180deg,rgba(255,255,255,0.45),rgba(255,255,255,0))';
+
+    // Percent label, centred, readable over water or empty track.
     const label = bar.createSpan({ cls: 'vs-read-pct' });
     label.style.cssText =
-      'position:absolute;top:50%;left:0;right:0;transform:translateY(-50%);text-align:center;' +
+      'position:absolute;top:50%;left:0;right:0;transform:translateY(-50%);text-align:center;z-index:2;' +
       'font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;color:#fff;' +
       'text-shadow:0 0 3px rgba(0,0,0,0.7),0 1px 2px rgba(0,0,0,0.5);pointer-events:none';
+    // barFill points at the water layer so renderStatus controls its level.
+    const fill = water;
     this.barEl = bar;
     this.barFill = fill;
     this.barLabel = label;
@@ -242,18 +276,45 @@ export class PdfProgress {
     this.showBar();
   }
 
-  /** Reveal the pill, then fade it out after a short idle so it never covers text while reading. */
+  /** Inject the keyframes for the water ripple and rising bubbles (once). */
+  private injectStyle(): void {
+    if (document.getElementById('vs-read-style')) return;
+    const s = document.createElement('style');
+    s.id = 'vs-read-style';
+    s.textContent =
+      '@keyframes vsWave{to{transform:translateX(-50%)}}' +
+      '.vs-wave-a{animation:vsWave 2.6s linear infinite}' +
+      '.vs-wave-b{animation:vsWave 1.8s linear infinite}' +
+      '@keyframes vsBubble{0%{transform:translateY(0);opacity:0}' +
+      '15%{opacity:0.7}90%{opacity:0.25}100%{transform:translateY(-150px);opacity:0}}';
+    document.head.appendChild(s);
+  }
+
+  /**
+   * Reveal the pill, then after an idle "drain" the water down and fade the
+   * capsule, so it never covers text while reading.
+   */
   private showBar(): void {
     const bar = this.barEl;
     if (!bar) return;
     bar.style.opacity = '1';
     bar.style.transform = 'translateX(0)';
     if (this.fadeTimer !== null) window.clearTimeout(this.fadeTimer);
+    if (this.drainTimer !== null) {
+      window.clearTimeout(this.drainTimer);
+      this.drainTimer = null;
+    }
     this.fadeTimer = window.setTimeout(() => {
-      if (this.barEl) {
-        this.barEl.style.opacity = '0';
-        this.barEl.style.transform = 'translateX(14px)';
-      }
+      // Phase 1: the water drains down to empty.
+      if (this.barFill) this.barFill.style.height = '0%';
+      // Phase 2: once empty, the capsule itself fades away.
+      this.drainTimer = window.setTimeout(() => {
+        if (this.barEl) {
+          this.barEl.style.opacity = '0';
+          this.barEl.style.transform = 'translateX(14px)';
+        }
+        this.drainTimer = null;
+      }, 650);
       this.fadeTimer = null;
     }, 5000);
   }
@@ -262,6 +323,10 @@ export class PdfProgress {
     if (this.fadeTimer !== null) {
       window.clearTimeout(this.fadeTimer);
       this.fadeTimer = null;
+    }
+    if (this.drainTimer !== null) {
+      window.clearTimeout(this.drainTimer);
+      this.drainTimer = null;
     }
     this.barEl?.remove();
     this.barLabel?.remove();
