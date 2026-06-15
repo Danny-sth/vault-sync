@@ -213,7 +213,7 @@ export class PdfProgress {
     // clears the PDF toolbar above and the floating mobile toolbar below.
     // Fills top→bottom as you read; theme accent colour so it blends in.
     this.injectStyle();
-    const bar = container.createDiv({ cls: 'vs-read-pill-v19' });
+    const bar = container.createDiv({ cls: 'vs-read-pill-v20' });
     // Glassy translucent vial.
     bar.style.cssText =
       'position:absolute;right:14px;top:50%;height:360px;margin-top:-180px;width:26px;z-index:50;' +
@@ -228,10 +228,13 @@ export class PdfProgress {
     // hue shifts with progress. Drains away on fade.
     // Water body rising from the bottom; height = level, colour by progress.
     const water = bar.createDiv({ cls: 'vs-water' });
+    // The water continuously cycles through every hue via an animated
+    // hue-rotate, so it shimmers smoothly across the whole spectrum.
     water.style.cssText =
       'position:absolute;left:0;right:0;bottom:0;height:0%;overflow:visible;' +
-      'background:hsla(205,80%,56%,0.62);' +
-      'transition:height 0.6s cubic-bezier(0.22,1,0.36,1),background-color 0.7s ease';
+      'background:hsla(0,85%,56%,0.66);filter:hue-rotate(0deg);' +
+      'animation:vsHue 11s linear infinite;' +
+      'transition:height 0.6s cubic-bezier(0.22,1,0.36,1)';
 
     // Two offset sine waves scrolling across the surface — the standard
     // liquid-fill wave pattern (what wavify draws), animated purely in CSS.
@@ -282,10 +285,7 @@ export class PdfProgress {
     const remaining = 100 - pct;
     this.level = remaining;
     this.barFill.style.height = `${remaining}%`;
-    // One colour, chosen by reading progress across the whole spectrum
-    // (red→…→violet); the background-color transition keeps it smooth.
-    const hue = Math.round((pct / 100) * 360);
-    this.barFill.style.backgroundColor = `hsla(${hue},80%,56%,0.62)`;
+    // Colour is driven by the continuous hue-rotate animation, not the page.
     this.barLabel.setText(`${remaining}%`);
     this.showBar();
   }
@@ -301,7 +301,8 @@ export class PdfProgress {
       '.vs-wave-b{animation:vsWave 1.8s linear infinite}' +
       '@keyframes vsBubble{0%{transform:translateY(0);opacity:0}' +
       '15%{opacity:0.7}90%{opacity:0.25}100%{transform:translateY(-150px);opacity:0}}' +
-      '@keyframes vsRainbow{0%{background-position:0% 0%}100%{background-position:0% 100%}}';
+      '@keyframes vsRainbow{0%{background-position:0% 0%}100%{background-position:0% 100%}}' +
+      '@keyframes vsHue{to{filter:hue-rotate(360deg)}}';
     document.head.appendChild(s);
   }
 
