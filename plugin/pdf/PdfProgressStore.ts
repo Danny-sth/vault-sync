@@ -44,6 +44,13 @@ export function progressFilePath(bookPath: string): string {
   return `${PROGRESS_DIR}/${hashPath(bookPath)}.json`;
 }
 
+/** Reading progress as a whole percent (0–100), clamped and safe for total <= 0. */
+export function percent(page: number, total: number): number {
+  if (!Number.isFinite(total) || total <= 0) return 0;
+  const pct = Math.round((page / total) * 100);
+  return Math.max(0, Math.min(100, pct));
+}
+
 /** Build a progress entry. `now` is injected for deterministic testing. */
 export function buildEntry(bookPath: string, page: number, now: number): ProgressEntry {
   return { path: bookPath, page, mtime: now };
