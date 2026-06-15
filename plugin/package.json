@@ -19,6 +19,7 @@
     "esbuild": "^0.20.0",
     "obsidian": "^1.4.0",
     "typescript": "^5.3.0",
+    "vitest": "^2.1.9",
     "ws": "^8.20.0"
   },
   "dependencies": {
