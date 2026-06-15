@@ -5,9 +5,29 @@ import {
   buildEntry,
   serialize,
   parse,
+  percent,
   PROGRESS_DIR,
   type ProgressEntry,
 } from './PdfProgressStore';
+
+describe('percent', () => {
+  it('computes a rounded whole percent', () => {
+    expect(percent(149, 339)).toBe(44);
+    expect(percent(1, 339)).toBe(0);
+    expect(percent(339, 339)).toBe(100);
+  });
+
+  it('is safe for zero/invalid totals', () => {
+    expect(percent(5, 0)).toBe(0);
+    expect(percent(5, -1)).toBe(0);
+    expect(percent(5, NaN)).toBe(0);
+  });
+
+  it('clamps to 0..100', () => {
+    expect(percent(400, 339)).toBe(100);
+    expect(percent(-5, 339)).toBe(0);
+  });
+});
 
 describe('hashPath', () => {
   it('is deterministic for the same input', () => {

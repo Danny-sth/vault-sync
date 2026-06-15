@@ -1,5 +1,5 @@
-import { App, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
-import { PROGRESS_DIR, progressFilePath, buildEntry, serialize, parse } from './PdfProgressStore';
+import { App, Notice, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
+import { PROGRESS_DIR, progressFilePath, buildEntry, serialize, parse, percent } from './PdfProgressStore';
 
 /**
  * Remembers the last page you were on in any PDF and restores it next time the
@@ -21,6 +21,8 @@ const SAVE_DEBOUNCE_MS = 1500;
 /** Viewer-readiness polling. */
 const POLL_INTERVAL_MS = 200;
 const POLL_MAX_TRIES = 30; // ~6s
+/** Minimum gap between "bookmark saved" notices, to avoid spam while flipping pages. */
+const SAVE_NOTICE_THROTTLE_MS = 6000;
 
 interface MinimalEventBus {
   on(name: string, cb: (data: any) => void): void;
@@ -54,6 +56,13 @@ export class PdfProgress {
   /** Last page persisted per book, to skip redundant writes. */
   private lastSaved = new Map<string, number>();
   private dirEnsured = false;
+  /** Floating progress bar pinned to the bottom edge of the active PDF view. */
+  private barEl: HTMLElement | null = null;
+  private barFill: HTMLElement | null = null;
+  private barLabel: HTMLElement | null = null;
+  private fadeTimer: number | null = null;
+  /** Epoch ms of the last "bookmark saved" notice, for throttling. */
+  private lastNoticeAt = 0;
 
   constructor(plugin: Plugin) {
     this.plugin = plugin;
@@ -130,10 +139,13 @@ export class PdfProgress {
       eventBus,
       restoreDone: false,
       onPageChanging: (data: any) => {
+        const page = typeof data?.pageNumber === 'number' ? data.pageNumber : undefined;
+        const total = child.pdfViewer?.pagesCount ?? 0;
+        // Keep the progress bar live even before restore completes.
+        if (page && page >= 1) this.renderStatus(page, total);
         // Ignore the viewer's initial auto-scroll before we've restored.
         if (!state.restoreDone) return;
-        const page = typeof data?.pageNumber === 'number' ? data.pageNumber : undefined;
-        if (page && page >= 1) this.scheduleSave(path, page);
+        if (page && page >= 1) this.scheduleSave(path, page, total);
       },
       onPagesLoaded: () => {
         this.restore(path, child);
@@ -149,6 +161,7 @@ export class PdfProgress {
       return;
     }
     this.attached = state;
+    this.ensureBar(leaf);
 
     // If the document is already loaded, 'pagesloaded' won't fire again.
     if ((child.pdfViewer?.pagesCount ?? 0) > 0) {
@@ -167,9 +180,9 @@ export class PdfProgress {
       window.clearTimeout(this.saveTimer);
       this.saveTimer = null;
       if (this.pendingSave) {
-        const { path, page } = this.pendingSave;
+        const { path, page, total } = this.pendingSave;
         this.pendingSave = null;
-        void this.save(path, page);
+        void this.save(path, page, total);
       }
     }
     const a = this.attached;
@@ -182,6 +195,87 @@ export class PdfProgress {
       }
       this.attached = null;
     }
+    this.clearStatus();
+  }
+
+  // --- progress bar + notices --------------------------------------------
+
+  /** Create the floating progress bar inside the PDF view (status bar is hidden on mobile). */
+  private ensureBar(leaf: WorkspaceLeaf): void {
+    this.removeBar();
+    const container: HTMLElement | undefined = (leaf.view as any)?.containerEl;
+    if (!container) return;
+    // An elegant rounded "pill" near the RIGHT edge, inset top/bottom so it
+    // clears the PDF toolbar above and the floating mobile toolbar below.
+    // Fills top→bottom as you read; theme accent colour so it blends in.
+    const bar = container.createDiv({ cls: 'vs-read-pill-v7' });
+    bar.style.cssText =
+      'position:absolute;right:12px;top:50%;height:210px;margin-top:-105px;width:30px;z-index:50;' +
+      'border-radius:15px;overflow:hidden;pointer-events:none;opacity:0;' +
+      'background:var(--background-secondary-alt);border:1px solid var(--background-modifier-border);' +
+      'box-shadow:0 3px 12px rgba(0,0,0,0.35);transition:opacity 0.55s ease;' +
+      'backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)';
+    const fill = bar.createDiv();
+    fill.style.cssText =
+      'position:absolute;top:0;left:0;width:100%;height:0%;' +
+      'background:linear-gradient(180deg,var(--interactive-accent-hover,#6b8fe0),var(--interactive-accent));' +
+      'transition:height 0.3s ease';
+    // Percent label INSIDE the pill, centred, with a shadow so it stays
+    // readable over both the filled (accent) and empty (track) parts.
+    const label = bar.createSpan({ cls: 'vs-read-pct' });
+    label.style.cssText =
+      'position:absolute;top:50%;left:0;right:0;transform:translateY(-50%);text-align:center;' +
+      'font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;color:#fff;' +
+      'text-shadow:0 0 3px rgba(0,0,0,0.7),0 1px 2px rgba(0,0,0,0.5);pointer-events:none';
+    this.barEl = bar;
+    this.barFill = fill;
+    this.barLabel = label;
+  }
+
+  /** Update the floating bar's fill width and label. */
+  private renderStatus(page: number, total: number): void {
+    if (!this.barFill || !this.barLabel) return;
+    const pct = percent(page, total);
+    this.barFill.style.height = `${pct}%`;
+    this.barLabel.setText(`${pct}%`);
+    this.showBar();
+  }
+
+  /** Reveal the pill, then fade it out after a short idle so it never covers text while reading. */
+  private showBar(): void {
+    const bar = this.barEl;
+    if (!bar) return;
+    bar.style.opacity = '1';
+    if (this.fadeTimer !== null) window.clearTimeout(this.fadeTimer);
+    this.fadeTimer = window.setTimeout(() => {
+      if (this.barEl) this.barEl.style.opacity = '0';
+      this.fadeTimer = null;
+    }, 5000);
+  }
+
+  private removeBar(): void {
+    if (this.fadeTimer !== null) {
+      window.clearTimeout(this.fadeTimer);
+      this.fadeTimer = null;
+    }
+    this.barEl?.remove();
+    this.barLabel?.remove();
+    this.barEl = null;
+    this.barFill = null;
+    this.barLabel = null;
+  }
+
+  private clearStatus(): void {
+    this.removeBar();
+  }
+
+  /** A subtle "bookmark saved" notice, throttled so flipping pages doesn't spam. */
+  private notifySaved(page: number, total: number): void {
+    const now = Date.now();
+    if (now - this.lastNoticeAt < SAVE_NOTICE_THROTTLE_MS) return;
+    this.lastNoticeAt = now;
+    const tail = total > 0 ? ` · ${percent(page, total)}%` : '';
+    new Notice(`🔖 Закладка · стр. ${page}${total ? '/' + total : ''}${tail}`, 2000);
   }
 
   // --- restore / save -----------------------------------------------------
@@ -197,29 +291,35 @@ export class PdfProgress {
         // Pre-seed lastSaved so the restore's own pagechanging isn't re-written.
         this.lastSaved.set(path, target);
         viewer.currentPageNumber = target;
+        this.renderStatus(target, total);
+        // Only announce a real resume (not page 1).
+        if (target > 1) {
+          new Notice(`🔖 Продолжаем со стр. ${target} из ${total || '?'} · ${percent(target, total)}%`, 4000);
+        }
       } catch (e) {
         console.error('[VaultSync][pdf] failed to restore page:', e);
       }
     });
   }
 
-  private pendingSave: { path: string; page: number } | null = null;
+  private pendingSave: { path: string; page: number; total: number } | null = null;
 
-  private scheduleSave(path: string, page: number): void {
-    this.pendingSave = { path, page };
+  private scheduleSave(path: string, page: number, total: number): void {
+    this.pendingSave = { path, page, total };
     if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
     this.saveTimer = window.setTimeout(() => {
       this.saveTimer = null;
       const pending = this.pendingSave;
       this.pendingSave = null;
-      if (pending) void this.save(pending.path, pending.page);
+      if (pending) void this.save(pending.path, pending.page, pending.total);
     }, SAVE_DEBOUNCE_MS);
     this.plugin.registerInterval(this.saveTimer);
   }
 
-  private async save(path: string, page: number): Promise<void> {
+  private async save(path: string, page: number, total = 0): Promise<void> {
     if (this.lastSaved.get(path) === page) return;
     this.lastSaved.set(path, page);
+    this.notifySaved(page, total);
     try {
       await this.ensureDir();
       const filePath = progressFilePath(path);
