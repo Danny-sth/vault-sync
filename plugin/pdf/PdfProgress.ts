@@ -210,10 +210,10 @@ export class PdfProgress {
     // clears the PDF toolbar above and the floating mobile toolbar below.
     // Fills top→bottom as you read; theme accent colour so it blends in.
     this.injectStyle();
-    const bar = container.createDiv({ cls: 'vs-read-pill-v10' });
+    const bar = container.createDiv({ cls: 'vs-read-pill-v12' });
     // Glassy translucent vial.
     bar.style.cssText =
-      'position:absolute;right:12px;top:50%;height:264px;margin-top:-132px;width:30px;z-index:50;' +
+      'position:absolute;right:12px;top:92px;bottom:88px;width:30px;z-index:50;' +
       'border-radius:15px;overflow:hidden;pointer-events:none;opacity:0;transform:translateX(14px);' +
       'background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.30);' +
       'box-shadow:0 4px 16px rgba(0,0,0,0.4),inset 0 1px 6px rgba(255,255,255,0.28),' +
@@ -275,8 +275,8 @@ export class PdfProgress {
     if (!this.barFill || !this.barLabel) return;
     const pct = percent(page, total);
     this.barFill.style.height = `${pct}%`;
-    // Hue glides across the spectrum with reading progress (cool → warm).
-    const hue = Math.round(205 + (pct / 100) * 140);
+    // Hue sweeps the full rainbow with reading progress (red → … → violet).
+    const hue = Math.round((pct / 100) * 320);
     this.barFill.style.backgroundColor = `hsla(${hue},72%,56%,0.55)`;
     this.barLabel.setText(`${pct}%`);
     this.showBar();
