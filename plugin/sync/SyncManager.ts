@@ -120,6 +120,7 @@ export class SyncManager {
       const success = await this.downloadFile(msg.path);
       if (success) {
         await this.localState.setLastSeq(msg.seq);
+        await this.localState.setFileSeq(msg.path, msg.seq);
       } else {
         console.error(`[VaultSync] Remote file change failed to download: ${msg.path}`);
       }
@@ -156,6 +157,9 @@ export class SyncManager {
       await this.fileOps.cleanupEmptyParentFolders(msg.path);
       await this.localState.deleteFileHash(msg.path);
       await this.localState.setLastSeq(msg.seq);
+      // Remember the DELETE's seq (survives deletion) so a later re-create can
+      // prove this device knew about the deletion → genuine recreation.
+      await this.localState.setFileSeq(msg.path, msg.seq);
       this.fileWatcher.removeFromBaseline(msg.path);
     } catch (e) {
       console.error(`[VaultSync] Failed to delete ${msg.path}:`, e);
@@ -378,6 +382,14 @@ export class SyncManager {
     const allHiddenInVault = (await SyncFilter.listAllHiddenFilesInVault(this.app)).filter(p => SyncFilter.shouldSync(p));
     const localFilePaths = new Set<string>([...vaultFiles.map(f => f.path), ...obsidianPaths, ...hiddenPaths, ...allHiddenInVault]);
     const localHashes = await this.localState.getAllHashes();
+
+    // Record the seq the server reports for every path (live files AND
+    // tombstones) so this device's per-path version is always current — this is
+    // what later lets an upload prove genuine recreation (baseSeq >= tomb.seq).
+    for (const f of serverFiles.values()) await this.localState.setFileSeq(f.path, f.seq);
+    for (const t of tombstoneList) {
+      if (SyncFilter.shouldSync(t.path)) await this.localState.setFileSeq(t.path, t.seq);
+    }
 
     console.log(`[VaultSync] ========== FULL SYNC START ==========`);
     console.log(`[VaultSync] Server: ${serverFiles.size} files, ${tombstones.size} tombstones`);
@@ -720,9 +732,11 @@ export class SyncManager {
       return;
     }
 
+    const baseSeq = await this.localState.getFileSeq(path);
     try {
-      await this.apiClient.upload(path, content, hash, mtime, existingHash ?? '');
+      const seq = await this.apiClient.upload(path, content, hash, mtime, existingHash ?? '', baseSeq);
       await this.localState.setFileHash(path, hash);
+      await this.localState.setFileSeq(path, seq);
     } catch (e) {
       if (e instanceof ConflictError) {
         await this.reconcileConflict(path, content, e.deleted);

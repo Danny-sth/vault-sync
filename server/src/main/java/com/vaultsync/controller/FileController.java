@@ -81,21 +81,31 @@ public class FileController {
             byte[] content = java.util.Base64.getDecoder().decode(request.content());
             String baseHash = request.baseHash();
 
-            // Deletion-resurrection guard: a live tombstone means this path was deleted.
-            // A device that still "remembers" a prior synced version (baseHash set) is just
-            // re-pushing stale state — reject so it deletes locally instead of resurrecting
-            // (the "deleted folders keep coming back" bug). An empty baseHash means a genuine
-            // (re)creation, which supersedes the tombstone.
+            // Deletion-resurrection guard — industry-standard VERSION check (not a
+            // hash heuristic). A live tombstone means this path was deleted at
+            // tombstone.seq. The client sends baseSeq = the highest seq it has seen
+            // for the path (including that deletion). Decide:
+            //   baseSeq == 0            → device never knew this path → genuine NEW file → accept
+            //   baseSeq >= tombstone.seq → device observed the deletion and still
+            //                              (re)creates → genuine recreation → accept
+            //   0 < baseSeq < tomb.seq  → device holds a PRE-deletion copy → stale
+            //                              re-push → reject (deletion wins; prevents the
+            //                              "deleted files keep coming back" loop)
+            // The old code rejected by "baseHash present", which wrongly deleted a
+            // genuinely re-added file whose device merely remembered the old hash.
             com.vaultsync.model.Tombstone tomb = syncService.getTombstone(request.path());
             if (tomb != null) {
-                if (baseHash != null && !baseHash.isBlank()) {
-                    log.warn("Resurrection blocked for {} by {}: live tombstone (seq={}) — rejected",
-                            request.path(), deviceId, tomb.getSeq());
+                long baseSeq = request.baseSeq();
+                if (baseSeq != 0 && baseSeq < tomb.getSeq()) {
+                    log.warn("Resurrection blocked for {} by {}: baseSeq={} < tombstone seq={} — stale re-push, rejected",
+                            request.path(), deviceId, baseSeq, tomb.getSeq());
                     return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
                             "error", "deleted",
                             "deletedSeq", tomb.getSeq()
                     ));
                 }
+                log.info("Resurrection allowed for {} by {}: baseSeq={} >= tombstone seq={} (genuine recreation)",
+                        request.path(), deviceId, baseSeq, tomb.getSeq());
                 syncService.clearTombstone(request.path());
             }
 
@@ -153,7 +163,7 @@ public class FileController {
         }
     }
 
-    public record JsonUploadRequest(String path, String content, String hash, long mtime, String baseHash) {}
+    public record JsonUploadRequest(String path, String content, String hash, long mtime, String baseHash, long baseSeq) {}
 
     /**
      * Download a file
