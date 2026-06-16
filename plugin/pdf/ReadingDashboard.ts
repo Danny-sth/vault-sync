@@ -21,6 +21,8 @@ const BLOCK_RE = /%%\s*reading\s*%%[\s\S]*?%%\s*\/reading\s*%%/;
 export class ReadingDashboard {
   private app: App;
   private plugin: Plugin;
+  /** Daily-notes folder (from config); daily notes auto-get the block. */
+  private dailyFolder = 'Daily';
 
   constructor(plugin: Plugin) {
     this.plugin = plugin;
@@ -28,6 +30,7 @@ export class ReadingDashboard {
   }
 
   start(): void {
+    void this.loadDailyFolder();
     this.plugin.registerEvent(
       this.app.workspace.on('file-open', (file) => {
         if (file instanceof TFile && file.extension === 'md') void this.updateNote(file);
@@ -42,14 +45,39 @@ export class ReadingDashboard {
     });
   }
 
-  /** Refresh the reading block inside a note, only if its markers are present. */
+  /** Read the daily-notes folder from config (defaults to 'Daily'). */
+  private async loadDailyFolder(): Promise<void> {
+    try {
+      const cfg = JSON.parse(await this.app.vault.adapter.read('.obsidian/daily-notes.json'));
+      if (typeof cfg.folder === 'string' && cfg.folder) this.dailyFolder = cfg.folder;
+    } catch {
+      /* keep default */
+    }
+  }
+
+  private isDailyNote(file: TFile): boolean {
+    const root = this.dailyFolder.replace(/\/+$/, '');
+    return file.path.startsWith(`${root}/`) && !file.path.startsWith(`${root}/Templates/`);
+  }
+
+  /**
+   * Update the reading block in a note. If the markers exist, refresh between
+   * them. If not but the note is a daily note, APPEND the section to the end —
+   * never overwriting the user's existing content above.
+   */
   private async updateNote(file: TFile): Promise<void> {
     try {
       const content = await this.app.vault.read(file);
-      if (!BLOCK_RE.test(content)) return;
-      const md = await this.renderMarkdown();
-      const block = `${MARK_START}\n${md}\n${MARK_END}`;
-      const next = content.replace(BLOCK_RE, block);
+      const block = `${MARK_START}\n${await this.renderMarkdown()}\n${MARK_END}`;
+
+      let next: string;
+      if (BLOCK_RE.test(content)) {
+        next = content.replace(BLOCK_RE, block);
+      } else if (this.isDailyNote(file)) {
+        next = `${content.replace(/\s*$/, '')}\n\n## 📚 Сейчас читаю\n\n${block}\n`;
+      } else {
+        return;
+      }
       if (next !== content) await this.app.vault.modify(file, next);
     } catch (e) {
       console.error('[VaultSync][reading] failed to update note:', e);
