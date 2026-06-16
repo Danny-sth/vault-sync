@@ -39,6 +39,15 @@ export class ReadingDashboard {
         if (file instanceof TFile && file.extension === 'md') void this.updateNote(file);
       }),
     );
+    // Dynamic refresh: when a progress file changes (you flip a page), refresh
+    // any daily notes currently open in the workspace so the block stays live.
+    this.plugin.registerEvent(
+      this.app.vault.on('modify', (file) => {
+        if (file instanceof TFile && file.path.startsWith(`${PROGRESS_DIR}/`)) {
+          this.refreshOpenDailyNotes();
+        }
+      }),
+    );
     this.plugin.addCommand({
       id: 'vault-sync-reading-dashboard',
       name: 'Insert/refresh "Сейчас читаю" here',
@@ -46,6 +55,24 @@ export class ReadingDashboard {
         void this.renderMarkdown().then((md) => editor.replaceSelection(`${MARK_START}\n${md}\n${MARK_END}`));
       },
     });
+  }
+
+  private refreshTimer: number | null = null;
+
+  /** Debounced refresh of every daily note currently open in the workspace. */
+  private refreshOpenDailyNotes(): void {
+    if (this.refreshTimer !== null) window.clearTimeout(this.refreshTimer);
+    this.refreshTimer = window.setTimeout(() => {
+      this.refreshTimer = null;
+      const seen = new Set<string>();
+      this.app.workspace.iterateAllLeaves((leaf) => {
+        const f = (leaf.view as { file?: TFile }).file;
+        if (f instanceof TFile && f.extension === 'md' && !seen.has(f.path)) {
+          seen.add(f.path);
+          void this.updateNote(f);
+        }
+      });
+    }, 800);
   }
 
   /** Read the daily-notes folder from config (defaults to 'Daily'). */
