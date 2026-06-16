@@ -304,9 +304,12 @@ export class SyncManager {
         return;
       }
 
-      await this.apiClient.delete(path);
+      const deleteSeq = await this.apiClient.delete(path);
 
       await this.localState.deleteFileHash(path);
+      // Remember the delete's seq (survives the deletion) so a later re-create
+      // at this path proves we observed the deletion → genuine recreation.
+      await this.localState.setFileSeq(path, deleteSeq);
 
       await this.fileOps.cleanupEmptyParentFolders(path);
 

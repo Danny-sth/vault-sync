@@ -243,7 +243,10 @@ public class FileController {
 
             log.info("File deleted (JSON): {} by {}", request.path(), deviceId);
 
-            return ResponseEntity.ok(Map.of("status", "ok"));
+            // Return the deletion's seq so the deleting device can remember it
+            // (it never receives its own broadcast). A later re-create then proves
+            // the device observed the deletion (baseSeq >= tomb.seq) → genuine.
+            return ResponseEntity.ok(Map.of("status", "ok", "seq", deleteMsg.getSeq()));
         } catch (Exception e) {
             log.error("Failed to delete file: {}", request.path(), e);
             return ResponseEntity.internalServerError()

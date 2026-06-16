@@ -135,7 +135,7 @@ export class SyncApiClient {
   /**
    * Delete a file on the server.
    */
-  async delete(path: string): Promise<void> {
+  async delete(path: string): Promise<number> {
     const response = await requestUrl({
       url: `${this.baseUrl}/api/delete-json`,
       method: 'POST',
@@ -149,6 +149,9 @@ export class SyncApiClient {
     if (response.status !== 200) {
       throw new Error(`Delete failed: ${response.status}`);
     }
+    // The deletion's seq — the caller records it so a later re-create proves
+    // this device observed the deletion.
+    return (response.json && response.json.seq) || 0;
   }
 
   /**
