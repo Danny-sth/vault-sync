@@ -1,11 +1,20 @@
 import { PendingOperation } from '../types';
 
 const DB_NAME = 'vault-sync';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const STORE_STATE = 'state';
 const STORE_HASHES = 'hashes';
 const STORE_PENDING = 'pending';
+/**
+ * Per-path last-seen server `seq` (monotonic version). Unlike hashes, this
+ * SURVIVES deletion: we keep the seq of the delete so that if the user later
+ * re-creates the file, the upload can prove the device knew about the deletion
+ * (baseSeq >= tombstone.seq) — the industry-standard version check that decides
+ * genuine recreation vs. a stale offline re-push, instead of the broken
+ * "does the device remember the old hash" heuristic.
+ */
+const STORE_SEQS = 'seqs';
 
 /**
  * Persistent local state using IndexedDB
@@ -43,6 +52,11 @@ export class LocalState {
           }
         }
 
+        if (oldVersion < 2) {
+          if (!db.objectStoreNames.contains(STORE_SEQS)) {
+            db.createObjectStore(STORE_SEQS);
+          }
+        }
       };
     });
   }
@@ -101,6 +115,18 @@ export class LocalState {
 
   async deleteFileHash(path: string): Promise<void> {
     await this.delete(STORE_HASHES, path);
+  }
+
+  /** Last server seq this device saw for a path (0 if never). Survives deletion. */
+  async getFileSeq(path: string): Promise<number> {
+    return (await this.get<number>(STORE_SEQS, path)) ?? 0;
+  }
+
+  /** Record the latest seq seen for a path; never moves backwards. */
+  async setFileSeq(path: string, seq: number): Promise<void> {
+    if (typeof seq !== 'number' || seq <= 0) return;
+    const current = await this.getFileSeq(path);
+    if (seq > current) await this.set(STORE_SEQS, path, seq);
   }
 
   async getAllHashes(): Promise<Map<string, string>> {

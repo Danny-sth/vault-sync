@@ -62,7 +62,14 @@ export class SyncApiClient {
    *   version, the upload is rejected with HTTP 409 (thrown as ConflictError) so we
    *   reconcile instead of clobbering newer content.
    */
-  async upload(path: string, content: ArrayBuffer, hash: string, mtime: number, baseHash = ''): Promise<void> {
+  async upload(
+    path: string,
+    content: ArrayBuffer,
+    hash: string,
+    mtime: number,
+    baseHash = '',
+    baseSeq = 0,
+  ): Promise<number> {
     const base64Content = this.arrayBufferToBase64(content);
 
     const response = await requestUrl({
@@ -72,7 +79,10 @@ export class SyncApiClient {
         ...this.headers,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ path, content: base64Content, hash, mtime, baseHash }),
+      // baseSeq = highest server seq this device saw for the path (incl. its
+      // deletion). The server compares it to a live tombstone's seq to decide
+      // genuine recreation (baseSeq >= tomb.seq) vs. stale re-push.
+      body: JSON.stringify({ path, content: base64Content, hash, mtime, baseHash, baseSeq }),
       throw: false,
     });
 
@@ -85,6 +95,8 @@ export class SyncApiClient {
     if (response.status !== 200) {
       throw new Error(`Upload failed: ${response.status}`);
     }
+
+    return (response.json && response.json.seq) || 0;
   }
 
   /**
