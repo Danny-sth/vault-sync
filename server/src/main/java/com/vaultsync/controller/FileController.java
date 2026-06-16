@@ -94,6 +94,7 @@ public class FileController {
             // The old code rejected by "baseHash present", which wrongly deleted a
             // genuinely re-added file whose device merely remembered the old hash.
             com.vaultsync.model.Tombstone tomb = syncService.getTombstone(request.path());
+            boolean clearTombstoneAfterStore = false;
             if (tomb != null) {
                 long baseSeq = request.baseSeq();
                 if (baseSeq != 0 && baseSeq < tomb.getSeq()) {
@@ -104,9 +105,10 @@ public class FileController {
                             "deletedSeq", tomb.getSeq()
                     ));
                 }
-                log.info("Resurrection allowed for {} by {}: baseSeq={} >= tombstone seq={} (genuine recreation)",
-                        request.path(), deviceId, baseSeq, tomb.getSeq());
-                syncService.clearTombstone(request.path());
+                // Genuine recreation. Clear the tombstone ONLY AFTER the file is
+                // actually stored — otherwise a storeBytes failure would leave
+                // neither file nor tombstone, desyncing every device.
+                clearTombstoneAfterStore = true;
             }
 
             // Optimistic concurrency (compare-and-swap): a client sends baseHash = the
@@ -134,6 +136,13 @@ public class FileController {
             FileRecord record = fileStorageService.storeBytes(
                     request.path(), content, request.hash(), deviceId, seq, request.mtime()
             );
+
+            // File is safely stored — now it's safe to drop the tombstone.
+            if (clearTombstoneAfterStore) {
+                syncService.clearTombstone(request.path());
+                log.info("Resurrection committed for {} by {} (tombstone cleared after store)",
+                        request.path(), deviceId);
+            }
 
             SyncMessage.FileChanged changeMsg = SyncMessage.FileChanged.builder()
                     .path(request.path())

@@ -124,7 +124,7 @@ export class LocalState {
 
   /** Record the latest seq seen for a path; never moves backwards. */
   async setFileSeq(path: string, seq: number): Promise<void> {
-    if (typeof seq !== 'number' || seq <= 0) return;
+    if (typeof seq !== 'number' || !Number.isFinite(seq) || seq <= 0) return;
     const current = await this.getFileSeq(path);
     if (seq > current) await this.set(STORE_SEQS, path, seq);
   }
