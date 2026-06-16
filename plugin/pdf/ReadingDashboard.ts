@@ -186,13 +186,17 @@ export class ReadingDashboard {
           const line = `- ✅ **[[${e.path}|${baseName(e.path)}]]** · ${e.total} стр · дочитано ${fmtDate(e.mtime)}`;
           content = `${content.replace(/\s*$/, '')}\n${line}\n`;
         }
-        // Remove the progress file → the book leaves the active dashboard.
-        const pf = this.app.vault.getAbstractFileByPath(progressFilePath(e.path));
-        if (pf instanceof TFile) await this.app.vault.delete(pf);
         moved++;
       }
+      // Persist the archive FIRST. Only once the books are safely written do we
+      // remove their progress files — otherwise a failed modify would delete the
+      // progress while losing the archive entry (silent data loss).
       if (existing instanceof TFile) await this.app.vault.modify(existing, content);
       else await this.app.vault.create(ARCHIVE_PATH, content);
+      for (const e of done) {
+        const pf = this.app.vault.getAbstractFileByPath(progressFilePath(e.path));
+        if (pf instanceof TFile) await this.app.vault.delete(pf);
+      }
       new Notice(`📚 В архив перенесено: ${moved}`);
       this.refreshOpenDailyNotes();
     } catch (e) {
