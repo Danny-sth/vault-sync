@@ -127,13 +127,13 @@ export class ReadingDashboard {
     const lines = entries.map((e) => {
       const name = baseName(e.path);
       const pct = percent(e.page, e.total);
-      const pages = e.total > 0 ? `${e.page}/${e.total}` : `стр. ${e.page}`;
-      const pctStr = e.total > 0 ? `${pct}% · ` : '';
+      const pages = e.total > 0 ? `${e.page} / ${e.total}` : `стр. ${e.page}`;
       const when = relTime(now - e.mtime);
-      // Wikilink to the PDF so it opens on click.
-      return `- 📖 [[${e.path}|${name}]] — ${pctStr}${pages} · ${when}`;
+      // Bold title (wikilink opens the PDF) + a native HTML progress bar.
+      const bar = `<progress value="${pct}" max="100"></progress>`;
+      return `**[[${e.path}|📖 ${name}]]**\n${bar} **${pct}%** · ${pages} · _${when}_`;
     });
-    return lines.join('\n');
+    return lines.join('\n\n');
   }
 
   private async readAll(): Promise<ProgressEntry[]> {
