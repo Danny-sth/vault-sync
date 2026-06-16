@@ -23,6 +23,9 @@ export class ReadingDashboard {
   private plugin: Plugin;
   /** Daily-notes folder (from config); daily notes auto-get the block. */
   private dailyFolder = 'Daily';
+  /** Paths currently being updated — guards against concurrent file-open
+   *  handlers appending the block twice. */
+  private updating = new Set<string>();
 
   constructor(plugin: Plugin) {
     this.plugin = plugin;
@@ -66,6 +69,8 @@ export class ReadingDashboard {
    * never overwriting the user's existing content above.
    */
   private async updateNote(file: TFile): Promise<void> {
+    if (this.updating.has(file.path)) return; // another handler is already on it
+    this.updating.add(file.path);
     try {
       const content = await this.app.vault.read(file);
       const block = `${MARK_START}\n${await this.renderMarkdown()}\n${MARK_END}`;
@@ -81,6 +86,8 @@ export class ReadingDashboard {
       if (next !== content) await this.app.vault.modify(file, next);
     } catch (e) {
       console.error('[VaultSync][reading] failed to update note:', e);
+    } finally {
+      this.updating.delete(file.path);
     }
   }
 
