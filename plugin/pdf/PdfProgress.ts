@@ -55,7 +55,6 @@ export class PdfProgress {
   private saveTimer: number | null = null;
   /** Last page persisted per book, to skip redundant writes. */
   private lastSaved = new Map<string, number>();
-  private dirEnsured = false;
   /** Floating progress bar pinned to the bottom edge of the active PDF view. */
   private barEl: HTMLElement | null = null;
   private barFill: HTMLElement | null = null;
@@ -85,6 +84,7 @@ export class PdfProgress {
   /** Flush any pending save when the plugin unloads. */
   destroy(): void {
     this.detach();
+    document.getElementById('vs-read-style')?.remove(); // don't leak the stylesheet
   }
 
   // --- leaf lifecycle -----------------------------------------------------
@@ -129,6 +129,9 @@ export class PdfProgress {
       return;
     }
     if (tries >= POLL_MAX_TRIES) return; // viewer never became ready; give up quietly
+    // Cancel any previous poll chain before scheduling a new one, so a fast
+    // leaf switch can't leave two chains racing to attach() to stale leaves.
+    if (this.pollTimer !== null) window.clearTimeout(this.pollTimer);
     this.pollTimer = window.setTimeout(
       () => this.waitForViewer(leaf, path, tries + 1),
       POLL_INTERVAL_MS,
@@ -152,8 +155,8 @@ export class PdfProgress {
         if (page && page >= 1) this.scheduleSave(path, page, total);
       },
       onPagesLoaded: () => {
-        this.restore(path, child);
-        state.restoreDone = true;
+        if (state.restoreDone) return; // already restored in attach() — no double notice
+        this.restore(path, child, state); // restore marks restoreDone when the page is set
       },
     };
 
@@ -169,8 +172,7 @@ export class PdfProgress {
 
     // If the document is already loaded, 'pagesloaded' won't fire again.
     if ((child.pdfViewer?.pagesCount ?? 0) > 0) {
-      this.restore(path, child);
-      state.restoreDone = true;
+      this.restore(path, child, state);
     }
   }
 
@@ -345,10 +347,10 @@ export class PdfProgress {
 
   // --- restore / save -----------------------------------------------------
 
-  private restore(path: string, child: PdfChild): void {
+  private restore(path: string, child: PdfChild, state: Attached): void {
     void this.readSaved(path).then((entry) => {
-      if (!entry) return;
       try {
+        if (!entry) return;
         const viewer = child.pdfViewer?.pdfViewer;
         const total = child.pdfViewer?.pagesCount ?? 0;
         if (!viewer) return;
@@ -363,6 +365,11 @@ export class PdfProgress {
         }
       } catch (e) {
         console.error('[VaultSync][pdf] failed to restore page:', e);
+      } finally {
+        // Mark restore complete only AFTER the page is set: the assignment above
+        // fires its own 'pagechanging' synchronously, and with restoreDone still
+        // false that event is ignored instead of re-saving the restored page.
+        state.restoreDone = true;
       }
     });
   }
@@ -405,7 +412,11 @@ export class PdfProgress {
       const filePath = progressFilePath(path);
       const f = this.app.vault.getAbstractFileByPath(filePath);
       if (!(f instanceof TFile)) return null;
-      return parse(await this.app.vault.read(f));
+      const entry = parse(await this.app.vault.read(f));
+      // Guard against an FNV-32 hash collision: the file name is hash(path), so a
+      // collision would hand us another book's progress. Trust the stored path.
+      if (entry && entry.path !== path) return null;
+      return entry;
     } catch (e) {
       console.error('[VaultSync][pdf] failed to read progress:', e);
       return null;
@@ -413,14 +424,15 @@ export class PdfProgress {
   }
 
   private async ensureDir(): Promise<void> {
-    if (this.dirEnsured) return;
-    if (!this.app.vault.getAbstractFileByPath(PROGRESS_DIR)) {
-      try {
-        await this.app.vault.createFolder(PROGRESS_DIR);
-      } catch {
-        /* already exists / created concurrently */
-      }
+    // Check every time (cheap in-memory lookup): the folder can disappear after
+    // its last progress file is archived/deleted, so a cached "ensured" flag
+    // would wrongly skip re-creating it and make the next save throw
+    // "Parent folder doesn't exist".
+    if (this.app.vault.getAbstractFileByPath(PROGRESS_DIR)) return;
+    try {
+      await this.app.vault.createFolder(PROGRESS_DIR);
+    } catch {
+      /* already exists / created concurrently */
     }
-    this.dirEnsured = true;
   }
 }
