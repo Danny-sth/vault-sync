@@ -7,6 +7,7 @@ import { SyncApiClient, ConflictError } from './SyncApiClient';
 import { ConflictResolver, SyncAction } from './ConflictResolver';
 import { FileOperationService } from './FileOperationService';
 import { SyncStatusNotice } from './SyncStatusNotice';
+import { tombstoneApplies as decideTombstone } from './TombstoneLogic';
 import {
   VaultSyncSettings,
   ServerMessage,
@@ -339,6 +340,24 @@ export class SyncManager {
     }
   }
 
+  /**
+   * Whether a tombstone should delete the local file at `path`. Thin wrapper
+   * over the pure, unit-tested decision in TombstoneLogic, so every tombstone
+   * pass shares ONE source of truth — their past divergence is what silently
+   * deleted freshly-added files.
+   */
+  private tombstoneApplies(
+    path: string,
+    localHashes: Map<string, string>,
+    serverFiles: Map<string, unknown>,
+  ): boolean {
+    return decideTombstone({
+      path,
+      syncedBefore: !!localHashes.get(path),
+      serverHasLive: serverFiles.has(path),
+    });
+  }
+
   private async processFullSync(response: SyncResponse): Promise<string> {
     try {
       const files = response.files || [];
@@ -453,11 +472,9 @@ export class SyncManager {
 
     const tombstonedToDelete: string[] = [];
     for (const path of tombstones) {
-      if (localFilePaths.has(path)) {
+      if (localFilePaths.has(path) && this.tombstoneApplies(path, localHashes, serverFiles)) {
         console.log(`[VaultSync] TOMBSTONE found for local file, will delete: ${path}`);
         tombstonedToDelete.push(path);
-      } else {
-        console.debug(`[VaultSync] TOMBSTONE exists but file not local: ${path}`);
       }
     }
 
@@ -471,7 +488,13 @@ export class SyncManager {
       }
 
       if (tombstones.has(path)) {
-        console.debug(`[VaultSync] File has tombstone, already in tombstonedToDelete: ${path}`);
+        // If the tombstone applies it's already queued for deletion. If it does
+        // NOT apply (the user just re-added the file), resurrect it by uploading
+        // so the server clears the tombstone and other devices get it back.
+        if (!this.tombstoneApplies(path, localHashes, serverFiles)) {
+          console.log(`[VaultSync] Newly-added file at tombstoned path, will upload (resurrect): ${path}`);
+          toUpload.push(path);
+        }
         continue;
       }
 
@@ -561,20 +584,8 @@ export class SyncManager {
     }
 
     for (const path of tombstones) {
-      if (path.startsWith('.obsidian/') && !path.startsWith('.obsidian/plugins/')) {
-        console.debug(`[VaultSync] Tombstones never auto-apply to .obsidian/* paths (except plugins): ${path}`);
-        continue;
-      }
-      const lastKnownHash = localHashes.get(path);
-      const isPlugin = path.startsWith('.obsidian/plugins/');
-      if (!lastKnownHash && !isPlugin) {
-        console.debug(`[VaultSync] Skipping tombstone for never-synced path: ${path}`);
-        continue;
-      }
-      if (serverFiles.has(path)) {
-        console.debug(`[VaultSync] Skipping stale tombstone (server has live record): ${path}`);
-        continue;
-      }
+      // Same single source of truth as the first pass (no more divergence).
+      if (!this.tombstoneApplies(path, localHashes, serverFiles)) continue;
 
       this.isProcessingRemote = true;
       try {
