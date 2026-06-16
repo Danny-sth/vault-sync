@@ -224,17 +224,15 @@ export class PdfProgress {
       'transition:opacity 0.6s cubic-bezier(0.22,1,0.36,1),transform 0.6s cubic-bezier(0.22,1,0.36,1);' +
       'backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)';
 
-    // Translucent water that rises from the BOTTOM; height = reading %, and its
-    // hue shifts with progress. Drains away on fade.
-    // Water body rising from the bottom; height = level, colour by progress.
+    // Translucent water that rises from the BOTTOM. Its HEIGHT is how much is
+    // left to read, and its HUE is driven by reading progress: as you read, the
+    // colour travels smoothly across the whole spectrum (set in renderStatus).
+    // No self-running animation — colour moves only when the percent moves.
     const water = bar.createDiv({ cls: 'vs-water' });
-    // The water continuously cycles through every hue via an animated
-    // hue-rotate, so it shimmers smoothly across the whole spectrum.
     water.style.cssText =
       'position:absolute;left:0;right:0;bottom:0;height:0%;overflow:visible;' +
       'background:hsla(0,85%,56%,0.66);filter:hue-rotate(0deg);' +
-      'animation:vsHue 11s linear infinite;' +
-      'transition:height 0.6s cubic-bezier(0.22,1,0.36,1)';
+      'transition:height 0.6s cubic-bezier(0.22,1,0.36,1),filter 0.6s linear';
 
     // Two offset sine waves scrolling across the surface — the standard
     // liquid-fill wave pattern (what wavify draws), animated purely in CSS.
@@ -285,7 +283,10 @@ export class PdfProgress {
     const remaining = 100 - pct;
     this.level = remaining;
     this.barFill.style.height = `${remaining}%`;
-    // Colour is driven by the continuous hue-rotate animation, not the page.
+    // Colour follows reading progress: 0% read → red, sweeping through the full
+    // spectrum to 100% read. Tied to the percent — it never moves on its own.
+    const hue = Math.round(pct * 3.6); // 0..100 % → 0..360°
+    this.barFill.style.filter = `hue-rotate(${hue}deg)`;
     this.barLabel.setText(`${remaining}%`);
     this.showBar();
   }
@@ -300,9 +301,7 @@ export class PdfProgress {
       '.vs-wave-a{animation:vsWave 2.6s linear infinite}' +
       '.vs-wave-b{animation:vsWave 1.8s linear infinite}' +
       '@keyframes vsBubble{0%{transform:translateY(0);opacity:0}' +
-      '15%{opacity:0.7}90%{opacity:0.25}100%{transform:translateY(-150px);opacity:0}}' +
-      '@keyframes vsRainbow{0%{background-position:0% 0%}100%{background-position:0% 100%}}' +
-      '@keyframes vsHue{to{filter:hue-rotate(360deg)}}';
+      '15%{opacity:0.7}90%{opacity:0.25}100%{transform:translateY(-150px);opacity:0}}';
     document.head.appendChild(s);
   }
 
