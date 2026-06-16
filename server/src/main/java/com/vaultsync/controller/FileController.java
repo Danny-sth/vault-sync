@@ -41,6 +41,16 @@ public class FileController {
             @RequestHeader("X-Device-Id") String deviceId) {
 
         try {
+            // Deletion-resurrection guard. A binary upload is a full-content
+            // (re)creation — like the empty-baseHash case in /upload-json — so a
+            // live tombstone for this path must be cleared, otherwise a later
+            // sync re-applies it and deletes the just-added file (the PDF/binary
+            // "added file vanishes on sync" bug).
+            if (syncService.getTombstone(path) != null) {
+                syncService.clearTombstone(path);
+                log.info("Cleared tombstone on binary upload (resurrection): {} by {}", path, deviceId);
+            }
+
             long seq = syncService.nextSeq();
             FileRecord record = fileStorageService.store(path, file, hash, deviceId, seq);
 
