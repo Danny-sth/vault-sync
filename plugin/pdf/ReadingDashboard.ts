@@ -17,6 +17,8 @@ import { PROGRESS_DIR, parse, percent, type ProgressEntry } from './PdfProgressS
 const MARK_START = '%% reading %%';
 const MARK_END = '%% /reading %%';
 const BLOCK_RE = /%%\s*reading\s*%%[\s\S]*?%%\s*\/reading\s*%%/;
+/** Note that accumulates finished books (100%) for history. */
+const ARCHIVE_PATH = 'Прочитанные книги.md';
 
 export class ReadingDashboard {
   private app: App;
@@ -120,7 +122,10 @@ export class ReadingDashboard {
 
   /** Build the markdown list of books currently being read (most recent first). */
   async renderMarkdown(): Promise<string> {
-    const entries = await this.readAll();
+    const all = await this.readAll();
+    // Finished books (100%) move to the archive note and leave the active list.
+    void this.syncArchive(all);
+    const entries = all.filter((e) => percent(e.page, e.total) < 100);
     if (entries.length === 0) return '_Пока ничего не читаешь — открой PDF и полистай._';
     entries.sort((a, b) => b.mtime - a.mtime);
     const now = Date.now();
@@ -134,6 +139,37 @@ export class ReadingDashboard {
       return `**[[${e.path}|📖 ${name}]]**\n${bar} **${pct}%** · ${pages} · _${when}_`;
     });
     return lines.join('\n\n');
+  }
+
+  private archiveSyncing = false;
+
+  /** Append any newly-finished (100%) books to the archive note, once each. */
+  private async syncArchive(all: ProgressEntry[]): Promise<void> {
+    const done = all.filter((e) => e.total > 0 && percent(e.page, e.total) >= 100);
+    if (done.length === 0 || this.archiveSyncing) return;
+    this.archiveSyncing = true;
+    try {
+      const existing = this.app.vault.getAbstractFileByPath(ARCHIVE_PATH);
+      let content =
+        existing instanceof TFile
+          ? await this.app.vault.read(existing)
+          : '# 📚 Прочитанные книги\n\n';
+      let changed = false;
+      for (const e of done) {
+        if (content.includes(`[[${e.path}|`)) continue; // already archived
+        const line = `- ✅ **[[${e.path}|${baseName(e.path)}]]** · ${e.total} стр · дочитано ${fmtDate(e.mtime)}`;
+        content = `${content.replace(/\s*$/, '')}\n${line}\n`;
+        changed = true;
+      }
+      if (changed) {
+        if (existing instanceof TFile) await this.app.vault.modify(existing, content);
+        else await this.app.vault.create(ARCHIVE_PATH, content);
+      }
+    } catch (e) {
+      console.error('[VaultSync][reading] failed to sync archive:', e);
+    } finally {
+      this.archiveSyncing = false;
+    }
   }
 
   private async readAll(): Promise<ProgressEntry[]> {
@@ -152,6 +188,13 @@ export class ReadingDashboard {
     }
     return out;
   }
+}
+
+/** DD.MM.YYYY for the archive's "finished on" date. */
+function fmtDate(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()}`;
 }
 
 /** File name without folders or extension. */
