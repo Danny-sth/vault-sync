@@ -59,9 +59,16 @@ describe('progressFilePath', () => {
 
 describe('serialize / parse round-trip', () => {
   it('preserves a valid entry', () => {
-    const entry = buildEntry('Books/x.pdf', 42, 1700000000000);
+    const entry = buildEntry('Books/x.pdf', 42, 339, 1700000000000);
     const back = parse(serialize(entry));
     expect(back).toEqual<ProgressEntry>(entry);
+  });
+
+  it('defaults total to 0 when absent or invalid', () => {
+    expect(parse(JSON.stringify({ path: 'a.pdf', page: 5 }))?.total).toBe(0);
+    expect(parse(JSON.stringify({ path: 'a.pdf', page: 5, total: -1 }))?.total).toBe(0);
+    expect(parse(JSON.stringify({ path: 'a.pdf', page: 5, total: 1.5 }))?.total).toBe(0);
+    expect(parse(JSON.stringify({ path: 'a.pdf', page: 5, total: 200 }))?.total).toBe(200);
   });
 });
 
