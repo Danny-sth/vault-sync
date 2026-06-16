@@ -20,6 +20,8 @@ export interface ProgressEntry {
   path: string;
   /** 1-based page number the reader stopped on. */
   page: number;
+  /** Total pages in the book (0 if unknown). Lets the dashboard show a percent. */
+  total: number;
   /** Epoch ms of when this entry was written (informational / tie-break). */
   mtime: number;
 }
@@ -52,8 +54,8 @@ export function percent(page: number, total: number): number {
 }
 
 /** Build a progress entry. `now` is injected for deterministic testing. */
-export function buildEntry(bookPath: string, page: number, now: number): ProgressEntry {
-  return { path: bookPath, page, mtime: now };
+export function buildEntry(bookPath: string, page: number, total: number, now: number): ProgressEntry {
+  return { path: bookPath, page, total, mtime: now };
 }
 
 /** Serialize an entry to the JSON string stored on disk. */
@@ -75,9 +77,10 @@ export function parse(json: string): ProgressEntry | null {
   }
   if (typeof data !== 'object' || data === null) return null;
   const obj = data as Record<string, unknown>;
-  const { path, page, mtime } = obj;
+  const { path, page, total, mtime } = obj;
   if (typeof path !== 'string' || path.length === 0) return null;
   if (typeof page !== 'number' || !Number.isInteger(page) || page < 1) return null;
+  const safeTotal = typeof total === 'number' && Number.isInteger(total) && total > 0 ? total : 0;
   const safeMtime = typeof mtime === 'number' && Number.isFinite(mtime) ? mtime : 0;
-  return { path, page, mtime: safeMtime };
+  return { path, page, total: safeTotal, mtime: safeMtime };
 }

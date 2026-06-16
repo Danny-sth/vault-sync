@@ -4,6 +4,7 @@ import { FileIcons } from './icons/FileIcons';
 import { IconPickerModal } from './icons/IconPickerModal';
 import { CommandExecutor } from './commands/CommandExecutor';
 import { PdfProgress } from './pdf/PdfProgress';
+import { ReadingDashboard } from './pdf/ReadingDashboard';
 import { VaultSyncSettings, DEFAULT_SETTINGS } from './types';
 
 export default class VaultSyncPlugin extends Plugin {
@@ -103,6 +104,8 @@ export default class VaultSyncPlugin extends Plugin {
 
       this.pdfProgress = new PdfProgress(this);
       this.pdfProgress.start();
+
+      new ReadingDashboard(this).start();
 
       this.app.workspace.onLayoutReady(async () => {
         console.debug('[VaultSync] Workspace ready, initializing modules...');

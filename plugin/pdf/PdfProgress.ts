@@ -389,7 +389,7 @@ export class PdfProgress {
     try {
       await this.ensureDir();
       const filePath = progressFilePath(path);
-      const content = serialize(buildEntry(path, page, Date.now()));
+      const content = serialize(buildEntry(path, page, total, Date.now()));
       const existing = this.app.vault.getAbstractFileByPath(filePath);
       if (existing instanceof TFile) {
         await this.app.vault.modify(existing, content);
