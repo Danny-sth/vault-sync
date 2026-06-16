@@ -1,5 +1,5 @@
-import { App, Plugin, TFile, TFolder } from 'obsidian';
-import { PROGRESS_DIR, parse, percent, type ProgressEntry } from './PdfProgressStore';
+import { App, Notice, Plugin, TFile, TFolder } from 'obsidian';
+import { PROGRESS_DIR, progressFilePath, parse, percent, type ProgressEntry } from './PdfProgressStore';
 
 /**
  * "📚 Сейчас читаю" dashboard. Reads every per-book progress file under
@@ -36,6 +36,7 @@ export class ReadingDashboard {
 
   start(): void {
     void this.loadDailyFolder();
+    void this.ensureArchive();
     this.plugin.registerEvent(
       this.app.workspace.on('file-open', (file) => {
         if (file instanceof TFile && file.extension === 'md') void this.updateNote(file);
@@ -56,6 +57,11 @@ export class ReadingDashboard {
       editorCallback: (editor) => {
         void this.renderMarkdown().then((md) => editor.replaceSelection(`${MARK_START}\n${md}\n${MARK_END}`));
       },
+    });
+    this.plugin.addCommand({
+      id: 'vault-sync-archive-finished',
+      name: 'Архивировать прочитанные книги (100%)',
+      callback: () => void this.archiveFinished(),
     });
   }
 
@@ -120,53 +126,77 @@ export class ReadingDashboard {
     }
   }
 
-  /** Build the markdown list of books currently being read (most recent first). */
+  /** Build the markdown list of books being read (most recent first). Finished
+   *  books stay here with a ✅ until you archive them via the command. */
   async renderMarkdown(): Promise<string> {
-    const all = await this.readAll();
-    // Finished books (100%) move to the archive note and leave the active list.
-    void this.syncArchive(all);
-    const entries = all.filter((e) => percent(e.page, e.total) < 100);
+    const entries = await this.readAll();
     if (entries.length === 0) return '_Пока ничего не читаешь — открой PDF и полистай._';
     entries.sort((a, b) => b.mtime - a.mtime);
     const now = Date.now();
     const lines = entries.map((e) => {
       const name = baseName(e.path);
       const pct = percent(e.page, e.total);
+      const done = pct >= 100 ? ' ✅' : '';
       const pages = e.total > 0 ? `${e.page} / ${e.total}` : `стр. ${e.page}`;
       const when = relTime(now - e.mtime);
       // Bold title (wikilink opens the PDF) + a native HTML progress bar.
       const bar = `<progress value="${pct}" max="100"></progress>`;
-      return `**[[${e.path}|📖 ${name}]]**\n${bar} **${pct}%** · ${pages} · _${when}_`;
+      return `**[[${e.path}|📖 ${name}]]**${done}\n${bar} **${pct}%** · ${pages} · _${when}_`;
     });
     return lines.join('\n\n');
   }
 
   private archiveSyncing = false;
 
-  /** Append any newly-finished (100%) books to the archive note, once each. */
-  private async syncArchive(all: ProgressEntry[]): Promise<void> {
-    const done = all.filter((e) => e.total > 0 && percent(e.page, e.total) >= 100);
-    if (done.length === 0 || this.archiveSyncing) return;
+  /** Create the archive note (empty) if it doesn't exist yet, so it's visible. */
+  private async ensureArchive(): Promise<void> {
+    try {
+      if (!this.app.vault.getAbstractFileByPath(ARCHIVE_PATH)) {
+        await this.app.vault.create(
+          ARCHIVE_PATH,
+          '# 📚 Прочитанные книги\n\n_Книги, дочитанные до конца._\n',
+        );
+      }
+    } catch {
+      /* already exists / race */
+    }
+  }
+
+  /**
+   * Move every finished (100%) book into the archive note (on demand, from the
+   * command) and remove its progress file so it leaves the active dashboard.
+   */
+  async archiveFinished(): Promise<void> {
+    if (this.archiveSyncing) return;
     this.archiveSyncing = true;
     try {
+      const done = (await this.readAll()).filter((e) => e.total > 0 && percent(e.page, e.total) >= 100);
+      if (done.length === 0) {
+        new Notice('📚 Нет дочитанных книг (100%) для архива');
+        return;
+      }
       const existing = this.app.vault.getAbstractFileByPath(ARCHIVE_PATH);
       let content =
         existing instanceof TFile
           ? await this.app.vault.read(existing)
-          : '# 📚 Прочитанные книги\n\n';
-      let changed = false;
+          : '# 📚 Прочитанные книги\n\n_Книги, дочитанные до конца._\n';
+      let moved = 0;
       for (const e of done) {
-        if (content.includes(`[[${e.path}|`)) continue; // already archived
-        const line = `- ✅ **[[${e.path}|${baseName(e.path)}]]** · ${e.total} стр · дочитано ${fmtDate(e.mtime)}`;
-        content = `${content.replace(/\s*$/, '')}\n${line}\n`;
-        changed = true;
+        if (!content.includes(`[[${e.path}|`)) {
+          const line = `- ✅ **[[${e.path}|${baseName(e.path)}]]** · ${e.total} стр · дочитано ${fmtDate(e.mtime)}`;
+          content = `${content.replace(/\s*$/, '')}\n${line}\n`;
+        }
+        // Remove the progress file → the book leaves the active dashboard.
+        const pf = this.app.vault.getAbstractFileByPath(progressFilePath(e.path));
+        if (pf instanceof TFile) await this.app.vault.delete(pf);
+        moved++;
       }
-      if (changed) {
-        if (existing instanceof TFile) await this.app.vault.modify(existing, content);
-        else await this.app.vault.create(ARCHIVE_PATH, content);
-      }
+      if (existing instanceof TFile) await this.app.vault.modify(existing, content);
+      else await this.app.vault.create(ARCHIVE_PATH, content);
+      new Notice(`📚 В архив перенесено: ${moved}`);
+      this.refreshOpenDailyNotes();
     } catch (e) {
-      console.error('[VaultSync][reading] failed to sync archive:', e);
+      console.error('[VaultSync][reading] archive failed:', e);
     } finally {
       this.archiveSyncing = false;
     }
