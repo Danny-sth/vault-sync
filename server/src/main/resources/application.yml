@@ -44,10 +44,6 @@ vault-sync:
   # Daily note auto-creation (in-process scheduler, see DailyNoteScheduler)
   daily-note:
     timezone: ${VAULT_SYNC_DAILY_TZ:Asia/Almaty}
-  # OAuth2 Resource Server (Keycloak)
-  oauth:
-    issuer-uri: ${OAUTH_ISSUER_URI:https://on-za-menya.online/realms/duq}
-    resource-url: ${MCP_RESOURCE_URL:https://on-za-menya.online/vault-mcp}
   # Command execution (whitelist only)
   commands-path: ${VAULT_SYNC_COMMANDS:/opt/vault-sync/commands}
   command-timeout-seconds: ${VAULT_SYNC_COMMAND_TIMEOUT:30}
@@ -55,11 +51,6 @@ vault-sync:
     - vpn-russia
     - git-status
     - git-pull
-
-# OAuth2 Resource Server - validates Keycloak JWTs
-spring.security.oauth2.resourceserver.jwt:
-  issuer-uri: ${OAUTH_ISSUER_URI:https://on-za-menya.online/realms/duq}
-  jwk-set-uri: ${OAUTH_ISSUER_URI:https://on-za-menya.online/realms/duq}/protocol/openid-connect/certs
 
 # MCP Server Configuration - Streamable HTTP transport (MCP spec 2025-03-26)
 spring.ai.mcp.server:
