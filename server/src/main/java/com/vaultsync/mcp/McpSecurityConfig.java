@@ -21,13 +21,11 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.util.List;
 
 /**
  * Static-token security for MCP endpoints.
  *
- * Keycloak/OAuth was fully removed (overkill for a single-user personal vault on
- * the same host). MCP endpoints (`/mcp/**`, `/sse`) require a static bearer token
+ * MCP endpoints (`/mcp/**`, `/sse`) require a static bearer token
  * (`vault-sync.mcp-token`) — same model as the sync REST API. The token does not
  * expire, so there is no refresh-flow that can hang the openclaw agent startup.
  */
@@ -40,7 +38,7 @@ public class McpSecurityConfig {
     private String mcpToken;
 
     /**
-     * MCP endpoints — static bearer token only. No OAuth, no Keycloak, no refresh.
+     * MCP endpoints — static bearer token only.
      */
     @Bean
     @Order(1)
@@ -60,7 +58,7 @@ public class McpSecurityConfig {
                 );
             }));
 
-        log.info("MCP security configured: static bearer token (Keycloak removed)");
+        log.info("MCP security configured: static bearer token");
         return http.build();
     }
 
