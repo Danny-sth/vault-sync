@@ -72,6 +72,12 @@
             <version>${spring-ai.version}</version>
         </dependency>
 
+        <!-- Spring Security (static MCP token auth) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
