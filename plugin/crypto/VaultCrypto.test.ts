@@ -67,6 +67,17 @@ describe('VaultCrypto', () => {
     expect(Array.from(a)).not.toEqual(Array.from(b));
   });
 
+  it('no nonce collision for ambiguous (path, content) splits: ("ab","c") vs ("a","bc")', () => {
+    const key = deriveKey(PASSPHRASE, SALT);
+    // Same concatenated bytes split differently between path and content. Without
+    // length-framing in nonce derivation these would share a nonce → GCM break.
+    const a = encryptBlob(key, 'ab', textBytes('c'));
+    const b = encryptBlob(key, 'a', textBytes('bc'));
+    const nonceA = a.subarray(4, 16);
+    const nonceB = b.subarray(4, 16);
+    expect(Array.from(nonceA)).not.toEqual(Array.from(nonceB));
+  });
+
   it('binds the path via AAD: decrypting under a different path fails', () => {
     const key = deriveKey(PASSPHRASE, SALT);
     const blob = encryptBlob(key, 'real/path.md', textBytes('x'));

@@ -94,10 +94,14 @@ export function decryptBlob(key: Uint8Array, path: string, blob: Uint8Array): Ui
  */
 function deriveNonce(key: Uint8Array, path: string, plain: Uint8Array): Uint8Array {
   const pathBytes = new TextEncoder().encode(path);
-  const msg = new Uint8Array(1 + pathBytes.length + plain.length);
+  // Unambiguous framing: VERSION(1) | pathLen(4, LE) | path | plain. Without the
+  // explicit length, ("ab","c") and ("a","bc") would hash to the same input and
+  // reuse a (key, nonce) pair across different messages — fatal for AES-GCM.
+  const msg = new Uint8Array(1 + 4 + pathBytes.length + plain.length);
   msg[0] = BLOB_VERSION;
-  msg.set(pathBytes, 1);
-  msg.set(plain, 1 + pathBytes.length);
+  new DataView(msg.buffer).setUint32(1, pathBytes.length, true);
+  msg.set(pathBytes, 5);
+  msg.set(plain, 5 + pathBytes.length);
   return hmac(sha256, key, msg).subarray(0, NONCE_LEN);
 }
 

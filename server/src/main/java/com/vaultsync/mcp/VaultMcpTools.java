@@ -550,10 +550,7 @@ public class VaultMcpTools {
         log.info("MCP tool called: list_blobs");
         try {
             List<VaultBlobService.BlobInfo> blobs = blobService.listBlobs();
-            List<BlobInfoItem> items = blobs.stream()
-                    .map(b -> new BlobInfoItem(b.path(), b.hash(), b.size(), b.mtime(), b.seq()))
-                    .toList();
-            return new ListBlobsResult(true, items, items.size(), null);
+            return new ListBlobsResult(true, blobs, blobs.size(), null);
         } catch (Exception e) {
             log.error("Failed to list blobs", e);
             return new ListBlobsResult(false, List.of(), 0, "Failed to list blobs: " + e.getMessage());
@@ -563,10 +560,7 @@ public class VaultMcpTools {
     public record GetBlobResult(boolean success, String path, String blobBase64, String error) {
     }
 
-    public record ListBlobsResult(boolean success, List<BlobInfoItem> blobs, int count, String error) {
-    }
-
-    public record BlobInfoItem(String path, String hash, long size, long mtime, long seq) {
+    public record ListBlobsResult(boolean success, List<VaultBlobService.BlobInfo> blobs, int count, String error) {
     }
 
     public record ListNotesResult(boolean success, List<String> notes, int count, List<NoteInfoItem> notesWithStats,
