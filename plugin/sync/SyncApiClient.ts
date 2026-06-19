@@ -77,45 +77,56 @@ export class SyncApiClient {
     // baseSeq = highest server seq this device saw for the path (incl. its deletion);
     // the server uses it on the final chunk to tell genuine recreation from a stale re-push.
     const CHUNK_SIZE = 1024 * 1024; // 1 MiB
+    const CONCURRENCY = 4; // parallel chunk uploads — bounded so memory stays small
     const total = Math.max(1, Math.ceil(content.byteLength / CHUNK_SIZE));
     const uploadId = `${this.settings.deviceId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       .replace(/[^A-Za-z0-9_.-]/g, '-');
 
-    let lastJson: any = null;
-    for (let i = 0; i < total; i++) {
-      const slice = content.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, content.byteLength));
-      const response = await requestUrl({
-        url: `${this.baseUrl}/api/upload-chunk`,
-        method: 'POST',
-        headers: {
-          ...this.headers,
-          'Content-Type': 'application/octet-stream',
-          'X-Path': encodeURIComponent(path),
-          'X-Upload-Id': uploadId,
-          'X-Chunk-Index': String(i),
-          'X-Chunk-Count': String(total),
-          'X-Hash': hash,
-          'X-Mtime': String(mtime),
-          'X-Base-Hash': baseHash,
-          'X-Base-Seq': String(baseSeq),
-        },
-        body: slice,
-        throw: false,
-      });
+    // Upload chunks concurrently — each is written at its byte offset, so order doesn't
+    // matter. A shared cursor hands out the next chunk index to each worker.
+    let nextIndex = 0;
+    const uploadWorker = async (): Promise<void> => {
+      for (;;) {
+        const i = nextIndex++;
+        if (i >= total) return;
+        const offset = i * CHUNK_SIZE;
+        const slice = content.slice(offset, Math.min(offset + CHUNK_SIZE, content.byteLength));
+        const r = await requestUrl({
+          url: `${this.baseUrl}/api/upload-chunk`,
+          method: 'POST',
+          headers: { ...this.headers, 'Content-Type': 'application/octet-stream', 'X-Upload-Id': uploadId, 'X-Chunk-Offset': String(offset) },
+          body: slice,
+          throw: false,
+        });
+        if (r.status !== 200) throw new Error(`Upload chunk @${offset} failed: ${r.status}`);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, total) }, () => uploadWorker()));
 
-      // The conflict/deletion verdict only happens when the final chunk assembles.
-      if (response.status === 409) {
-        const body = response.json || {};
-        const deleted = body.error === 'deleted';
-        throw new ConflictError(path, body.currentHash || '', deleted);
-      }
-      if (response.status !== 200) {
-        throw new Error(`Upload chunk ${i + 1}/${total} failed: ${response.status}`);
-      }
-      lastJson = response.json;
+    // Commit: assemble + concurrency check happen here. baseSeq lets the server tell
+    // genuine recreation from a stale re-push.
+    const fin = await requestUrl({
+      url: `${this.baseUrl}/api/upload-finalize`,
+      method: 'POST',
+      headers: {
+        ...this.headers,
+        'X-Path': encodeURIComponent(path),
+        'X-Upload-Id': uploadId,
+        'X-Hash': hash,
+        'X-Mtime': String(mtime),
+        'X-Base-Hash': baseHash,
+        'X-Base-Seq': String(baseSeq),
+      },
+      throw: false,
+    });
+    if (fin.status === 409) {
+      const body = fin.json || {};
+      throw new ConflictError(path, body.currentHash || '', body.error === 'deleted');
     }
-
-    return (lastJson && lastJson.seq) || 0;
+    if (fin.status !== 200) {
+      throw new Error(`Upload finalize failed: ${fin.status}`);
+    }
+    return (fin.json && fin.json.seq) || 0;
   }
 
   /**
