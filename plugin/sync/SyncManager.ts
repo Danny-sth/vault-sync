@@ -83,17 +83,31 @@ export class SyncManager {
   }
 
   /**
+   * Fail closed: if E2EE is enabled but the cipher could not be built (missing or bad
+   * passphrase/salt), abort all content I/O instead of silently falling back to
+   * plaintext upload / writing an undecrypted blob into the vault. Better a loud,
+   * recoverable failure than leaking the user's notes in the clear.
+   */
+  private assertCipherConsistent(): void {
+    if (this.settings.encryptionEnabled && !this.cipher) {
+      throw new Error('VaultSync: E2EE enabled but cipher not initialised (passphrase/salt?) — refusing plaintext I/O');
+    }
+  }
+
+  /**
    * Hash used for all server-facing comparisons (dedup, conflict, baseHash). When
    * encrypted this is SHA-256 of the blob the server stores; otherwise SHA-256 of
    * the plaintext. Keeping a single source means the plugin and server never end up
    * in different hash spaces.
    */
   private async serverHash(path: string, content: ArrayBuffer): Promise<string> {
+    this.assertCipherConsistent();
     return this.cipher ? this.cipher.blobHashHex(path, content) : this.computeHash(content);
   }
 
   /** Plaintext → bytes to upload (ciphertext blob when encrypted, else as-is). */
   private encodeForUpload(path: string, content: ArrayBuffer): ArrayBuffer {
+    this.assertCipherConsistent();
     return this.cipher ? this.cipher.encryptToArrayBuffer(path, content) : content;
   }
 
@@ -309,6 +323,10 @@ export class SyncManager {
         }
 
         const { content, hash } = result;
+
+        // Fail closed when E2EE is enabled but the cipher is missing — never write a
+        // raw ciphertext blob into the vault as if it were plaintext.
+        this.assertCipherConsistent();
 
         // Server delivers the ciphertext blob; decrypt to plaintext before writing
         // into the vault. A decrypt failure (corrupt blob / wrong key / a legacy

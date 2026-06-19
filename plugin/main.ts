@@ -442,7 +442,7 @@ class VaultSyncSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Encryption passphrase')
-      .setDesc('Secret used to derive the vault key (Argon2id). Identical on all devices. Never sent to the server.')
+      .setDesc('Secret used to derive the vault key (PBKDF2-HMAC-SHA256, 600 000 iterations). Identical on all devices. Never sent to the server.')
       .addText((text) => {
         text.inputEl.type = 'password';
         text
