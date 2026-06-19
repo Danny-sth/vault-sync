@@ -483,7 +483,10 @@ public class SyncService {
             log.error("Error during reconciliation scan", e);
         }
 
-        syncEmptyFolderMarkers();
+        // syncEmptyFolderMarkers() intentionally NOT called under E2EE: it writes
+        // real-named ".folder-marker" files, which are incompatible with the encrypted
+        // path scheme (clients can't decrypt the path and skip them). Empty-folder sync
+        // is handled client-side (the plugin manages its own markers at encrypted paths).
     }
 
     private static final String FOLDER_MARKER = ".folder-marker";
