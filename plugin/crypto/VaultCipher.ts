@@ -11,7 +11,7 @@ import { deriveKey, encryptBlob, decryptBlob } from './VaultCrypto';
  * path+content), {@link blobHashHex} is stable and safe to use exactly where the engine
  * previously hashed plaintext for server comparison.
  *
- * The vault key is derived once (Argon2id is deliberately slow) and held for the session.
+ * The vault key is derived once (PBKDF2 is async and non-blocking) and held for the session.
  */
 export class VaultCipher {
   private constructor(private readonly key: Uint8Array) {}
