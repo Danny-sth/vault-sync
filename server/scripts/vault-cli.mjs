@@ -15,6 +15,7 @@
 // VAULT_MCP_TOKEN (else read from /opt/vault-sync/application.yml mcp-token),
 // vault key from VAULT_PASSPHRASE/VAULT_SALT_B64 or /root/vault-sync-key.txt.
 import { readFileSync, existsSync } from 'node:fs';
+import http from 'node:http';
 import { deriveKey, encryptBlob, decryptBlob, encryptPath, decryptPath } from './vault-crypto.mjs';
 
 const MCP_URL = process.env.VAULT_MCP_URL || 'http://localhost:8444/mcp';
@@ -50,13 +51,32 @@ function parseSse(text) {
   if (!out.length) { try { out.push(JSON.parse(text)); } catch {} }
   return out;
 }
-async function rpc(method, params, id) {
-  const headers = { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' };
-  if (sessionId) headers['Mcp-Session-Id'] = sessionId;
-  const res = await fetch(MCP_URL, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', ...(id != null ? { id } : {}), method, params }) });
-  const sid = res.headers.get('mcp-session-id'); if (sid) sessionId = sid;
-  if (id == null) { await res.text(); return null; }
-  return parseSse(await res.text()).find((m) => m.id === id) || null;
+function rpc(method, params, id) {
+  // node:http (not fetch): the MCP streamable-HTTP response is an SSE stream the server
+  // may hold open; undici's fetch throws "terminated" on close even after the data arrived.
+  // We accumulate and resolve as soon as the matching JSON-RPC response is present.
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ jsonrpc: '2.0', ...(id != null ? { id } : {}), method, params });
+    const u = new URL(MCP_URL);
+    const headers = {
+      Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream', 'Content-Length': Buffer.byteLength(body),
+    };
+    if (sessionId) headers['Mcp-Session-Id'] = sessionId;
+    const req = http.request({ hostname: u.hostname, port: u.port || 80, path: u.pathname, method: 'POST', headers }, (res) => {
+      const sid = res.headers['mcp-session-id']; if (sid) sessionId = sid;
+      let data = ''; let done = false;
+      const finish = () => { if (done) return; done = true; if (id == null) return resolve(null); resolve(parseSse(data).find((m) => m.id === id) || null); };
+      res.on('data', (c) => {
+        data += c;
+        if (id != null && parseSse(data).some((m) => m.id === id)) { res.destroy(); finish(); }
+      });
+      res.on('end', finish);
+      res.on('close', finish);
+    });
+    req.on('error', (e) => { if (id == null) resolve(null); else reject(e); });
+    req.write(body); req.end();
+  });
 }
 async function callTool(name, args, id) {
   const r = await rpc('tools/call', { name, arguments: args }, id);
