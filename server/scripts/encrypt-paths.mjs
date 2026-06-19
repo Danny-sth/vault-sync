@@ -40,13 +40,9 @@ function alreadyEncrypted(relPath) {
   try { decryptPath(key, relPath); return true; } catch { return false; }
 }
 
-let renamed = 0, skipped = 0, tooLong = 0, failed = 0;
+let renamed = 0, skipped = 0, failed = 0;
 const samples = [];
 const dirsToCheck = new Set();
-// ext4 limits a single filename to 255 BYTES. An encrypted component longer than that
-// can't be a filename — leave such files at their real path (they won't sync to devices,
-// but the migration doesn't break). Rare: only very long original names hit this.
-const MAX_COMPONENT_BYTES = 255;
 
 for (const full of walkFiles(vaultDir)) {
   const relPath = relative(vaultDir, full).split(sep).join('/');
@@ -54,12 +50,6 @@ for (const full of walkFiles(vaultDir)) {
     if (alreadyEncrypted(relPath)) { skipped++; continue; }
     const encRel = encryptPath(key, relPath);
     if (encRel === relPath) { skipped++; continue; }
-    const tooLongComp = encRel.split('/').some((c) => Buffer.byteLength(c, 'utf8') > MAX_COMPONENT_BYTES);
-    if (tooLongComp) {
-      tooLong++;
-      console.warn(`TOO-LONG (left as real path): ${relPath}`);
-      continue;
-    }
     const dest = join(vaultDir, encRel.split('/').join(sep));
     if (!dryRun) {
       mkdirSync(dirname(dest), { recursive: true });
@@ -81,6 +71,6 @@ if (!dryRun) {
   }
 }
 
-console.log(`${dryRun ? '[DRY-RUN] ' : ''}renamed=${renamed} skipped(already-enc)=${skipped} too-long(left-real)=${tooLong} failed=${failed}`);
+console.log(`${dryRun ? '[DRY-RUN] ' : ''}renamed=${renamed} skipped(already-enc)=${skipped} failed=${failed}`);
 samples.forEach((s) => console.log('  ', s));
 process.exit(failed > 0 ? 1 : 0);

@@ -193,12 +193,45 @@ export function decryptPathComponent(key: Uint8Array, enc: string): string {
   return new TextDecoder().decode(gcm(key, nonce, PATH_AAD).decrypt(ct));
 }
 
+// A component name on disk must stay under the filesystem's 255-byte limit. An encrypted
+// name longer than this is split across several path components: the first is marked
+// `8<N>-<chunk0>` (8 and digits are not base32, so it's unambiguous) and the next N-1
+// components are the remaining chunks. The client rejoins them on decrypt. This removes
+// any practical name-length limit without sidecar files or protocol changes.
+const MAX_NAME = 200;
+const NAME_CHUNK = 180;
+
 /** Encrypt a full relative path component-by-component (slashes preserved). */
 export function encryptPath(key: Uint8Array, path: string): string {
-  return path.split('/').map((c) => (c === '' ? '' : encryptPathComponent(key, c))).join('/');
+  const out: string[] = [];
+  for (const c of path.split('/')) {
+    if (c === '') { out.push(''); continue; }
+    const enc = encryptPathComponent(key, c);
+    if (enc.length <= MAX_NAME) { out.push(enc); continue; }
+    const chunks: string[] = [];
+    for (let i = 0; i < enc.length; i += NAME_CHUNK) chunks.push(enc.slice(i, i + NAME_CHUNK));
+    out.push(`8${chunks.length}-${chunks[0]}`);
+    for (let i = 1; i < chunks.length; i++) out.push(chunks[i]);
+  }
+  return out.join('/');
 }
 
 /** Inverse of {@link encryptPath}. */
 export function decryptPath(key: Uint8Array, encPath: string): string {
-  return encPath.split('/').map((c) => (c === '' ? '' : decryptPathComponent(key, c))).join('/');
+  const parts = encPath.split('/');
+  const out: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (p === '') { out.push(''); continue; }
+    const m = /^8(\d+)-(.*)$/.exec(p);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      let enc = m[2];
+      for (let j = 1; j < n; j++) { i++; enc += parts[i] ?? ''; }
+      out.push(decryptPathComponent(key, enc));
+    } else {
+      out.push(decryptPathComponent(key, p));
+    }
+  }
+  return out.join('/');
 }

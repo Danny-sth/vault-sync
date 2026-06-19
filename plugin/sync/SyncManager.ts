@@ -855,12 +855,6 @@ export class SyncManager {
   private async uploadByPath(path: string): Promise<void> {
     if (this.isProcessingRemote) return;
     if (!SyncFilter.shouldSync(path)) return;
-    // The encrypted path can exceed the server FS's 255-byte filename limit for very long
-    // names — such a file can't be stored, so skip it instead of failing every upload.
-    if (this.cipher && this.toServerPath(path).split('/').some((c) => new TextEncoder().encode(c).length > 255)) {
-      console.debug(`[VaultSync] Skipping file whose encrypted path is too long: ${path}`);
-      return;
-    }
 
     const read = await this.fileOps.readBinary(path);
     if (!read) return;
