@@ -119,6 +119,22 @@ export class SyncManager {
     return this.cipher ? this.cipher.blobHashHex(path, content) : this.computeHash(content);
   }
 
+  /** Real vault path → the (encrypted) path the server stores it under. */
+  private toServerPath(realPath: string): string {
+    return this.cipher ? this.cipher.encryptPath(realPath) : realPath;
+  }
+
+  /** Encrypted server path → real vault path. Returns null if it can't be decrypted
+   *  (a plaintext path from a non-encrypting writer) so the caller can skip it. */
+  private toRealPath(serverPath: string): string | null {
+    if (!this.cipher) return serverPath;
+    try {
+      return this.cipher.decryptPath(serverPath);
+    } catch {
+      return null;
+    }
+  }
+
   /** Plaintext → bytes to upload (ciphertext blob when encrypted, else as-is). */
   private encodeForUpload(path: string, content: ArrayBuffer): ArrayBuffer {
     this.assertCipherConsistent();
@@ -180,21 +196,24 @@ export class SyncManager {
   }
 
   private async handleRemoteFileChange(msg: FileChangedMessage): Promise<void> {
-    if (!SyncFilter.shouldSync(msg.path)) {
+    // Server paths are encrypted; decrypt to the real vault path. A path that won't
+    // decrypt is from a non-encrypting writer (duq plaintext) — record seq and skip.
+    const path = this.toRealPath(msg.path);
+    if (path === null || !SyncFilter.shouldSync(path)) {
       await this.localState.setLastSeq(msg.seq);
       return;
     }
     // The content changed on the server — clear any prior "can't decrypt" mark so a now
     // properly-encrypted version (e.g. duq switching to put_blob) is fetched and decrypted.
-    this.undecryptable.delete(msg.path);
+    this.undecryptable.delete(path);
     this.isProcessingRemote = true;
     try {
-      const success = await this.downloadFile(msg.path);
+      const success = await this.downloadFile(path);
       if (success) {
         await this.localState.setLastSeq(msg.seq);
-        await this.localState.setFileSeq(msg.path, msg.seq);
+        await this.localState.setFileSeq(path, msg.seq);
       } else {
-        console.error(`[VaultSync] Remote file change failed to download: ${msg.path}`);
+        console.error(`[VaultSync] Remote file change failed to download: ${path}`);
       }
     } finally {
       this.isProcessingRemote = false;
@@ -202,39 +221,40 @@ export class SyncManager {
   }
 
   private async handleRemoteFileDelete(msg: FileDeletedMessage): Promise<void> {
-    if (!SyncFilter.shouldSync(msg.path)) {
+    const path = this.toRealPath(msg.path);
+    if (path === null || !SyncFilter.shouldSync(path)) {
       await this.localState.setLastSeq(msg.seq);
       return;
     }
-    if (msg.path.startsWith('.obsidian/') && !msg.path.startsWith('.obsidian/plugins/')) {
-      console.debug(`[VaultSync] Ignoring remote delete for .obsidian/* path (not plugins): ${msg.path}`);
+    if (path.startsWith('.obsidian/') && !path.startsWith('.obsidian/plugins/')) {
+      console.debug(`[VaultSync] Ignoring remote delete for .obsidian/* path (not plugins): ${path}`);
       await this.localState.setLastSeq(msg.seq);
       return;
     }
-    const knownHash = await this.localState.getFileHash(msg.path);
-    const isPlugin = msg.path.startsWith('.obsidian/plugins/');
+    const knownHash = await this.localState.getFileHash(path);
+    const isPlugin = path.startsWith('.obsidian/plugins/');
     if (!knownHash && !isPlugin) {
-      console.debug(`[VaultSync] Ignoring remote delete for never-synced path: ${msg.path}`);
+      console.debug(`[VaultSync] Ignoring remote delete for never-synced path: ${path}`);
       await this.localState.setLastSeq(msg.seq);
       return;
     }
     this.isProcessingRemote = true;
     try {
-      const file = this.app.vault.getAbstractFileByPath(msg.path);
+      const file = this.app.vault.getAbstractFileByPath(path);
       if (file instanceof TFile) {
         await this.app.vault.delete(file);
-      } else if (await this.app.vault.adapter.exists(msg.path)) {
-        await this.app.vault.adapter.remove(msg.path);
+      } else if (await this.app.vault.adapter.exists(path)) {
+        await this.app.vault.adapter.remove(path);
       }
-      await this.fileOps.cleanupEmptyParentFolders(msg.path);
-      await this.localState.deleteFileHash(msg.path);
+      await this.fileOps.cleanupEmptyParentFolders(path);
+      await this.localState.deleteFileHash(path);
       await this.localState.setLastSeq(msg.seq);
       // Remember the DELETE's seq (survives deletion) so a later re-create can
       // prove this device knew about the deletion → genuine recreation.
-      await this.localState.setFileSeq(msg.path, msg.seq);
-      this.fileWatcher.removeFromBaseline(msg.path);
+      await this.localState.setFileSeq(path, msg.seq);
+      this.fileWatcher.removeFromBaseline(path);
     } catch (e) {
-      console.error(`[VaultSync] Failed to delete ${msg.path}:`, e);
+      console.error(`[VaultSync] Failed to delete ${path}:`, e);
     } finally {
       this.isProcessingRemote = false;
     }
@@ -331,7 +351,7 @@ export class SyncManager {
     console.debug(`[VaultSync] downloadFile starting: ${path}`);
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
-        const result = await this.apiClient.download(path);
+        const result = await this.apiClient.download(this.toServerPath(path));
         if (result === null) {
           // Server returned 404 — the file was already deleted upstream (a benign race,
           // typically from a rapidly create+deleted file). Don't retry, don't log an error:
@@ -400,7 +420,7 @@ export class SyncManager {
         return;
       }
 
-      const deleteSeq = await this.apiClient.delete(path);
+      const deleteSeq = await this.apiClient.delete(this.toServerPath(path));
 
       await this.localState.deleteFileHash(path);
       // Remember the delete's seq (survives the deletion) so a later re-create
@@ -468,12 +488,19 @@ export class SyncManager {
 
       console.debug(`[VaultSync] Full sync received: ${files.length} files, ${tombstoneList.length} tombstones, currentSeq=${response.currentSeq}`);
 
-    const serverFiles = new Map(
-      files.filter(f => SyncFilter.shouldSync(f.path)).map(f => [f.path, f])
-    );
-    const tombstones = new Set(
-      tombstoneList.filter(t => SyncFilter.shouldSync(t.path)).map(t => t.path)
-    );
+    // Server paths are encrypted — decrypt each to the real vault path (and skip any
+    // that won't decrypt: plaintext entries from a non-encrypting writer like duq).
+    const serverFiles = new Map<string, typeof files[number]>();
+    for (const f of files) {
+      const real = this.toRealPath(f.path);
+      if (real === null || !SyncFilter.shouldSync(real)) continue;
+      serverFiles.set(real, { ...f, path: real });
+    }
+    const tombstones = new Set<string>();
+    for (const t of tombstoneList) {
+      const real = this.toRealPath(t.path);
+      if (real !== null && SyncFilter.shouldSync(real)) tombstones.add(real);
+    }
 
     const vaultFiles = this.app.vault.getFiles().filter(f => SyncFilter.shouldSync(f.path));
     const obsidianPaths = (await SyncFilter.listObsidianFiles(this.app)).filter(p => SyncFilter.shouldSync(p));
@@ -487,7 +514,8 @@ export class SyncManager {
     // what later lets an upload prove genuine recreation (baseSeq >= tomb.seq).
     for (const f of serverFiles.values()) await this.localState.setFileSeq(f.path, f.seq);
     for (const t of tombstoneList) {
-      if (SyncFilter.shouldSync(t.path)) await this.localState.setFileSeq(t.path, t.seq);
+      const real = this.toRealPath(t.path);
+      if (real !== null && SyncFilter.shouldSync(real)) await this.localState.setFileSeq(real, t.seq);
     }
 
     console.log(`[VaultSync] ========== FULL SYNC START ==========`);
@@ -846,7 +874,7 @@ export class SyncManager {
       // Upload the encrypted blob (or plaintext when E2EE is off); `hash` is already
       // in the matching (blob | plaintext) hash space so server concurrency holds.
       const payload = this.encodeForUpload(path, content);
-      const seq = await this.apiClient.upload(path, payload, hash, mtime, existingHash ?? '', baseSeq);
+      const seq = await this.apiClient.upload(this.toServerPath(path), payload, hash, mtime, existingHash ?? '', baseSeq);
       await this.localState.setFileHash(path, hash);
       await this.localState.setFileSeq(path, seq);
     } catch (e) {
