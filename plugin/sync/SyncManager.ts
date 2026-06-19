@@ -844,12 +844,37 @@ export class SyncManager {
       return 'noop';
     }
 
-    return ConflictResolver.resolve(
+    const action = ConflictResolver.resolve(
       path,
       { hash: localHash, mtime: read.mtime },
       { hash: serverFile.hash, mtime: serverFile.mtime },
       lastKnownHash
     );
+
+    // Genuine conflict (both sides diverged from the last synced state) resolved in the
+    // server's favour: preserve the local edit as a side copy BEFORE the download
+    // overwrites it — otherwise an offline edit is silently lost on reconnect.
+    if (
+      action === 'download' &&
+      lastKnownHash !== undefined &&
+      localHash !== lastKnownHash &&
+      serverFile.hash !== lastKnownHash
+    ) {
+      await this.saveConflictCopy(path, read.content);
+    }
+
+    return action;
+  }
+
+  /** Write the local content to a "(conflict …)" side file so a conflict never loses data. */
+  private async saveConflictCopy(path: string, localContent: ArrayBuffer): Promise<void> {
+    if (localContent.byteLength === 0) return;
+    const dot = path.lastIndexOf('.');
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const suffix = ` (conflict ${this.settings.deviceId} ${stamp})`;
+    const conflictPath = dot > 0 ? `${path.slice(0, dot)}${suffix}${path.slice(dot)}` : `${path}${suffix}`;
+    await this.fileOps.writeBinary(conflictPath, localContent);
+    new Notice(`Vault Sync: conflict on ${path.split('/').pop()} — kept your copy`);
   }
 
   private async uploadByPath(path: string): Promise<void> {
