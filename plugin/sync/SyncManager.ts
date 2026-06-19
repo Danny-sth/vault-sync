@@ -77,9 +77,17 @@ export class SyncManager {
       this.status.error('шифрование: нет ключа/соли');
       return;
     }
-    const salt = Uint8Array.from(atob(this.settings.encryptionSaltB64), (c) => c.charCodeAt(0));
-    this.cipher = await VaultCipher.fromPassphrase(this.settings.encryptionPassphrase, salt);
-    console.debug('[VaultSync] E2EE enabled — content encrypted client-side');
+    // Salt is user-editable: a non-base64 value makes atob throw and would otherwise
+    // crash plugin init. Fail closed (cipher stays null → I/O aborts, no plaintext leak).
+    try {
+      const salt = Uint8Array.from(atob(this.settings.encryptionSaltB64), (c) => c.charCodeAt(0));
+      this.cipher = await VaultCipher.fromPassphrase(this.settings.encryptionPassphrase, salt);
+      console.debug('[VaultSync] E2EE enabled — content encrypted client-side');
+    } catch (e) {
+      this.cipher = null;
+      console.error('[VaultSync] E2EE init failed (bad salt?):', e);
+      this.status.error('шифрование: некорректная соль');
+    }
   }
 
   /**
