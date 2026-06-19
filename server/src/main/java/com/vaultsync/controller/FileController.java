@@ -40,21 +40,44 @@ public class FileController {
     private String storagePath;
 
     /**
-     * Streamed chunked upload. The client sends the encrypted blob in ordered binary
-     * chunks (octet-stream) so neither side ever holds the whole file as an inflated
-     * string — base64-in-JSON OOM-killed Obsidian on mobile and hit the JSON size limit.
-     * Each chunk is appended to a temp file keyed by X-Upload-Id; the final chunk
-     * (X-Chunk-Index == X-Chunk-Count-1) assembles, runs the same resurrection/concurrency
-     * checks (resurrection + optimistic concurrency), commits, and broadcasts. A small file is simply
-     * one chunk.
+     * Streamed chunked upload (parallel-safe). The client sends the encrypted blob in
+     * binary chunks (octet-stream), each written at its byte offset so chunks may arrive
+     * in any order / concurrently — no whole-file buffering on either side (base64-in-JSON
+     * OOM-killed Obsidian on mobile and hit the JSON size limit). Commit happens in a
+     * separate /upload-finalize call once all chunks are written.
      */
     @PostMapping(value = "/upload-chunk", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
     public ResponseEntity<?> uploadChunk(
             @RequestBody byte[] chunk,
+            @RequestHeader("X-Upload-Id") String uploadId,
+            @RequestHeader("X-Chunk-Offset") long offset) {
+        if (!uploadId.matches("[A-Za-z0-9_.-]{1,128}")) {
+            return ResponseEntity.badRequest().body(Map.of("error", "invalid uploadId"));
+        }
+        java.nio.file.Path tmp = Paths.get(storagePath, UPLOADS_DIR, uploadId);
+        try {
+            Files.createDirectories(tmp.getParent());
+            // Positional write: distinct offsets are independent, so concurrent chunk
+            // requests for the same upload are safe (POSIX pwrite semantics).
+            try (java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(
+                    tmp, StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+                ch.write(java.nio.ByteBuffer.wrap(chunk), offset);
+            }
+            return ResponseEntity.ok(Map.of("status", "chunk-ok"));
+        } catch (IOException e) {
+            log.error("Failed to write chunk for upload {}: {}", uploadId, e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Commit a chunked upload: assemble the temp file, run resurrection + optimistic
+     * concurrency checks, store, broadcast. Called once after all chunks are uploaded.
+     */
+    @PostMapping("/upload-finalize")
+    public ResponseEntity<?> uploadFinalize(
             @RequestHeader("X-Path") String encodedPath,
             @RequestHeader("X-Upload-Id") String uploadId,
-            @RequestHeader("X-Chunk-Index") int chunkIndex,
-            @RequestHeader("X-Chunk-Count") int chunkCount,
             @RequestHeader("X-Hash") String hash,
             @RequestHeader(value = "X-Mtime", required = false, defaultValue = "0") long mtime,
             @RequestHeader(value = "X-Base-Hash", required = false, defaultValue = "") String baseHash,
@@ -67,17 +90,9 @@ public class FileController {
         }
         java.nio.file.Path tmp = Paths.get(storagePath, UPLOADS_DIR, uploadId);
         try {
-            Files.createDirectories(tmp.getParent());
-            // First chunk truncates any stale partial; subsequent chunks append in order.
-            if (chunkIndex == 0) {
-                Files.write(tmp, chunk, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-            } else {
-                Files.write(tmp, chunk, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            if (!Files.exists(tmp)) {
+                return ResponseEntity.badRequest().body(Map.of("error", "no chunks for uploadId"));
             }
-            if (chunkIndex < chunkCount - 1) {
-                return ResponseEntity.ok(Map.of("status", "chunk-ok", "index", chunkIndex));
-            }
-
             byte[] content = Files.readAllBytes(tmp);
             Files.deleteIfExists(tmp);
             com.vaultsync.model.Tombstone tomb = syncService.getTombstone(path);
