@@ -1,6 +1,7 @@
 import { gcm } from '@noble/ciphers/aes';
 import { argon2id } from '@noble/hashes/argon2';
-import { randomBytes } from '@noble/ciphers/webcrypto';
+import { hmac } from '@noble/hashes/hmac';
+import { sha256 } from '@noble/hashes/sha256';
 
 /**
  * Zero-knowledge vault crypto.
@@ -9,6 +10,16 @@ import { randomBytes } from '@noble/ciphers/webcrypto';
  * file into an opaque blob before upload and decrypt after download. Content is
  * sealed with AES-256-GCM; the relative path is bound as additional authenticated
  * data (AAD) so a blob cannot be silently moved to a different path.
+ *
+ * Convergent encryption: the nonce is derived deterministically from
+ * HMAC(key, version‖path‖plaintext) rather than random, so identical content at
+ * the same path always yields the identical blob. This keeps the sync protocol's
+ * SHA-256(on-disk-bytes) hash stable across devices and re-encryptions — a random
+ * nonce would change the blob (and its hash) on every save, triggering false
+ * conflicts and reconcile storms in VaultWatcherService. Trade-off: the server can
+ * tell when two blobs are byte-identical (i.e. same plaintext) — acceptable for a
+ * single-user vault. (key,nonce) reuse is safe here: it only ever recurs for the
+ * exact same (key, path, plaintext), i.e. the identical message.
  *
  * Blob layout:  MAGIC(3) | VERSION(1) | NONCE(12) | CIPHERTEXT+TAG
  */
@@ -40,7 +51,7 @@ export function deriveKey(passphrase: string, salt: Uint8Array): Uint8Array {
  */
 export function encryptBlob(key: Uint8Array, path: string, plain: Uint8Array): Uint8Array {
   assertKey(key);
-  const nonce = randomBytes(NONCE_LEN);
+  const nonce = deriveNonce(key, path, plain);
   const aad = new TextEncoder().encode(path);
   const ct = gcm(key, nonce, aad).encrypt(plain);
 
@@ -74,6 +85,20 @@ export function decryptBlob(key: Uint8Array, path: string, blob: Uint8Array): Ui
   const ct = blob.subarray(HEADER_LEN + NONCE_LEN);
   const aad = new TextEncoder().encode(path);
   return gcm(key, nonce, aad).decrypt(ct);
+}
+
+/**
+ * Derive a deterministic 12-byte nonce from the key, path and plaintext.
+ * Same (key, path, plaintext) → same nonce → same blob (convergent encryption).
+ * The blob VERSION is folded in so a future format change re-derives nonces.
+ */
+function deriveNonce(key: Uint8Array, path: string, plain: Uint8Array): Uint8Array {
+  const pathBytes = new TextEncoder().encode(path);
+  const msg = new Uint8Array(1 + pathBytes.length + plain.length);
+  msg[0] = BLOB_VERSION;
+  msg.set(pathBytes, 1);
+  msg.set(plain, 1 + pathBytes.length);
+  return hmac(sha256, key, msg).subarray(0, NONCE_LEN);
 }
 
 function assertKey(key: Uint8Array): void {
