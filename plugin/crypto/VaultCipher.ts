@@ -16,9 +16,9 @@ import { deriveKey, encryptBlob, decryptBlob } from './VaultCrypto';
 export class VaultCipher {
   private constructor(private readonly key: Uint8Array) {}
 
-  /** Derive the session cipher from passphrase + per-vault salt. */
-  static fromPassphrase(passphrase: string, salt: Uint8Array): VaultCipher {
-    return new VaultCipher(deriveKey(passphrase, salt));
+  /** Derive the session cipher from passphrase + per-vault salt (async — see deriveKey). */
+  static async fromPassphrase(passphrase: string, salt: Uint8Array): Promise<VaultCipher> {
+    return new VaultCipher(await deriveKey(passphrase, salt));
   }
 
   /** Plaintext → opaque blob for upload. */

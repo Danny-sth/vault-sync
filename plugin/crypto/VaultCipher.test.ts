@@ -7,9 +7,9 @@ function buf(s: string): ArrayBuffer {
   return toArrayBuffer(new TextEncoder().encode(s));
 }
 
-describe('VaultCipher', () => {
-  it('round-trips through encrypt/decrypt for the same path', () => {
-    const cipher = VaultCipher.fromPassphrase('pass', SALT);
+describe('VaultCipher', async () => {
+  it('round-trips through encrypt/decrypt for the same path', async () => {
+    const cipher = await VaultCipher.fromPassphrase('pass', SALT);
     const plain = '# note\nтело 🔐';
     const blob = cipher.encrypt('a/b.md', buf(plain));
     const out = cipher.decrypt('a/b.md', toArrayBuffer(blob));
@@ -17,7 +17,7 @@ describe('VaultCipher', () => {
   });
 
   it('blobHashHex is stable for the same (path, content) — usable as the sync hash', async () => {
-    const cipher = VaultCipher.fromPassphrase('pass', SALT);
+    const cipher = await VaultCipher.fromPassphrase('pass', SALT);
     const h1 = await cipher.blobHashHex('a.md', buf('hello'));
     const h2 = await cipher.blobHashHex('a.md', buf('hello'));
     expect(h1).toBe(h2);
@@ -25,21 +25,21 @@ describe('VaultCipher', () => {
   });
 
   it('blobHashHex equals sha256 of the actual encrypted blob (matches what the server stores)', async () => {
-    const cipher = VaultCipher.fromPassphrase('pass', SALT);
+    const cipher = await VaultCipher.fromPassphrase('pass', SALT);
     const blob = cipher.encrypt('a.md', buf('hello'));
     expect(await cipher.blobHashHex('a.md', buf('hello'))).toBe(await sha256Hex(blob));
   });
 
   it('blobHashHex differs when content changes', async () => {
-    const cipher = VaultCipher.fromPassphrase('pass', SALT);
+    const cipher = await VaultCipher.fromPassphrase('pass', SALT);
     const h1 = await cipher.blobHashHex('a.md', buf('one'));
     const h2 = await cipher.blobHashHex('a.md', buf('two'));
     expect(h1).not.toBe(h2);
   });
 
-  it('two ciphers from the same passphrase+salt are interchangeable (cross-device)', () => {
-    const a = VaultCipher.fromPassphrase('shared', SALT);
-    const b = VaultCipher.fromPassphrase('shared', SALT);
+  it('two ciphers from the same passphrase+salt are interchangeable (cross-device)', async () => {
+    const a = await VaultCipher.fromPassphrase('shared', SALT);
+    const b = await VaultCipher.fromPassphrase('shared', SALT);
     const blob = a.encrypt('x.md', buf('cross-device'));
     expect(new TextDecoder().decode(b.decrypt('x.md', toArrayBuffer(blob)))).toBe('cross-device');
   });

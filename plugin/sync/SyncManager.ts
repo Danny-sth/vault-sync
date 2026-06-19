@@ -56,7 +56,7 @@ export class SyncManager {
 
   async init(): Promise<void> {
     await this.localState.init();
-    this.initCipher();
+    await this.initCipher();
     this.fileWatcher.start(10000);
   }
 
@@ -66,7 +66,7 @@ export class SyncManager {
    * (missing passphrase/salt) encrypted setup is left as null and surfaced, rather
    * than silently syncing plaintext.
    */
-  private initCipher(): void {
+  private async initCipher(): Promise<void> {
     if (!this.settings.encryptionEnabled) {
       this.cipher = null;
       return;
@@ -78,7 +78,7 @@ export class SyncManager {
       return;
     }
     const salt = Uint8Array.from(atob(this.settings.encryptionSaltB64), (c) => c.charCodeAt(0));
-    this.cipher = VaultCipher.fromPassphrase(this.settings.encryptionPassphrase, salt);
+    this.cipher = await VaultCipher.fromPassphrase(this.settings.encryptionPassphrase, salt);
     console.debug('[VaultSync] E2EE enabled — content encrypted client-side');
   }
 

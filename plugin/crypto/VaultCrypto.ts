@@ -1,5 +1,4 @@
 import { gcm } from '@noble/ciphers/aes';
-import { argon2id } from '@noble/hashes/argon2';
 import { hmac } from '@noble/hashes/hmac';
 import { sha256 } from '@noble/hashes/sha256';
 
@@ -29,17 +28,37 @@ export const BLOB_VERSION = 1;
 const NONCE_LEN = 12; // AES-GCM standard nonce
 const HEADER_LEN = BLOB_MAGIC.length + 1; // magic + version
 
-// Argon2id parameters. Tuned for interactive key derivation on client devices
-// (incl. mobile). Salt is stored alongside the vault config, not derived here.
-const ARGON2_OPTS = { t: 3, m: 64 * 1024, p: 4, dkLen: 32 } as const;
+// PBKDF2-HMAC-SHA256 iteration count (OWASP 2023 baseline for this primitive).
+const PBKDF2_ITERATIONS = 600_000;
 
 /**
  * Derive the 256-bit vault key from a passphrase and a per-vault salt.
  * Deterministic: same (passphrase, salt) → same key on every device.
+ *
+ * Uses native WebCrypto PBKDF2 (crypto.subtle.deriveBits) rather than a synchronous
+ * JS Argon2: Argon2id at interactive parameters runs ~1–5 s with no yield points and
+ * would freeze Obsidian's UI thread (worst on mobile). PBKDF2 here runs off the JS
+ * event loop and returns a Promise — no UI jank. Trade-off: PBKDF2 is not memory-hard,
+ * so it is weaker than Argon2id against GPU/ASIC passphrase cracking; mitigated by a
+ * high iteration count and a strong passphrase. Acceptable for a single-user vault
+ * whose primary threat is offline access to stolen ciphertext/backups.
  */
-export function deriveKey(passphrase: string, salt: Uint8Array): Uint8Array {
+export async function deriveKey(passphrase: string, salt: Uint8Array): Promise<Uint8Array> {
   const pwd = new TextEncoder().encode(passphrase);
-  return argon2id(pwd, salt, ARGON2_OPTS);
+  // Copy into freshly-allocated ArrayBuffers so the WebCrypto BufferSource types
+  // resolve to ArrayBuffer (never SharedArrayBuffer) under strict lib typings.
+  const pwdBuf = new ArrayBuffer(pwd.byteLength);
+  new Uint8Array(pwdBuf).set(pwd);
+  const saltBuf = new ArrayBuffer(salt.byteLength);
+  new Uint8Array(saltBuf).set(salt);
+
+  const baseKey = await crypto.subtle.importKey('raw', pwdBuf, 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: saltBuf, iterations: PBKDF2_ITERATIONS },
+    baseKey,
+    256,
+  );
+  return new Uint8Array(bits);
 }
 
 /**
