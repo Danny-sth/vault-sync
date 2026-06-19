@@ -4,6 +4,7 @@ import { FileIcons } from './icons/FileIcons';
 import { IconPickerModal } from './icons/IconPickerModal';
 import { CommandExecutor } from './commands/CommandExecutor';
 import { PdfProgress } from './pdf/PdfProgress';
+import { DailyNotes } from './daily/DailyNotes';
 import { ReadingDashboard } from './pdf/ReadingDashboard';
 import { VaultSyncSettings, DEFAULT_SETTINGS } from './types';
 
@@ -110,6 +111,13 @@ export default class VaultSyncPlugin extends Plugin {
       this.app.workspace.onLayoutReady(async () => {
         console.debug('[VaultSync] Workspace ready, initializing modules...');
         await this.fileIcons?.init();
+        // Create today's daily note client-side. The server can't (zero-knowledge,
+        // no key); the plugin has the key so the note is encrypted on sync like any file.
+        try {
+          await new DailyNotes(this.app).init();
+        } catch (e) {
+          console.error('[VaultSync] DailyNotes init failed:', e);
+        }
       });
 
       this.registerEvent(
