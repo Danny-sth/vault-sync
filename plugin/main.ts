@@ -426,6 +426,57 @@ class VaultSyncSettingTab extends PluginSettingTab {
           })
       );
 
+    new Setting(containerEl).setName('End-to-end encryption').setHeading();
+
+    new Setting(containerEl)
+      .setName('Encrypt vault (E2EE)')
+      .setDesc('Encrypt content client-side before upload. The server stores only ciphertext. Passphrase and salt must match on every device. Reconnect after changing.')
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.encryptionEnabled)
+          .onChange(async (value) => {
+            this.plugin.settings.encryptionEnabled = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName('Encryption passphrase')
+      .setDesc('Secret used to derive the vault key (Argon2id). Identical on all devices. Never sent to the server.')
+      .addText((text) => {
+        text.inputEl.type = 'password';
+        text
+          .setPlaceholder('passphrase')
+          .setValue(this.plugin.settings.encryptionPassphrase)
+          .onChange(async (value) => {
+            this.plugin.settings.encryptionPassphrase = value;
+            await this.plugin.saveSettings();
+          });
+      });
+
+    new Setting(containerEl)
+      .setName('Encryption salt (base64)')
+      .setDesc('Per-vault salt. Generate once, then copy the exact same value to every device.')
+      .addText((text) =>
+        text
+          .setPlaceholder('base64 salt')
+          .setValue(this.plugin.settings.encryptionSaltB64)
+          .onChange(async (value) => {
+            this.plugin.settings.encryptionSaltB64 = value;
+            await this.plugin.saveSettings();
+          })
+      )
+      .addButton((button) =>
+        button.setButtonText('Generate').onClick(async () => {
+          const salt = new Uint8Array(16);
+          crypto.getRandomValues(salt);
+          this.plugin.settings.encryptionSaltB64 = btoa(String.fromCharCode(...salt));
+          await this.plugin.saveSettings();
+          this.display();
+          new Notice('Vault Sync: new salt generated — copy it to your other devices');
+        })
+      );
+
     new Setting(containerEl).setName('Actions').setHeading();
 
     new Setting(containerEl)
