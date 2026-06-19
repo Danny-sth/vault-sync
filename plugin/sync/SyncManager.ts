@@ -61,10 +61,10 @@ export class SyncManager {
   }
 
   /**
-   * Build the session cipher from settings when E2EE is enabled. Argon2id is
-   * deliberately slow, so the key is derived exactly once here. A misconfigured
-   * (missing passphrase/salt) encrypted setup is left as null and surfaced, rather
-   * than silently syncing plaintext.
+   * Build the session cipher from settings when E2EE is enabled. PBKDF2 derivation
+   * is async; the key is derived exactly once here. A misconfigured (missing
+   * passphrase/salt) encrypted setup is left as null and surfaced, rather than
+   * silently syncing plaintext.
    */
   private async initCipher(): Promise<void> {
     if (!this.settings.encryptionEnabled) {
