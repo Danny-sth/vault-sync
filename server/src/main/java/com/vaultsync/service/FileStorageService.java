@@ -97,6 +97,22 @@ public class FileStorageService {
         return fileRepository.save(record);
     }
 
+    /**
+     * Read the raw on-disk bytes for a path. For an encrypted vault these bytes are the
+     * opaque ciphertext blob — the server never decrypts. Used by the MCP blob tools so a
+     * key-holding client can pull and decrypt locally.
+     */
+    public byte[] loadBytes(String path) throws IOException {
+        Path filePath = getFullPath(path);
+        if (!Files.exists(filePath)) {
+            throw new NoSuchFileException(path);
+        }
+        if (!Files.isRegularFile(filePath)) {
+            throw new IOException("Path is not a file: " + path);
+        }
+        return Files.readAllBytes(filePath);
+    }
+
     public Resource load(String path) throws IOException {
         Path filePath = getFullPath(path);
         if (!Files.exists(filePath)) {

@@ -27,6 +27,7 @@ public class VaultMcpTools {
 
     private final VaultNoteService noteService;
     private final CommandExecutionService commandService;
+    private final VaultBlobService blobService;
 
     /**
      * List all markdown notes in the vault.
@@ -515,6 +516,58 @@ public class VaultMcpTools {
         }
     }
 
+
+    /**
+     * Fetch the raw encrypted blob for a path (base64). The server never decrypts — the
+     * caller decrypts locally with the vault key. Use for zero-knowledge reads.
+     */
+    @Tool(name = "get_blob", description = "Fetch the raw end-to-end-encrypted blob for a vault path, base64-encoded. The server stores and returns ciphertext only; decrypt it locally with the vault key. Use this instead of read_note when the vault is encrypted.")
+    public GetBlobResult getBlob(
+            @ToolParam(description = "Relative path to the file (e.g., 'folder/note.md')") String path) {
+        log.info("MCP tool called: get_blob(path={})", path);
+
+        if (path == null || path.isBlank()) {
+            return new GetBlobResult(false, null, null, "Path is required");
+        }
+
+        try {
+            String blobBase64 = blobService.getBlobBase64(path);
+            return new GetBlobResult(true, path, blobBase64, null);
+        } catch (java.nio.file.NoSuchFileException e) {
+            return new GetBlobResult(false, path, null, "Blob not found: " + path);
+        } catch (IOException e) {
+            log.warn("Failed to read blob {}: {}", path, e.getMessage());
+            return new GetBlobResult(false, path, null, "Failed to read blob: " + e.getMessage());
+        }
+    }
+
+    /**
+     * List every encrypted blob with its sync metadata (path, blob hash, size, mtime, seq).
+     * Metadata only — no content is read or decrypted server-side.
+     */
+    @Tool(name = "list_blobs", description = "List every encrypted blob in the vault with sync metadata (path, blob hash, size, mtime, seq). Returns metadata only; no content is decrypted server-side.")
+    public ListBlobsResult listBlobs() {
+        log.info("MCP tool called: list_blobs");
+        try {
+            List<VaultBlobService.BlobInfo> blobs = blobService.listBlobs();
+            List<BlobInfoItem> items = blobs.stream()
+                    .map(b -> new BlobInfoItem(b.path(), b.hash(), b.size(), b.mtime(), b.seq()))
+                    .toList();
+            return new ListBlobsResult(true, items, items.size(), null);
+        } catch (Exception e) {
+            log.error("Failed to list blobs", e);
+            return new ListBlobsResult(false, List.of(), 0, "Failed to list blobs: " + e.getMessage());
+        }
+    }
+
+    public record GetBlobResult(boolean success, String path, String blobBase64, String error) {
+    }
+
+    public record ListBlobsResult(boolean success, List<BlobInfoItem> blobs, int count, String error) {
+    }
+
+    public record BlobInfoItem(String path, String hash, long size, long mtime, long seq) {
+    }
 
     public record ListNotesResult(boolean success, List<String> notes, int count, List<NoteInfoItem> notesWithStats,
                                    String error) {
