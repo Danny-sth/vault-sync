@@ -44,11 +44,26 @@ describe('VaultCrypto', () => {
     expect(hay.includes('plaintext-marker-xyz')).toBe(false);
   });
 
-  it('uses a random nonce: two encryptions of the same input differ', () => {
+  it('convergent: same (path, content) encrypts to the identical blob (stable hash)', () => {
     const key = deriveKey(PASSPHRASE, SALT);
     const plain = textBytes('same input');
     const a = encryptBlob(key, 'a.md', plain);
     const b = encryptBlob(key, 'a.md', plain);
+    expect(Array.from(a)).toEqual(Array.from(b));
+  });
+
+  it('different content at the same path yields a different blob', () => {
+    const key = deriveKey(PASSPHRASE, SALT);
+    const a = encryptBlob(key, 'a.md', textBytes('content one'));
+    const b = encryptBlob(key, 'a.md', textBytes('content two'));
+    expect(Array.from(a)).not.toEqual(Array.from(b));
+  });
+
+  it('same content at different paths yields a different blob', () => {
+    const key = deriveKey(PASSPHRASE, SALT);
+    const plain = textBytes('same content');
+    const a = encryptBlob(key, 'one.md', plain);
+    const b = encryptBlob(key, 'two.md', plain);
     expect(Array.from(a)).not.toEqual(Array.from(b));
   });
 
