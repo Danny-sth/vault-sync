@@ -103,7 +103,7 @@ curl -sk https://localhost:8443/actuator/health
 curl -sk https://localhost:8443/api/health -H "X-Auth-Token: <VAULT_SYNC_TOKEN>"
 ```
 
-Порт `8443` (SSL, PKCS12 keystore). Конфиг прод: `/opt/vault-sync/application.yml`
+Прод-порт **8444 (http, за nginx TLS)**; дефолт в application.yml — 8443 (SSL). Конфиг прод: `/opt/vault-sync/application.yml`
 (токены, storage-path). H2-метаданные: `${VAULT_SYNC_DATA:/opt/vault-sync/data}/metadata`.
 Файлы волта (source of truth): `/opt/obsidian-vault`. Daily-note TZ по умолчанию
 `Asia/Almaty`.
