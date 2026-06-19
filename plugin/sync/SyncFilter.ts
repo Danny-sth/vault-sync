@@ -44,6 +44,11 @@ export class SyncFilter {
     '.idea/',
     '.smart-env/',
     'node_modules/',
+    // duq/openclaw's internal workspace (skills, memory, state). duq reads/writes these
+    // as plaintext on the VPS filesystem; if clients synced them they'd encrypt duq's own
+    // brain and break it. User-facing notes duq creates live OUTSIDE cortex/ (Strains/,
+    // Daily/, …) and DO sync — duq writes those through the encrypting vault helper.
+    'cortex/',
   ];
 
   /**
