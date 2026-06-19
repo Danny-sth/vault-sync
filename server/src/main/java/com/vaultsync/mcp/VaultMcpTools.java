@@ -86,27 +86,12 @@ public class VaultMcpTools {
      * @param path Relative path to the note (e.g., "folder/note.md")
      * @return Note content or error message
      */
-    @Tool(name = "read_note", description = "Read the content of a specific markdown note from the Obsidian vault. Provide the relative path to the note (e.g., 'folder/note.md').")
+    @Tool(name = "read_note", description = "DEPRECATED under E2EE — the vault is encrypted, this returns ciphertext. Use get_blob(path) and decrypt locally with the vault key instead.")
     public ReadNoteResult readNote(
             @ToolParam(description = "Relative path to the note file (e.g., 'folder/note.md')") String path) {
-        log.info("MCP tool called: read_note(path={})", path);
-
-        if (path == null || path.isBlank()) {
-            return new ReadNoteResult(false, null, path, "Path is required");
-        }
-
-        try {
-            String content = noteService.readNote(path);
-            return new ReadNoteResult(true, content, path, null);
-        } catch (SecurityException e) {
-            log.warn("Security violation in read_note: {}", e.getMessage());
-            return new ReadNoteResult(false, null, path, "Access denied: " + e.getMessage());
-        } catch (IOException e) {
-            log.warn("Failed to read note {}: {}", path, e.getMessage());
-            return new ReadNoteResult(false, null, path, "Failed to read note: " + e.getMessage());
-        } catch (IllegalArgumentException e) {
-            return new ReadNoteResult(false, null, path, "Invalid path: " + e.getMessage());
-        }
+        log.info("MCP tool called: read_note(path={}) — rejected (E2EE)", path);
+        return new ReadNoteResult(false, null, path,
+                "Vault is end-to-end encrypted: read_note would return ciphertext. Use get_blob(path) and decrypt locally with the vault key.");
     }
 
     /**
@@ -116,25 +101,12 @@ public class VaultMcpTools {
      * @param query Search query
      * @return List of matching notes with snippets
      */
-    @Tool(name = "search_notes", description = "Search for notes containing a query string. Performs case-insensitive full-text search across all markdown files in the vault.")
+    @Tool(name = "search_notes", description = "DEPRECATED under E2EE — content is encrypted server-side, full-text search is impossible. Pull blobs (list_blobs + get_blob) and search locally after decrypting.")
     public SearchNotesResult searchNotes(
             @ToolParam(description = "Search query string (case-insensitive)") String query) {
-        log.info("MCP tool called: search_notes(query={})", query);
-
-        if (query == null || query.isBlank()) {
-            return new SearchNotesResult(false, List.of(), query, null, 0, "Query is required");
-        }
-
-        try {
-            List<VaultNoteService.SearchResult> results = noteService.searchNotes(query);
-            List<SearchResultItem> items = results.stream()
-                    .map(r -> new SearchResultItem(r.path(), r.title(), r.snippet()))
-                    .toList();
-            return new SearchNotesResult(true, items, query, null, items.size(), null);
-        } catch (IOException e) {
-            log.error("Failed to search notes", e);
-            return new SearchNotesResult(false, List.of(), query, null, 0, "Search failed: " + e.getMessage());
-        }
+        log.info("MCP tool called: search_notes — rejected (E2EE)");
+        return new SearchNotesResult(false, List.of(), query, null, 0,
+                "Vault is end-to-end encrypted: the server cannot search ciphertext. List with list_blobs, fetch with get_blob, and search locally after decrypting.");
     }
 
     /**
@@ -144,29 +116,13 @@ public class VaultMcpTools {
      * @param folder Optional folder to limit search (e.g., "archive/2024")
      * @return List of matching notes with snippets
      */
-    @Tool(name = "search_notes_in_folder", description = "Search for notes containing a query string within a specific folder. Performs case-insensitive full-text search.")
+    @Tool(name = "search_notes_in_folder", description = "DEPRECATED under E2EE — content is encrypted server-side. Pull blobs and search locally after decrypting.")
     public SearchNotesResult searchNotesInFolder(
             @ToolParam(description = "Search query string (case-insensitive)") String query,
             @ToolParam(description = "Folder to limit search (e.g., 'archive/2024')") String folder) {
-        log.info("MCP tool called: search_notes_in_folder(query={}, folder={})", query, folder);
-
-        if (query == null || query.isBlank()) {
-            return new SearchNotesResult(false, List.of(), query, folder, 0, "Query is required");
-        }
-
-        try {
-            List<VaultNoteService.SearchResult> results = noteService.searchNotes(query, folder);
-            List<SearchResultItem> items = results.stream()
-                    .map(r -> new SearchResultItem(r.path(), r.title(), r.snippet()))
-                    .toList();
-            return new SearchNotesResult(true, items, query, folder, items.size(), null);
-        } catch (SecurityException e) {
-            log.warn("Security violation in search_notes_in_folder: {}", e.getMessage());
-            return new SearchNotesResult(false, List.of(), query, folder, 0, "Access denied: " + e.getMessage());
-        } catch (IOException e) {
-            log.error("Failed to search notes", e);
-            return new SearchNotesResult(false, List.of(), query, folder, 0, "Search failed: " + e.getMessage());
-        }
+        log.info("MCP tool called: search_notes_in_folder — rejected (E2EE)");
+        return new SearchNotesResult(false, List.of(), query, folder, 0,
+                "Vault is end-to-end encrypted: the server cannot search ciphertext. Use list_blobs + get_blob and search locally after decrypting.");
     }
 
     /**
@@ -176,32 +132,13 @@ public class VaultMcpTools {
      * @param content Content to write
      * @return Result indicating success and whether file was created or updated
      */
-    @Tool(name = "write_note", description = "Create or update a markdown note in the Obsidian vault. Provide the relative path and content. Creates parent directories if needed. Adds .md extension if missing.")
+    @Tool(name = "write_note", description = "DEPRECATED under E2EE — writing plaintext would corrupt the encrypted vault. Encrypt the content with the vault key and use put_blob(path, blobBase64) instead.")
     public WriteNoteResult writeNote(
             @ToolParam(description = "Relative path to the note file (e.g., 'folder/note.md')") String path,
             @ToolParam(description = "Content to write to the note") String content) {
-        log.info("MCP tool called: write_note(path={}, contentLength={})", path, content != null ? content.length() : 0);
-
-        if (path == null || path.isBlank()) {
-            return new WriteNoteResult(false, null, false, "Path is required");
-        }
-        if (content == null) {
-            return new WriteNoteResult(false, path, false, "Content is required");
-        }
-
-        try {
-            boolean created = noteService.writeNote(path, content);
-            String normalizedPath = path.endsWith(".md") ? path : path + ".md";
-            return new WriteNoteResult(true, normalizedPath, created, null);
-        } catch (SecurityException e) {
-            log.warn("Security violation in write_note: {}", e.getMessage());
-            return new WriteNoteResult(false, path, false, "Access denied: " + e.getMessage());
-        } catch (IOException e) {
-            log.error("Failed to write note {}: {}", path, e.getMessage());
-            return new WriteNoteResult(false, path, false, "Failed to write note: " + e.getMessage());
-        } catch (IllegalArgumentException e) {
-            return new WriteNoteResult(false, path, false, "Invalid path: " + e.getMessage());
-        }
+        log.info("MCP tool called: write_note(path={}) — rejected (E2EE)", path);
+        return new WriteNoteResult(false, path, false,
+                "Vault is end-to-end encrypted: write_note would store unreadable plaintext. Encrypt with the vault key and use put_blob(path, blobBase64).");
     }
 
     /**
@@ -313,31 +250,13 @@ public class VaultMcpTools {
      * @param content Content to append
      * @return Result indicating success
      */
-    @Tool(name = "append_note", description = "Append content to an existing markdown note without overwriting. The note must already exist.")
+    @Tool(name = "append_note", description = "DEPRECATED under E2EE — appending plaintext to a ciphertext blob corrupts it. Fetch with get_blob, decrypt, append, re-encrypt, and put_blob.")
     public AppendNoteResult appendNote(
             @ToolParam(description = "Relative path to the note file (e.g., 'folder/note.md')") String path,
             @ToolParam(description = "Content to append to the note") String content) {
-        log.info("MCP tool called: append_note(path={}, contentLength={})", path, content != null ? content.length() : 0);
-
-        if (path == null || path.isBlank()) {
-            return new AppendNoteResult(false, null, "Path is required");
-        }
-        if (content == null) {
-            return new AppendNoteResult(false, path, "Content is required");
-        }
-
-        try {
-            noteService.appendNote(path, content);
-            return new AppendNoteResult(true, path, null);
-        } catch (SecurityException e) {
-            log.warn("Security violation in append_note: {}", e.getMessage());
-            return new AppendNoteResult(false, path, "Access denied: " + e.getMessage());
-        } catch (IOException e) {
-            log.error("Failed to append to note {}: {}", path, e.getMessage());
-            return new AppendNoteResult(false, path, "Failed to append: " + e.getMessage());
-        } catch (IllegalArgumentException e) {
-            return new AppendNoteResult(false, path, "Invalid path: " + e.getMessage());
-        }
+        log.info("MCP tool called: append_note(path={}) — rejected (E2EE)", path);
+        return new AppendNoteResult(false, path,
+                "Vault is end-to-end encrypted: appending plaintext corrupts the blob. get_blob → decrypt → append → encrypt → put_blob.");
     }
 
     /**
@@ -348,36 +267,14 @@ public class VaultMcpTools {
      * @param newString Replacement string
      * @return Result indicating success
      */
-    @Tool(name = "edit_note", description = "Edit a note by replacing old_string with new_string. The old_string must be unique in the file (only one occurrence allowed).")
+    @Tool(name = "edit_note", description = "DEPRECATED under E2EE — the server can't read ciphertext to find/replace. Fetch with get_blob, decrypt, edit, re-encrypt, and put_blob.")
     public EditNoteResult editNote(
             @ToolParam(description = "Relative path to the note file (e.g., 'folder/note.md')") String path,
             @ToolParam(description = "String to find in the note (must be unique)") String oldString,
             @ToolParam(description = "Replacement string") String newString) {
-        log.info("MCP tool called: edit_note(path={}, oldStringLength={}, newStringLength={})",
-                path, oldString != null ? oldString.length() : 0, newString != null ? newString.length() : 0);
-
-        if (path == null || path.isBlank()) {
-            return new EditNoteResult(false, null, "Path is required");
-        }
-        if (oldString == null) {
-            return new EditNoteResult(false, path, "old_string is required");
-        }
-        if (newString == null) {
-            return new EditNoteResult(false, path, "new_string is required");
-        }
-
-        try {
-            noteService.editNote(path, oldString, newString);
-            return new EditNoteResult(true, path, null);
-        } catch (SecurityException e) {
-            log.warn("Security violation in edit_note: {}", e.getMessage());
-            return new EditNoteResult(false, path, "Access denied: " + e.getMessage());
-        } catch (IOException e) {
-            log.error("Failed to edit note {}: {}", path, e.getMessage());
-            return new EditNoteResult(false, path, "Failed to edit: " + e.getMessage());
-        } catch (IllegalArgumentException e) {
-            return new EditNoteResult(false, path, "Edit failed: " + e.getMessage());
-        }
+        log.info("MCP tool called: edit_note(path={}) — rejected (E2EE)", path);
+        return new EditNoteResult(false, path,
+                "Vault is end-to-end encrypted: the server cannot edit ciphertext. get_blob → decrypt → edit → encrypt → put_blob.");
     }
 
     /**

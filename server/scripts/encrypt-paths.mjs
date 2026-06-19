@@ -64,12 +64,22 @@ for (const full of walkFiles(vaultDir)) {
   }
 }
 
-// Remove now-empty real-named directories (deepest first).
-if (!dryRun) {
-  for (const d of [...dirsToCheck].sort((a, b) => b.length - a.length)) {
-    try { rmdirSync(d); } catch { /* not empty / already gone */ }
+// Recursively remove every now-empty directory left behind by the renames (deepest
+// first), so no real folder name lingers on the server. Excluded/service dirs are kept.
+function pruneEmptyDirs(dir) {
+  let entries;
+  try { entries = readdirSync(dir); } catch { return; }
+  for (const name of entries) {
+    const full = join(dir, name);
+    let st;
+    try { st = statSync(full); } catch { continue; }
+    if (st.isDirectory() && !EXCLUDED_DIRS.has(name)) pruneEmptyDirs(full);
+  }
+  if (dir !== vaultDir) {
+    try { if (readdirSync(dir).length === 0) rmdirSync(dir); } catch { /* not empty */ }
   }
 }
+if (!dryRun) pruneEmptyDirs(vaultDir);
 
 console.log(`${dryRun ? '[DRY-RUN] ' : ''}renamed=${renamed} skipped(already-enc)=${skipped} failed=${failed}`);
 samples.forEach((s) => console.log('  ', s));
