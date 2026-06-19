@@ -41,3 +41,17 @@ describe('VaultCrypto path encryption', () => {
     expect(() => decryptPath(wrong, enc)).toThrow();
   });
 });
+
+import { describe as d2, it as i2, expect as e2 } from 'vitest';
+import { deriveKey as dk2, encryptPath as ep2, decryptPath as dp2 } from './VaultCrypto';
+d2('VaultCrypto long path names', () => {
+  i2('round-trips a name far over the 255-byte filesystem limit', async () => {
+    const key = await dk2('pw', new Uint8Array([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16]));
+    const longName = 'Очень длинное имя файла '.repeat(12) + '.pdf'; // ~300+ bytes
+    const p = `Work/БФ/${longName}`;
+    const enc = ep2(key, p);
+    // every on-disk component stays under the fs limit
+    for (const comp of enc.split('/')) e2(new TextEncoder().encode(comp).length).toBeLessThanOrEqual(255);
+    e2(dp2(key, enc)).toBe(p);
+  });
+});

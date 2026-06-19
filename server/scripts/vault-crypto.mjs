@@ -95,9 +95,36 @@ export function decryptPathComponent(key, enc) {
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
 }
+const MAX_NAME = 200;
+const NAME_CHUNK = 180;
 export function encryptPath(key, path) {
-  return path.split('/').map((c) => (c === '' ? '' : encryptPathComponent(key, c))).join('/');
+  const out = [];
+  for (const c of path.split('/')) {
+    if (c === '') { out.push(''); continue; }
+    const enc = encryptPathComponent(key, c);
+    if (enc.length <= MAX_NAME) { out.push(enc); continue; }
+    const chunks = [];
+    for (let i = 0; i < enc.length; i += NAME_CHUNK) chunks.push(enc.slice(i, i + NAME_CHUNK));
+    out.push(`8${chunks.length}-${chunks[0]}`);
+    for (let i = 1; i < chunks.length; i++) out.push(chunks[i]);
+  }
+  return out.join('/');
 }
 export function decryptPath(key, encPath) {
-  return encPath.split('/').map((c) => (c === '' ? '' : decryptPathComponent(key, c))).join('/');
+  const parts = encPath.split('/');
+  const out = [];
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (p === '') { out.push(''); continue; }
+    const m = /^8(\d+)-(.*)$/.exec(p);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      let enc = m[2];
+      for (let j = 1; j < n; j++) { i++; enc += parts[i] ?? ''; }
+      out.push(decryptPathComponent(key, enc));
+    } else {
+      out.push(decryptPathComponent(key, p));
+    }
+  }
+  return out.join('/');
 }
