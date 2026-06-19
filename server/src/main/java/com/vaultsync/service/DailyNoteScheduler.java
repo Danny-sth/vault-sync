@@ -8,7 +8,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.stereotype.Service;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -32,8 +31,13 @@ import java.util.regex.Pattern;
  *
  * Lives in the server jar (repository), so it travels with the deployment and
  * survives host migrations — unlike the old external systemd timer.
+ *
+ * DISABLED under E2EE (no @Service → not a Spring bean → never runs). The server is
+ * zero-knowledge and has no vault key, so it cannot write an *encrypted* note; writing
+ * plaintext here would drop an unreadable file into the ciphertext vault that key-holding
+ * clients fail to decrypt. Daily-note creation is owned by the plugin ({@code DailyNotes}),
+ * which has the key and encrypts on sync. Kept for reference / future client-side archiving.
  */
-@Service
 public class DailyNoteScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(DailyNoteScheduler.class);
