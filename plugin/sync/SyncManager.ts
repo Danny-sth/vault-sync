@@ -383,6 +383,19 @@ export class SyncManager {
           }
         }
 
+        // Conflict guard for EVERY download path (full-sync AND real-time broadcast):
+        // if the local file has an unsynced edit (its hash differs from the last synced
+        // hash and from what we're about to write), preserve it as a side copy before
+        // overwriting — otherwise an offline/concurrent edit is silently lost.
+        const existing = await this.fileOps.readBinary(path);
+        if (existing && existing.content.byteLength > 0) {
+          const lastKnown = await this.localState.getFileHash(path);
+          const existingHash = await this.serverHash(path, existing.content);
+          if (lastKnown && existingHash !== lastKnown && existingHash !== hash) {
+            await this.saveConflictCopy(path, existing.content);
+          }
+        }
+
         await this.fileOps.writeBinary(path, toWrite);
 
         // Store the server's blob hash (== serverHash space) so later change
@@ -844,26 +857,14 @@ export class SyncManager {
       return 'noop';
     }
 
-    const action = ConflictResolver.resolve(
+    // Conflict-copy preservation is handled centrally in downloadFile (covers both the
+    // full-sync download here and real-time broadcast downloads), so just decide here.
+    return ConflictResolver.resolve(
       path,
       { hash: localHash, mtime: read.mtime },
       { hash: serverFile.hash, mtime: serverFile.mtime },
       lastKnownHash
     );
-
-    // Genuine conflict (both sides diverged from the last synced state) resolved in the
-    // server's favour: preserve the local edit as a side copy BEFORE the download
-    // overwrites it — otherwise an offline edit is silently lost on reconnect.
-    if (
-      action === 'download' &&
-      lastKnownHash !== undefined &&
-      localHash !== lastKnownHash &&
-      serverFile.hash !== lastKnownHash
-    ) {
-      await this.saveConflictCopy(path, read.content);
-    }
-
-    return action;
   }
 
   /** Write the local content to a "(conflict …)" side file so a conflict never loses data. */
