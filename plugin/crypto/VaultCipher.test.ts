@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { VaultCipher, sha256Hex } from './VaultCipher';
+import { VaultCipher, sha256Hex, toArrayBuffer } from './VaultCipher';
 
 const SALT = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
 
 function buf(s: string): ArrayBuffer {
-  return new TextEncoder().encode(s).buffer;
+  return toArrayBuffer(new TextEncoder().encode(s));
 }
 
 describe('VaultCipher', () => {
@@ -12,7 +12,7 @@ describe('VaultCipher', () => {
     const cipher = VaultCipher.fromPassphrase('pass', SALT);
     const plain = '# note\nтело 🔐';
     const blob = cipher.encrypt('a/b.md', buf(plain));
-    const out = cipher.decrypt('a/b.md', blob.buffer);
+    const out = cipher.decrypt('a/b.md', toArrayBuffer(blob));
     expect(new TextDecoder().decode(out)).toBe(plain);
   });
 
@@ -41,6 +41,6 @@ describe('VaultCipher', () => {
     const a = VaultCipher.fromPassphrase('shared', SALT);
     const b = VaultCipher.fromPassphrase('shared', SALT);
     const blob = a.encrypt('x.md', buf('cross-device'));
-    expect(new TextDecoder().decode(b.decrypt('x.md', blob.buffer))).toBe('cross-device');
+    expect(new TextDecoder().decode(b.decrypt('x.md', toArrayBuffer(blob)))).toBe('cross-device');
   });
 });

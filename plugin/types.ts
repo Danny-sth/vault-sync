@@ -78,6 +78,15 @@ export interface VaultSyncSettings {
   heartbeatIntervalMs: number;
   syncTimeoutMs: number;
   retryAttempts: number;
+  // End-to-end encryption. When enabled, file content is encrypted client-side
+  // (convergent AES-256-GCM, see VaultCipher) before upload and decrypted after
+  // download — the server stores and hashes only ciphertext blobs. The passphrase
+  // and salt never leave the device. Both passphrase and salt must match across
+  // all devices, or they cannot read each other's files.
+  encryptionEnabled: boolean;
+  encryptionPassphrase: string;
+  /** Per-vault salt, base64. Generated once; must be identical on every device. */
+  encryptionSaltB64: string;
 }
 
 export const DEFAULT_SETTINGS: VaultSyncSettings = {
@@ -92,6 +101,9 @@ export const DEFAULT_SETTINGS: VaultSyncSettings = {
   heartbeatIntervalMs: 10000,
   syncTimeoutMs: 120000,
   retryAttempts: 3,
+  encryptionEnabled: false,
+  encryptionPassphrase: '',
+  encryptionSaltB64: '',
 };
 
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
