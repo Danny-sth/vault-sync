@@ -31,29 +31,6 @@ export class SyncManager {
   /** Session cipher when E2EE is enabled; null = plaintext sync (legacy). */
   private cipher: VaultCipher | null = null;
 
-  // Bounded concurrency for network transfers. The watcher can detect hundreds of
-  // changed files at once (e.g. the first sync after the encryption cutover) and the
-  // debounced timers fire them together; without a cap every file's request body is
-  // held in memory simultaneously, which OOM-kills Obsidian on mobile. This gate keeps
-  // at most maxConcurrentTransfers uploads/downloads in flight; the rest queue.
-  private readonly maxConcurrentTransfers = 4;
-  private activeTransfers = 0;
-  private readonly transferWaiters: Array<() => void> = [];
-
-  private async withTransferSlot<T>(fn: () => Promise<T>): Promise<T> {
-    while (this.activeTransfers >= this.maxConcurrentTransfers) {
-      await new Promise<void>((resolve) => this.transferWaiters.push(resolve));
-    }
-    this.activeTransfers++;
-    try {
-      return await fn();
-    } finally {
-      this.activeTransfers--;
-      const next = this.transferWaiters.shift();
-      if (next) next();
-    }
-  }
-
   private pendingChanges: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private isProcessingRemote = false;
   private isSyncing = false;
@@ -340,10 +317,6 @@ export class SyncManager {
   }
 
   private async downloadFile(path: string, retries = 3): Promise<boolean> {
-    return this.withTransferSlot(() => this.doDownloadFile(path, retries));
-  }
-
-  private async doDownloadFile(path: string, retries = 3): Promise<boolean> {
     console.debug(`[VaultSync] downloadFile starting: ${path}`);
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
@@ -840,10 +813,7 @@ export class SyncManager {
   private async uploadByPath(path: string): Promise<void> {
     if (this.isProcessingRemote) return;
     if (!SyncFilter.shouldSync(path)) return;
-    await this.withTransferSlot(() => this.doUploadByPath(path));
-  }
 
-  private async doUploadByPath(path: string): Promise<void> {
     const read = await this.fileOps.readBinary(path);
     if (!read) return;
     const { content, mtime } = read;
