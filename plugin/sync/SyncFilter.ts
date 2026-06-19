@@ -21,6 +21,10 @@ export class SyncFilter {
     '.obsidian/icons/',
     '.obsidian/file-recovery/',
     '.obsidian/cache',
+    // Never sync this plugin's own code/manifest. Syncing them lets a stale device
+    // delete or conflict the running plugin's files (manifest.json went missing →
+    // the plugin failed to load). It is deployed out-of-band (per device), not via sync.
+    '.obsidian/plugins/vault-sync/',
   ];
 
   /**
