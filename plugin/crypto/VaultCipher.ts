@@ -1,4 +1,4 @@
-import { deriveKey, encryptBlob, decryptBlob } from './VaultCrypto';
+import { deriveKey, encryptBlob, decryptBlob, encryptPath, decryptPath } from './VaultCrypto';
 
 /**
  * Sync-engine-facing wrapper around {@link VaultCrypto}.
@@ -39,6 +39,16 @@ export class VaultCipher {
   /** Like {@link decrypt} but returns a plain ArrayBuffer for vault writes. */
   decryptToArrayBuffer(path: string, blob: ArrayBuffer): ArrayBuffer {
     return toArrayBuffer(this.decrypt(path, blob));
+  }
+
+  /** Real vault path → encrypted path used on the server (opaque to the server). */
+  encryptPath(path: string): string {
+    return encryptPath(this.key, path);
+  }
+
+  /** Encrypted server path → real vault path. */
+  decryptPath(path: string): string {
+    return decryptPath(this.key, path);
   }
 
   /**
