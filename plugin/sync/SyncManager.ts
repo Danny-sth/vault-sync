@@ -8,6 +8,7 @@ import { ConflictResolver, SyncAction } from './ConflictResolver';
 import { FileOperationService } from './FileOperationService';
 import { SyncStatusNotice } from './SyncStatusNotice';
 import { tombstoneApplies as decideTombstone } from './TombstoneLogic';
+import { VaultCipher } from '../crypto/VaultCipher';
 import {
   VaultSyncSettings,
   ServerMessage,
@@ -27,6 +28,8 @@ export class SyncManager {
   private apiClient: SyncApiClient;
   private fileOps: FileOperationService;
   private readonly status = new SyncStatusNotice();
+  /** Session cipher when E2EE is enabled; null = plaintext sync (legacy). */
+  private cipher: VaultCipher | null = null;
 
   private pendingChanges: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private isProcessingRemote = false;
@@ -53,7 +56,45 @@ export class SyncManager {
 
   async init(): Promise<void> {
     await this.localState.init();
+    this.initCipher();
     this.fileWatcher.start(10000);
+  }
+
+  /**
+   * Build the session cipher from settings when E2EE is enabled. Argon2id is
+   * deliberately slow, so the key is derived exactly once here. A misconfigured
+   * (missing passphrase/salt) encrypted setup is left as null and surfaced, rather
+   * than silently syncing plaintext.
+   */
+  private initCipher(): void {
+    if (!this.settings.encryptionEnabled) {
+      this.cipher = null;
+      return;
+    }
+    if (!this.settings.encryptionPassphrase || !this.settings.encryptionSaltB64) {
+      this.cipher = null;
+      console.error('[VaultSync] Encryption enabled but passphrase/salt missing — refusing to sync');
+      this.status.error('шифрование: нет ключа/соли');
+      return;
+    }
+    const salt = Uint8Array.from(atob(this.settings.encryptionSaltB64), (c) => c.charCodeAt(0));
+    this.cipher = VaultCipher.fromPassphrase(this.settings.encryptionPassphrase, salt);
+    console.debug('[VaultSync] E2EE enabled — content encrypted client-side');
+  }
+
+  /**
+   * Hash used for all server-facing comparisons (dedup, conflict, baseHash). When
+   * encrypted this is SHA-256 of the blob the server stores; otherwise SHA-256 of
+   * the plaintext. Keeping a single source means the plugin and server never end up
+   * in different hash spaces.
+   */
+  private async serverHash(path: string, content: ArrayBuffer): Promise<string> {
+    return this.cipher ? this.cipher.blobHashHex(path, content) : this.computeHash(content);
+  }
+
+  /** Plaintext → bytes to upload (ciphertext blob when encrypted, else as-is). */
+  private encodeForUpload(path: string, content: ArrayBuffer): ArrayBuffer {
+    return this.cipher ? this.cipher.encryptToArrayBuffer(path, content) : content;
   }
 
   async connect(): Promise<void> {
@@ -269,8 +310,23 @@ export class SyncManager {
 
         const { content, hash } = result;
 
-        await this.fileOps.writeBinary(path, content);
+        // Server delivers the ciphertext blob; decrypt to plaintext before writing
+        // into the vault. A decrypt failure (corrupt blob / wrong key / a legacy
+        // plaintext file mid-migration) must NOT clobber the local file with garbage.
+        let toWrite = content;
+        if (this.cipher) {
+          try {
+            toWrite = this.cipher.decryptToArrayBuffer(path, content);
+          } catch (e) {
+            console.error(`[VaultSync] Decrypt failed for ${path} — skipping write:`, e);
+            return false;
+          }
+        }
 
+        await this.fileOps.writeBinary(path, toWrite);
+
+        // Store the server's blob hash (== serverHash space) so later change
+        // detection compares like-for-like and doesn't re-upload unchanged files.
         await this.localState.setFileHash(path, hash);
 
         const updatedFile = this.app.vault.getAbstractFileByPath(path) as TFile | null;
@@ -708,7 +764,7 @@ export class SyncManager {
       return 'download';
     }
 
-    const localHash = await this.computeHash(read.content);
+    const localHash = await this.serverHash(path, read.content);
 
     return ConflictResolver.resolve(
       path,
@@ -726,7 +782,7 @@ export class SyncManager {
     if (!read) return;
     const { content, mtime } = read;
 
-    const hash = await this.computeHash(content);
+    const hash = await this.serverHash(path, content);
     const existingHash = await this.localState.getFileHash(path);
     if (existingHash === hash) return;
 
@@ -737,7 +793,10 @@ export class SyncManager {
 
     const baseSeq = await this.localState.getFileSeq(path);
     try {
-      const seq = await this.apiClient.upload(path, content, hash, mtime, existingHash ?? '', baseSeq);
+      // Upload the encrypted blob (or plaintext when E2EE is off); `hash` is already
+      // in the matching (blob | plaintext) hash space so server concurrency holds.
+      const payload = this.encodeForUpload(path, content);
+      const seq = await this.apiClient.upload(path, payload, hash, mtime, existingHash ?? '', baseSeq);
       await this.localState.setFileHash(path, hash);
       await this.localState.setFileSeq(path, seq);
     } catch (e) {
@@ -791,7 +850,7 @@ export class SyncManager {
 
     const serverContent = await this.fileOps.readBinary(path);
     const sameAsServer = serverContent
-      && (await this.computeHash(serverContent.content)) === (await this.computeHash(localContent));
+      && (await this.serverHash(path, serverContent.content)) === (await this.serverHash(path, localContent));
 
     if (localContent.byteLength > 0 && !sameAsServer) {
       const dot = path.lastIndexOf('.');

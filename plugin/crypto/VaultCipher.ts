@@ -31,6 +31,16 @@ export class VaultCipher {
     return decryptBlob(this.key, path, new Uint8Array(blob));
   }
 
+  /** Like {@link encrypt} but returns a plain ArrayBuffer for the transport layer. */
+  encryptToArrayBuffer(path: string, plain: ArrayBuffer): ArrayBuffer {
+    return toArrayBuffer(this.encrypt(path, plain));
+  }
+
+  /** Like {@link decrypt} but returns a plain ArrayBuffer for vault writes. */
+  decryptToArrayBuffer(path: string, blob: ArrayBuffer): ArrayBuffer {
+    return toArrayBuffer(this.decrypt(path, blob));
+  }
+
   /**
    * Hex SHA-256 of the blob that {@link encrypt} would produce for this (path, content).
    * This is the value the server records, so the engine compares against it for dedup and
@@ -44,8 +54,15 @@ export class VaultCipher {
 
 /** Lowercase hex SHA-256, byte-identical to the server's HashUtil.sha256 output. */
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const digest = await crypto.subtle.digest('SHA-256', toArrayBuffer(bytes));
   return Array.from(new Uint8Array(digest))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
+}
+
+/** Copy a Uint8Array into a fresh, exactly-sized ArrayBuffer (never SharedArrayBuffer). */
+export function toArrayBuffer(u8: Uint8Array): ArrayBuffer {
+  const ab = new ArrayBuffer(u8.byteLength);
+  new Uint8Array(ab).set(u8);
+  return ab;
 }
