@@ -31,6 +31,9 @@ public class FileStorageService {
     /** Directory (inside the vault root, excluded from sync) holding pre-overwrite backups. */
     public static final String VERSIONS_DIR = ".vault-sync-versions";
 
+    /** Directory holding in-progress chunked uploads (see FileController.uploadChunk). */
+    public static final String UPLOADS_DIR = ".vault-sync-uploads";
+
     /** How long version backups are kept before the scheduled cleanup removes them. */
     @Value("${vault-sync.versions-ttl-days:30}")
     private int versionsTtlDays;
@@ -211,6 +214,36 @@ public class FileStorageService {
             log.debug("Versioned {} -> {}", relativePath, dest);
         } catch (IOException e) {
             log.warn("Could not version {}: {}", relativePath, e.getMessage());
+        }
+    }
+
+    /** Purge orphaned chunked-upload temp files (interrupted uploads) older than 1h. Hourly. */
+    @org.springframework.scheduling.annotation.Scheduled(fixedRate = 3600000)
+    public void cleanupOrphanUploads() {
+        Path uploadsRoot = Paths.get(storagePath, UPLOADS_DIR);
+        if (!Files.exists(uploadsRoot)) {
+            return;
+        }
+        long cutoff = System.currentTimeMillis() - 3600000L;
+        try (var walk = Files.walk(uploadsRoot)) {
+            walk.filter(Files::isRegularFile)
+                .filter(p -> {
+                    try {
+                        return Files.getLastModifiedTime(p).toMillis() < cutoff;
+                    } catch (IOException e) {
+                        return false;
+                    }
+                })
+                .forEach(p -> {
+                    try {
+                        Files.delete(p);
+                        log.debug("Deleted orphan chunked-upload temp: {}", p);
+                    } catch (IOException e) {
+                        log.debug("Could not delete orphan upload {}: {}", p, e.getMessage());
+                    }
+                });
+        } catch (IOException e) {
+            log.warn("Orphan upload cleanup failed: {}", e.getMessage());
         }
     }
 

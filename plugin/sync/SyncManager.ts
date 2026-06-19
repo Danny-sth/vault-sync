@@ -184,6 +184,9 @@ export class SyncManager {
       await this.localState.setLastSeq(msg.seq);
       return;
     }
+    // The content changed on the server — clear any prior "can't decrypt" mark so a now
+    // properly-encrypted version (e.g. duq switching to put_blob) is fetched and decrypted.
+    this.undecryptable.delete(msg.path);
     this.isProcessingRemote = true;
     try {
       const success = await this.downloadFile(msg.path);
