@@ -49,3 +49,55 @@ export function decryptBlob(key, path, blob) {
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ct), decipher.final()]);
 }
+
+// --- Path (filename/folder) encryption — byte-compatible with plugin VaultCrypto ---
+const PATH_AAD = Buffer.from('vault-path', 'utf8');
+const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
+
+function base32encode(bytes) {
+  let bits = 0, val = 0, out = '';
+  for (const b of bytes) {
+    val = (val << 8) | b; bits += 8;
+    while (bits >= 5) { out += B32[(val >>> (bits - 5)) & 31]; bits -= 5; }
+  }
+  if (bits > 0) out += B32[(val << (5 - bits)) & 31];
+  return out;
+}
+function base32decode(s) {
+  let bits = 0, val = 0; const out = [];
+  for (const ch of s) {
+    const idx = B32.indexOf(ch);
+    if (idx < 0) continue;
+    val = (val << 5) | idx; bits += 5;
+    if (bits >= 8) { out.push((val >>> (bits - 8)) & 0xff); bits -= 8; }
+  }
+  return Buffer.from(out);
+}
+function componentNonce(key, component) {
+  const msg = Buffer.concat([Buffer.from([0xfe]), component]);
+  return createHmac('sha256', key).update(msg).digest().subarray(0, NONCE_LEN);
+}
+export function encryptPathComponent(key, component) {
+  const bytes = Buffer.from(component, 'utf8');
+  const nonce = componentNonce(key, bytes);
+  const cipher = createCipheriv('aes-256-gcm', key, nonce, { authTagLength: TAG_LEN });
+  cipher.setAAD(PATH_AAD);
+  const ct = Buffer.concat([cipher.update(bytes), cipher.final(), cipher.getAuthTag()]);
+  return base32encode(Buffer.concat([nonce, ct]));
+}
+export function decryptPathComponent(key, enc) {
+  const data = base32decode(enc);
+  const nonce = data.subarray(0, NONCE_LEN);
+  const tag = data.subarray(data.length - TAG_LEN);
+  const ct = data.subarray(NONCE_LEN, data.length - TAG_LEN);
+  const decipher = createDecipheriv('aes-256-gcm', key, nonce, { authTagLength: TAG_LEN });
+  decipher.setAAD(PATH_AAD);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
+}
+export function encryptPath(key, path) {
+  return path.split('/').map((c) => (c === '' ? '' : encryptPathComponent(key, c))).join('/');
+}
+export function decryptPath(key, encPath) {
+  return encPath.split('/').map((c) => (c === '' ? '' : decryptPathComponent(key, c))).join('/');
+}
