@@ -15,8 +15,13 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import org.springframework.beans.factory.annotation.Value;
+
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.Map;
 
 @RestController
@@ -174,19 +179,28 @@ public class FileController {
 
     public record JsonUploadRequest(String path, String content, String hash, long mtime, String baseHash, long baseSeq) {}
 
+    /** Directory (inside storage, excluded from sync) holding in-progress chunked uploads. */
+    private static final String UPLOADS_DIR = ".vault-sync-uploads";
+
+    @Value("${vault-sync.storage-path}")
+    private String storagePath;
+
     /**
-     * Upload a file as a raw binary body (no base64, no JSON size limit).
-     *
-     * The client sends the encrypted blob bytes directly with octet-stream; metadata
-     * travels in headers (path is URL-encoded since headers are ASCII-only). This is the
-     * primary upload path: base64-in-JSON inflated big files ~6x and OOM-killed Obsidian
-     * on mobile while also hitting the JSON request limit. Concurrency/resurrection
-     * handling mirrors {@link #uploadFileJson} exactly.
+     * Streamed chunked upload. The client sends the encrypted blob in ordered binary
+     * chunks (octet-stream) so neither side ever holds the whole file as an inflated
+     * string — base64-in-JSON OOM-killed Obsidian on mobile and hit the JSON size limit.
+     * Each chunk is appended to a temp file keyed by X-Upload-Id; the final chunk
+     * (X-Chunk-Index == X-Chunk-Count-1) assembles, runs the same resurrection/concurrency
+     * checks as {@link #uploadFileJson}, commits, and broadcasts. A small file is simply
+     * one chunk.
      */
-    @PostMapping(value = "/upload-binary", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
-    public ResponseEntity<?> uploadFileBinary(
-            @RequestBody byte[] content,
+    @PostMapping(value = "/upload-chunk", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
+    public ResponseEntity<?> uploadChunk(
+            @RequestBody byte[] chunk,
             @RequestHeader("X-Path") String encodedPath,
+            @RequestHeader("X-Upload-Id") String uploadId,
+            @RequestHeader("X-Chunk-Index") int chunkIndex,
+            @RequestHeader("X-Chunk-Count") int chunkCount,
             @RequestHeader("X-Hash") String hash,
             @RequestHeader(value = "X-Mtime", required = false, defaultValue = "0") long mtime,
             @RequestHeader(value = "X-Base-Hash", required = false, defaultValue = "") String baseHash,
@@ -194,7 +208,24 @@ public class FileController {
             @RequestHeader("X-Device-Id") String deviceId) {
 
         String path = java.net.URLDecoder.decode(encodedPath, java.nio.charset.StandardCharsets.UTF_8);
+        if (!uploadId.matches("[A-Za-z0-9_.-]{1,128}")) {
+            return ResponseEntity.badRequest().body(Map.of("error", "invalid uploadId"));
+        }
+        java.nio.file.Path tmp = Paths.get(storagePath, UPLOADS_DIR, uploadId);
         try {
+            Files.createDirectories(tmp.getParent());
+            // First chunk truncates any stale partial; subsequent chunks append in order.
+            if (chunkIndex == 0) {
+                Files.write(tmp, chunk, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            } else {
+                Files.write(tmp, chunk, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+            }
+            if (chunkIndex < chunkCount - 1) {
+                return ResponseEntity.ok(Map.of("status", "chunk-ok", "index", chunkIndex));
+            }
+
+            byte[] content = Files.readAllBytes(tmp);
+            Files.deleteIfExists(tmp);
             com.vaultsync.model.Tombstone tomb = syncService.getTombstone(path);
             boolean clearTombstoneAfterStore = false;
             if (tomb != null) {

@@ -70,39 +70,52 @@ export class SyncApiClient {
     baseHash = '',
     baseSeq = 0,
   ): Promise<number> {
-    // Send the encrypted blob as a raw binary body — no base64. base64-in-JSON
-    // inflated big files ~6x and OOM-killed Obsidian on mobile (the giant string
-    // crossing the native bridge) and hit the JSON request-size limit. Metadata goes
-    // in headers; the path is URL-encoded because headers are ASCII-only.
-    // baseSeq = highest server seq this device saw for the path (incl. its deletion),
-    // used by the server to tell genuine recreation (baseSeq >= tomb.seq) from a stale re-push.
-    const response = await requestUrl({
-      url: `${this.baseUrl}/api/upload-binary`,
-      method: 'POST',
-      headers: {
-        ...this.headers,
-        'Content-Type': 'application/octet-stream',
-        'X-Path': encodeURIComponent(path),
-        'X-Hash': hash,
-        'X-Mtime': String(mtime),
-        'X-Base-Hash': baseHash,
-        'X-Base-Seq': String(baseSeq),
-      },
-      body: content,
-      throw: false,
-    });
+    // Stream the encrypted blob to the server in ordered binary chunks — no base64,
+    // no whole-file body. base64-in-JSON inflated big files ~6x into one giant string
+    // that crossed the native bridge and OOM-killed Obsidian on mobile (and hit the
+    // JSON size limit). Chunking bounds per-request memory regardless of file size.
+    // baseSeq = highest server seq this device saw for the path (incl. its deletion);
+    // the server uses it on the final chunk to tell genuine recreation from a stale re-push.
+    const CHUNK_SIZE = 1024 * 1024; // 1 MiB
+    const total = Math.max(1, Math.ceil(content.byteLength / CHUNK_SIZE));
+    const uploadId = `${this.settings.deviceId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      .replace(/[^A-Za-z0-9_.-]/g, '-');
 
-    if (response.status === 409) {
-      const body = response.json || {};
-      const deleted = body.error === 'deleted';
-      throw new ConflictError(path, body.currentHash || '', deleted);
+    let lastJson: any = null;
+    for (let i = 0; i < total; i++) {
+      const slice = content.slice(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, content.byteLength));
+      const response = await requestUrl({
+        url: `${this.baseUrl}/api/upload-chunk`,
+        method: 'POST',
+        headers: {
+          ...this.headers,
+          'Content-Type': 'application/octet-stream',
+          'X-Path': encodeURIComponent(path),
+          'X-Upload-Id': uploadId,
+          'X-Chunk-Index': String(i),
+          'X-Chunk-Count': String(total),
+          'X-Hash': hash,
+          'X-Mtime': String(mtime),
+          'X-Base-Hash': baseHash,
+          'X-Base-Seq': String(baseSeq),
+        },
+        body: slice,
+        throw: false,
+      });
+
+      // The conflict/deletion verdict only happens when the final chunk assembles.
+      if (response.status === 409) {
+        const body = response.json || {};
+        const deleted = body.error === 'deleted';
+        throw new ConflictError(path, body.currentHash || '', deleted);
+      }
+      if (response.status !== 200) {
+        throw new Error(`Upload chunk ${i + 1}/${total} failed: ${response.status}`);
+      }
+      lastJson = response.json;
     }
 
-    if (response.status !== 200) {
-      throw new Error(`Upload failed: ${response.status}`);
-    }
-
-    return (response.json && response.json.seq) || 0;
+    return (lastJson && lastJson.seq) || 0;
   }
 
   /**
