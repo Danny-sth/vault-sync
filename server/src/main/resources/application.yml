@@ -5,6 +5,10 @@ server:
     key-store: ${SSL_KEYSTORE:classpath:keystore.p12}
     key-store-password: ${SSL_PASSWORD:changeit}
     key-store-type: PKCS12
+  tomcat:
+    # No request-body size cap: binary uploads stream the encrypted blob directly.
+    max-swallow-size: -1
+    max-http-form-post-size: -1
 
 spring:
   application:
@@ -30,8 +34,8 @@ spring:
 
   servlet:
     multipart:
-      max-file-size: 100MB
-      max-request-size: 100MB
+      max-file-size: -1
+      max-request-size: -1
 
   threads:
     virtual:

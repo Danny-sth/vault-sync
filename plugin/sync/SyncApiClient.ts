@@ -70,19 +70,25 @@ export class SyncApiClient {
     baseHash = '',
     baseSeq = 0,
   ): Promise<number> {
-    const base64Content = this.arrayBufferToBase64(content);
-
+    // Send the encrypted blob as a raw binary body — no base64. base64-in-JSON
+    // inflated big files ~6x and OOM-killed Obsidian on mobile (the giant string
+    // crossing the native bridge) and hit the JSON request-size limit. Metadata goes
+    // in headers; the path is URL-encoded because headers are ASCII-only.
+    // baseSeq = highest server seq this device saw for the path (incl. its deletion),
+    // used by the server to tell genuine recreation (baseSeq >= tomb.seq) from a stale re-push.
     const response = await requestUrl({
-      url: `${this.baseUrl}/api/upload-json`,
+      url: `${this.baseUrl}/api/upload-binary`,
       method: 'POST',
       headers: {
         ...this.headers,
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/octet-stream',
+        'X-Path': encodeURIComponent(path),
+        'X-Hash': hash,
+        'X-Mtime': String(mtime),
+        'X-Base-Hash': baseHash,
+        'X-Base-Seq': String(baseSeq),
       },
-      // baseSeq = highest server seq this device saw for the path (incl. its
-      // deletion). The server compares it to a live tombstone's seq to decide
-      // genuine recreation (baseSeq >= tomb.seq) vs. stale re-push.
-      body: JSON.stringify({ path, content: base64Content, hash, mtime, baseHash, baseSeq }),
+      body: content,
       throw: false,
     });
 
@@ -154,15 +160,4 @@ export class SyncApiClient {
     return (response.json && response.json.seq) || 0;
   }
 
-  /**
-   * Convert ArrayBuffer to Base64 string.
-   */
-  private arrayBufferToBase64(buffer: ArrayBuffer): string {
-    let binary = '';
-    const bytes = new Uint8Array(buffer);
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return btoa(binary);
-  }
 }

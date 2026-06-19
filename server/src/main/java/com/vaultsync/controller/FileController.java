@@ -175,6 +175,75 @@ public class FileController {
     public record JsonUploadRequest(String path, String content, String hash, long mtime, String baseHash, long baseSeq) {}
 
     /**
+     * Upload a file as a raw binary body (no base64, no JSON size limit).
+     *
+     * The client sends the encrypted blob bytes directly with octet-stream; metadata
+     * travels in headers (path is URL-encoded since headers are ASCII-only). This is the
+     * primary upload path: base64-in-JSON inflated big files ~6x and OOM-killed Obsidian
+     * on mobile while also hitting the JSON request limit. Concurrency/resurrection
+     * handling mirrors {@link #uploadFileJson} exactly.
+     */
+    @PostMapping(value = "/upload-binary", consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
+    public ResponseEntity<?> uploadFileBinary(
+            @RequestBody byte[] content,
+            @RequestHeader("X-Path") String encodedPath,
+            @RequestHeader("X-Hash") String hash,
+            @RequestHeader(value = "X-Mtime", required = false, defaultValue = "0") long mtime,
+            @RequestHeader(value = "X-Base-Hash", required = false, defaultValue = "") String baseHash,
+            @RequestHeader(value = "X-Base-Seq", required = false, defaultValue = "0") long baseSeq,
+            @RequestHeader("X-Device-Id") String deviceId) {
+
+        String path = java.net.URLDecoder.decode(encodedPath, java.nio.charset.StandardCharsets.UTF_8);
+        try {
+            com.vaultsync.model.Tombstone tomb = syncService.getTombstone(path);
+            boolean clearTombstoneAfterStore = false;
+            if (tomb != null) {
+                if (baseSeq != 0 && baseSeq < tomb.getSeq()) {
+                    log.warn("Resurrection blocked for {} by {}: baseSeq={} < tombstone seq={} — stale re-push, rejected",
+                            path, deviceId, baseSeq, tomb.getSeq());
+                    return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                            "error", "deleted", "deletedSeq", tomb.getSeq()));
+                }
+                clearTombstoneAfterStore = true;
+            }
+
+            FileRecord existing = fileStorageService.getFileInfo(path);
+            if (existing != null && baseHash != null && !baseHash.isBlank()) {
+                String incomingHash = HashUtil.sha256(content);
+                if (!existing.getHash().equals(incomingHash) && !existing.getHash().equals(baseHash)) {
+                    log.warn("Upload conflict for {} by {}: base={} but server={} — rejected",
+                            path, deviceId, baseHash, existing.getHash());
+                    return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                            "error", "conflict",
+                            "currentHash", existing.getHash(),
+                            "currentSeq", existing.getSeq(),
+                            "currentMtime", existing.getMtime(),
+                            "currentSize", existing.getSize()));
+                }
+            }
+
+            long seq = syncService.nextSeq();
+            FileRecord record = fileStorageService.storeBytes(path, content, hash, deviceId, seq, mtime);
+
+            if (clearTombstoneAfterStore) {
+                syncService.clearTombstone(path);
+                log.info("Resurrection committed for {} by {} (tombstone cleared after store)", path, deviceId);
+            }
+
+            SyncMessage.FileChanged changeMsg = SyncMessage.FileChanged.builder()
+                    .path(path).hash(record.getHash()).mtime(record.getMtime())
+                    .size(record.getSize()).seq(seq).deviceId(deviceId).build();
+            syncService.broadcastFileChange(changeMsg);
+
+            log.info("File uploaded (binary): {} by {} ({} bytes)", path, deviceId, record.getSize());
+            return ResponseEntity.ok(Map.of("status", "ok", "hash", record.getHash(), "seq", seq));
+        } catch (IOException e) {
+            log.error("Failed to upload file (binary): {}", path, e);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
      * Download a file
      */
     @GetMapping("/download/**")
