@@ -25,7 +25,8 @@ class VaultMcpToolsTest {
     void setUp() {
         VaultNoteService service = new VaultNoteService(tempDir.toString());
         CommandExecutionService commandService = Mockito.mock(CommandExecutionService.class);
-        tools = new VaultMcpTools(service, commandService);
+        VaultBlobService blobService = Mockito.mock(VaultBlobService.class);
+        tools = new VaultMcpTools(service, commandService, blobService);
     }
 
 
