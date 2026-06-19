@@ -31,6 +31,12 @@ export class SyncManager {
   /** Session cipher when E2EE is enabled; null = plaintext sync (legacy). */
   private cipher: VaultCipher | null = null;
 
+  // Paths whose server bytes are NOT a VSE blob (plaintext written by a non-encrypting
+  // server-side process, e.g. duq/openclaw writing into cortex/). They can't be decrypted
+  // with the vault key, so we skip them once instead of failing+retrying every sync. They
+  // simply don't appear on this device until that writer encrypts them.
+  private readonly undecryptable = new Set<string>();
+
   private pendingChanges: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private isProcessingRemote = false;
   private isSyncing = false;
@@ -317,6 +323,8 @@ export class SyncManager {
   }
 
   private async downloadFile(path: string, retries = 3): Promise<boolean> {
+    // Known-plaintext (undecryptable) file from a non-encrypting writer — don't re-fetch.
+    if (this.undecryptable.has(path)) return true;
     console.debug(`[VaultSync] downloadFile starting: ${path}`);
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
@@ -344,8 +352,11 @@ export class SyncManager {
           try {
             toWrite = this.cipher.decryptToArrayBuffer(path, content);
           } catch (e) {
-            console.error(`[VaultSync] Decrypt failed for ${path} — skipping write:`, e);
-            return false;
+            // Not a VSE blob / wrong tag → plaintext from a non-encrypting writer (duq).
+            // Skip once (no retry, not a failure) so it doesn't spam the sync with errors.
+            this.undecryptable.add(path);
+            console.debug(`[VaultSync] Skipping undecryptable (plaintext) file: ${path}`);
+            return true;
           }
         }
 

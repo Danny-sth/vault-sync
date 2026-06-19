@@ -557,7 +557,48 @@ public class VaultMcpTools {
         }
     }
 
+    /**
+     * Store an encrypted blob (base64) at a path. The vault is end-to-end encrypted, so
+     * the caller MUST encrypt the content with the vault key before calling — the server
+     * never decrypts. Use this instead of write_note for the encrypted vault.
+     */
+    @Tool(name = "put_blob", description = "Store an end-to-end-encrypted blob (base64) at a vault path. You MUST encrypt the content with the vault key first; the server stores ciphertext only. Use this instead of write_note for the encrypted vault.")
+    public PutBlobResult putBlob(
+            @ToolParam(description = "Relative path to the file (e.g., 'folder/note.md')") String path,
+            @ToolParam(description = "Base64 of the encrypted VSE blob") String blobBase64) {
+        log.info("MCP tool called: put_blob(path={})", path);
+        if (path == null || path.isBlank()) return new PutBlobResult(false, null, 0, "Path is required");
+        if (blobBase64 == null || blobBase64.isBlank()) return new PutBlobResult(false, path, 0, "blobBase64 is required");
+        try {
+            long seq = blobService.putBlobBase64(path, blobBase64, "mcp");
+            return new PutBlobResult(true, path, seq, null);
+        } catch (IllegalArgumentException e) {
+            return new PutBlobResult(false, path, 0, "Invalid base64");
+        } catch (IOException e) {
+            log.error("Failed to put blob {}: {}", path, e.getMessage());
+            return new PutBlobResult(false, path, 0, "Failed to store blob: " + e.getMessage());
+        }
+    }
+
+    /** Delete a blob (and its file) at a path. */
+    @Tool(name = "delete_blob", description = "Delete a file (blob) from the encrypted vault and broadcast the deletion to all devices.")
+    public DeleteNoteResult deleteBlob(
+            @ToolParam(description = "Relative path to the file to delete") String path) {
+        log.info("MCP tool called: delete_blob(path={})", path);
+        if (path == null || path.isBlank()) return new DeleteNoteResult(false, null, "Path is required");
+        try {
+            blobService.deleteBlob(path, "mcp");
+            return new DeleteNoteResult(true, path, null);
+        } catch (Exception e) {
+            log.error("Failed to delete blob {}: {}", path, e.getMessage());
+            return new DeleteNoteResult(false, path, "Failed to delete: " + e.getMessage());
+        }
+    }
+
     public record GetBlobResult(boolean success, String path, String blobBase64, String error) {
+    }
+
+    public record PutBlobResult(boolean success, String path, long seq, String error) {
     }
 
     public record ListBlobsResult(boolean success, List<VaultBlobService.BlobInfo> blobs, int count, String error) {

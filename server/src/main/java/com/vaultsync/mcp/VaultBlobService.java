@@ -43,6 +43,31 @@ public class VaultBlobService {
     }
 
     /**
+     * Store an encrypted blob (base64) at a path and broadcast the change, exactly like a
+     * device upload. The server stays zero-knowledge — it never decrypts; the caller (e.g.
+     * duq) must encrypt with the vault key before sending. Returns the assigned seq.
+     */
+    public long putBlobBase64(String path, String base64, String deviceId) throws IOException {
+        byte[] bytes = Base64.getDecoder().decode(base64);
+        long seq = syncService.nextSeq();
+        var record = fileStorageService.storeBytes(path, bytes, null, deviceId, seq, System.currentTimeMillis());
+        syncService.clearTombstone(path);
+        syncService.broadcastFileChange(SyncMessage.FileChanged.builder()
+                .path(path).hash(record.getHash()).mtime(record.getMtime())
+                .size(record.getSize()).seq(seq).deviceId(deviceId).build());
+        log.info("MCP blob stored: {} ({} bytes, seq={})", path, bytes.length, seq);
+        return seq;
+    }
+
+    /** Delete a blob and broadcast the deletion (tombstone), like a device delete. */
+    public long deleteBlob(String path, String deviceId) {
+        SyncMessage.FileDeleted msg = syncService.processFileDelete(path, deviceId);
+        syncService.broadcastFileDelete(msg);
+        log.info("MCP blob deleted: {} (seq={})", path, msg.getSeq());
+        return msg.getSeq();
+    }
+
+    /**
      * List every blob with its sync metadata (path, blob hash, size, mtime, seq). Returns
      * metadata only — no content is read or decrypted.
      */
