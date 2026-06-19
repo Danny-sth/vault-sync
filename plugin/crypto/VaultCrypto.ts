@@ -129,3 +129,76 @@ function assertKey(key: Uint8Array): void {
     throw new Error(`VaultCrypto: key must be 32 bytes, got ${key.length}`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Path (filename / folder) encryption — full zero-knowledge: the server never
+// sees real names. Each path component is encrypted deterministically, so the same
+// name always maps to the same ciphertext (the folder tree is preserved and names
+// dedup), and it is reversible (a client decrypts a listing back into real names).
+// Output is base32 (a-z 2-7) → safe as a filesystem name. Both the plugin and any
+// other key holder (duq) use this identical mapping, so nobody is "broken" by it.
+// ---------------------------------------------------------------------------
+
+const PATH_AAD = new TextEncoder().encode('vault-path');
+const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
+
+function base32encode(bytes: Uint8Array): string {
+  let bits = 0, val = 0, out = '';
+  for (const b of bytes) {
+    val = (val << 8) | b; bits += 8;
+    while (bits >= 5) { out += B32[(val >>> (bits - 5)) & 31]; bits -= 5; }
+  }
+  if (bits > 0) out += B32[(val << (5 - bits)) & 31];
+  return out;
+}
+
+function base32decode(s: string): Uint8Array {
+  let bits = 0, val = 0;
+  const out: number[] = [];
+  for (const ch of s) {
+    const idx = B32.indexOf(ch);
+    if (idx < 0) continue;
+    val = (val << 5) | idx; bits += 5;
+    if (bits >= 8) { out.push((val >>> (bits - 8)) & 0xff); bits -= 8; }
+  }
+  return new Uint8Array(out);
+}
+
+/** Deterministic nonce for a path component (domain-separated from the blob nonce). */
+function deriveComponentNonce(key: Uint8Array, component: Uint8Array): Uint8Array {
+  const msg = new Uint8Array(1 + component.length);
+  msg[0] = 0xfe; // path-component domain marker (blob nonce starts with BLOB_VERSION)
+  msg.set(component, 1);
+  return hmac(sha256, key, msg).subarray(0, NONCE_LEN);
+}
+
+/** Encrypt a single path component (no '/') → base32 filesystem-safe name. */
+export function encryptPathComponent(key: Uint8Array, component: string): string {
+  assertKey(key);
+  const bytes = new TextEncoder().encode(component);
+  const nonce = deriveComponentNonce(key, bytes);
+  const ct = gcm(key, nonce, PATH_AAD).encrypt(bytes);
+  const out = new Uint8Array(NONCE_LEN + ct.length);
+  out.set(nonce, 0);
+  out.set(ct, NONCE_LEN);
+  return base32encode(out);
+}
+
+/** Inverse of {@link encryptPathComponent}. */
+export function decryptPathComponent(key: Uint8Array, enc: string): string {
+  assertKey(key);
+  const data = base32decode(enc);
+  const nonce = data.subarray(0, NONCE_LEN);
+  const ct = data.subarray(NONCE_LEN);
+  return new TextDecoder().decode(gcm(key, nonce, PATH_AAD).decrypt(ct));
+}
+
+/** Encrypt a full relative path component-by-component (slashes preserved). */
+export function encryptPath(key: Uint8Array, path: string): string {
+  return path.split('/').map((c) => (c === '' ? '' : encryptPathComponent(key, c))).join('/');
+}
+
+/** Inverse of {@link encryptPath}. */
+export function decryptPath(key: Uint8Array, encPath: string): string {
+  return encPath.split('/').map((c) => (c === '' ? '' : decryptPathComponent(key, c))).join('/');
+}
