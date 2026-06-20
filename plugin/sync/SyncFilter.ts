@@ -44,12 +44,13 @@ export class SyncFilter {
     '.idea/',
     '.smart-env/',
     'node_modules/',
-    // duq/openclaw's internal workspace (skills, memory, state). duq reads/writes these
-    // as plaintext on the VPS filesystem; if clients synced them they'd encrypt duq's own
-    // brain and break it. User-facing notes duq creates live OUTSIDE cortex/ (Strains/,
-    // Daily/, …) and DO sync — duq writes those through the encrypting vault helper.
-    'cortex/',
   ];
+  // NOTE: cortex/ is intentionally NOT excluded. duq/openclaw's brain lives in its own
+  // working dir (/root/.openclaw/workspace) which a VPS-side E2EE folder-sync mirrors INTO
+  // the vault as cortex/* — already ENCRYPTED (VSE blobs). Syncing it to devices lets the
+  // user view and hand-edit the brain in Obsidian; edits flow back to the workspace through
+  // the same folder-sync. Because cortex is encrypted like any other vault file, the old
+  // "would encrypt duq's plaintext brain" hazard no longer applies.
 
   /**
    * Check if a path should be synced.
