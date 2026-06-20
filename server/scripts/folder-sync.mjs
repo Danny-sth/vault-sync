@@ -152,21 +152,22 @@ async function syncMapping(m) {
 
   for (const rel of all) {
     const inL = local.has(rel), inV = vault.has(rel), base = state[rel];
+    const vfull = PREFIX + rel; // the file's real path inside the vault (what gets encrypted)
     try {
       if (inL && inV) {
         const lc = await readFile(local.get(rel).abs, 'utf8');
-        const vc = await readVault(rel);
+        const vc = await readVault(vfull);
         const lh = sha(lc), vh = sha(vc);
         if (lh === vh) { skip++; nextState[rel] = lh; continue; }
         const lChanged = lh !== base, vChanged = vh !== base;
-        if (lChanged && !vChanged) { await writeVault(rel, lc); push++; nextState[rel] = lh; }
+        if (lChanged && !vChanged) { await writeVault(vfull, lc); push++; nextState[rel] = lh; }
         else if (vChanged && !lChanged) { await writeLocal(SRC, rel, vc); pull++; nextState[rel] = vh; }
         else { // both changed since last sync — keep both, newest mtime wins
           conflict++;
           const vMtime = vault.get(rel).mtime;
           if (local.get(rel).mtimeMs >= vMtime) {
             await writeLocal(SRC, rel, vc, `${rel}.CONFLICT-vault-${Math.round(vMtime)}`);
-            await writeVault(rel, lc); nextState[rel] = lh;
+            await writeVault(vfull, lc); nextState[rel] = lh;
           } else {
             await writeLocal(SRC, rel, lc, `${rel}.CONFLICT-local-${Math.round(local.get(rel).mtimeMs)}`);
             await writeLocal(SRC, rel, vc); nextState[rel] = vh;
@@ -177,12 +178,12 @@ async function syncMapping(m) {
         // miss must never wipe the agent's brain) — re-create it in the vault from the local
         // copy. A genuine vault-side deletion simply doesn't propagate; the file resurrects.
         const lc = await readFile(local.get(rel).abs, 'utf8');
-        await writeVault(rel, lc); push++; nextState[rel] = sha(lc);
+        await writeVault(vfull, lc); push++; nextState[rel] = sha(lc);
       } else { // inV && !inL — present in vault, absent locally → re-create locally
-        const vc = await readVault(rel);
+        const vc = await readVault(vfull);
         await writeLocal(SRC, rel, vc); pull++; nextState[rel] = sha(vc);
       }
-    } catch (e) { fail++; console.log(`FAIL ${PREFIX}${rel}: ${e.message}`); if (base !== undefined) nextState[rel] = base; }
+    } catch (e) { fail++; console.log(`FAIL ${vfull}: ${e.message}`); if (base !== undefined) nextState[rel] = base; }
   }
 
   await mkdir(dirname(STATE_FILE), { recursive: true });
