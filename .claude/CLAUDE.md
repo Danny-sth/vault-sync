@@ -46,25 +46,34 @@ vault-sync/
 │   │   ├── VaultSyncApplication.java
 │   │   ├── config/                          # Security(static-token), WebSocket, Jackson, Web
 │   │   ├── controller/                      # FileController(/api/**), SyncController
-│   │   ├── service/                         # SyncService, FileStorageService,
-│   │   │                                    #   VaultWatcherService(WatchService),
+│   │   ├── service/                         # SyncService(getChangesSince/floor),
+│   │   │                                    #   FileStorageService, VaultWatcherService,
 │   │   │                                    #   DailyNoteScheduler
-│   │   ├── repository/                      # FileRepository, TombstoneRepository (JPA)
-│   │   ├── model/                           # FileRecord, SyncMessage, Tombstone
-│   │   ├── mcp/                             # VaultMcpTools, VaultNoteService,
-│   │   │                                    #   CommandController, McpSecurityConfig
+│   │   ├── repository/                      # FileRepository, TombstoneRepository,
+│   │   │                                    #   SyncMetaRepository (tombstone floor)
+│   │   ├── model/                           # FileRecord, SyncMessage, Tombstone, SyncMeta
+│   │   ├── mcp/                             # VaultMcpTools (get/put/list/delete_blob — E2EE),
+│   │   │                                    #   VaultBlobService, McpSecurityConfig
 │   │   ├── util/                            # HashUtil, TokenValidator
 │   │   └── resources/application.yml        # + application-docker.yml
-│   ├── commands/                            # whitelist shell: git-pull, git-status, vpn-russia
-│   ├── systemd/                             # daily-note .service + .timer
+│   ├── scripts/                             # Node E2EE-инструменты сервера (на VPS):
+│   │   │                                    #   vault-crypto.mjs — крипта (зеркало VaultCrypto)
+│   │   │                                    #   vault-mcp-client.mjs — общий MCP-клиент+creds
+│   │   │                                    #   vault-cli.mjs — duq читает/пишет волт (E2EE)
+│   │   │                                    #   folder-sync.mjs — зеркалит локальную папку↔волт
+│   │   ├── commands/                        # whitelist shell: git-pull, git-status, vpn-russia
+│   ├── systemd/                             # daily-note + vault-folder-sync .service/.timer
 │   └── Dockerfile
 ├── plugin/                                  # Obsidian плагин (TypeScript)
-│   ├── main.ts / main.js                    # main.js деплоится через сам синк
-│   ├── sync/                                # SyncManager, StompClient(WS STOMP),
-│   │                                        #   ConflictResolver, FileWatcher,
-│   │                                        #   TombstoneLogic, SyncFilter, SyncApiClient
+│   ├── main.ts / main.js                    # main.js деплоится out-of-band (adb/cp), НЕ синком
+│   ├── crypto/                              # VaultCrypto, VaultCipher (AES-256-GCM, путь+контент)
+│   ├── sync/                                # SyncManager(incremental+merge), StompClient,
+│   │                                        #   ConflictResolver, FileWatcher, FileOperationService,
+│   │                                        #   TombstoneLogic, SyncFilter, SyncApiClient, LocalState
+│   ├── icons/                               # FileIcons (frontmatter icon / file-icons.json /
+│   │                                        #   folder-icons.json), Lucide/Brand/Dev наборы
 │   ├── pdf/                                 # PdfProgressStore, ReadingDashboard (фича чтения)
-│   ├── storage/ icons/ commands/ daily/
+│   ├── storage/ commands/ daily/
 │   └── types.ts
 ├── docker-compose.yml
 └── .claude/CLAUDE.md
@@ -76,6 +85,33 @@ vault-sync/
 - MCP-эндпоинт `/mcp` — отдельный токен `VAULT_SYNC_MCP_TOKEN` (static bearer,
   Keycloak/OAuth выпилен полностью).
 - `/actuator/health` открыт без токена.
+
+## E2EE (шифрование волта)
+
+Волт **end-to-end зашифрован, сервер zero-knowledge** (ключа не имеет):
+- **Контент** — AES-256-GCM, формат блоба `VSE`-magic|version|nonce|ciphertext+tag.
+- **Пути/имена** — per-component AES-GCM (детерминированный nonce) + base32, FS-safe.
+- Ключ: PBKDF2-HMAC-SHA256 600k из passphrase+salt, только на устройствах (плагин) и
+  на VPS в `/root/vault-sync-key.txt` (для duq-инструментов). Сервер видит только шифр.
+- Клиент шифрует ДО отправки, расшифровывает ПОСЛЕ; sync и MCP гоняют только шифротекст.
+- На VPS аудит: всё в `/opt/obsidian-vault` (кроме `.vault-sync*`) — зашифровано, 0 плейнтекста.
+
+**Sync — инкрементальная дельта:** клиент шлёт сохранённый `lastSeq`, сервер отдаёт
+`getChangesSince` (только seq>lastSeq) с флагом `fullState=false`, либо полный стейт
+(`fullState=true`) если `lastSeq < tombstone-floor` (max seq вычищенных по TTL tombstone'ов,
+в таблице `sync_meta`) или lastSeq=0. **Никогда не удалять файл, который сервер держит живым**
+(absence ≠ deletion — это case загрузки). Конфиг-карты (`folder-icons.json`/`file-icons.json`)
+мержатся union'ом при download (не теряют ключи).
+
+## folder-sync — openclaw workspace ↔ зашифрованный cortex
+
+duq/openclaw живёт в `/root/.openclaw/workspace` (плейнтекст, движок читает напрямую).
+`server/scripts/folder-sync.mjs` two-way зеркалит его в волт как `cortex/*` — **зашифрованным**
+тем же механизмом (vault-crypto + MCP put/get_blob), т.к. сервер сам шифровать не может.
+Так мозги duq видно и правишь в Obsidian на устройствах, правки едут обратно. Конфиг путей —
+`/opt/vault-sync/folder-sync.json`; гоняет systemd `vault-folder-sync.timer` (15 мин). `cortex/`
+НЕ исключён из синка (раньше был — когда лежал плейнтекстом). Удаление не пропагируется
+(защита мозга). Старый `duq-workspace-sync` бридж снесён.
 
 ## Деплой
 
