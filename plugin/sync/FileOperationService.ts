@@ -21,9 +21,46 @@ export class FileOperationService {
       const content = await this.app.vault.adapter.readBinary(path);
       const stat = await this.app.vault.adapter.stat(path);
       return { content, mtime: stat?.mtime ?? Date.now() };
-    } catch (e) {
-      console.error(`[FileOperationService] readBinary failed for ${path}:`, e);
+    } catch (e: any) {
+      // A missing file is an expected, handled signal here (callers treat null as
+      // "not present → download/skip"), not a failure — don't spam the console with
+      // ENOENT for every absent path during a reconcile. Only log genuine read errors.
+      if (!FileOperationService.isMissing(e)) {
+        console.error(`[FileOperationService] readBinary failed for ${path}:`, e);
+      }
       return null;
+    }
+  }
+
+  /** True when an error means "the path isn't there" (ENOENT) — i.e. already absent. */
+  static isMissing(e: any): boolean {
+    return e?.code === 'ENOENT' || /ENOENT|no such file|does not exist/i.test(String(e?.message ?? e));
+  }
+
+  /**
+   * Delete a path if present. Idempotent: a file that's already gone — including a phantom
+   * still in the vault index but missing on disk (which makes vault.delete throw ENOENT) —
+   * counts as success, because the goal (path absent) is already met. This is what stops a
+   * stale localState entry from being retried (and error-logged) on every sync forever.
+   * Re-throws only genuinely unexpected errors.
+   * @returns true if a file was actually removed, false if it was already absent.
+   */
+  async deleteIfPresent(path: string): Promise<boolean> {
+    try {
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (file instanceof TFile) {
+        await this.app.vault.delete(file);
+        return true;
+      }
+      if (await this.app.vault.adapter.exists(path)) {
+        await this.app.vault.adapter.remove(path);
+        return true;
+      }
+      return false;
+    } catch (e) {
+      // Phantom index entry (TFile present, disk gone) → ENOENT. The deletion goal is met.
+      if (FileOperationService.isMissing(e)) return false;
+      throw e;
     }
   }
 
