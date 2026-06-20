@@ -21,9 +21,11 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class SyncMeta {
 
+    // `key`/`value` are reserved words in H2 — map to non-reserved column names.
     @Id
-    @Column(length = 64)
+    @Column(name = "meta_key", length = 64)
     private String key;
 
+    @Column(name = "meta_value")
     private long value;
 }
