@@ -78,6 +78,16 @@ public class SyncMessage {
         private long currentSeq;
         private List<FileInfo> files;
         private List<TombstoneInfo> tombstones;
+        /**
+         * True when this carries the COMPLETE server state (every live file + tombstone), so
+         * the client must reconcile by absence (delete locals the server no longer has). False
+         * when it is a sparse delta (only entries with seq &gt; the requested lastSeq), which
+         * the client applies additively without inferring deletions from absence. The server
+         * sets this — the client never guesses — so a stale device gets promoted to a full
+         * reconcile automatically when its lastSeq predates pruned tombstones.
+         */
+        @Builder.Default
+        private boolean fullState = false;
     }
 
     @Data

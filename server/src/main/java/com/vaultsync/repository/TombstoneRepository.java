@@ -22,4 +22,8 @@ public interface TombstoneRepository extends JpaRepository<Tombstone, String> {
 
     @Query("SELECT COALESCE(MAX(t.seq), 0) FROM Tombstone t")
     long findMaxSeq();
+
+    /** Highest seq among tombstones older than the cutoff — captured before they are pruned. */
+    @Query("SELECT COALESCE(MAX(t.seq), 0) FROM Tombstone t WHERE t.deletedAt < :cutoff")
+    long findMaxSeqOlderThan(@Param("cutoff") long cutoffTimestamp);
 }

@@ -21,6 +21,12 @@ export interface SyncResponse {
   currentSeq: number;
   files: FileInfo[];
   tombstones: TombstoneInfo[];
+  /**
+   * True when the response is the complete server state (reconcile by absence). False/absent
+   * when it is a sparse delta (apply additively, never delete by absence). The server decides,
+   * promoting a stale device to a full reconcile when its lastSeq predates pruned tombstones.
+   */
+  fullState?: boolean;
 }
 
 export interface FileInfo {

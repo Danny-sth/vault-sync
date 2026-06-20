@@ -178,8 +178,8 @@ export default class VaultSyncPlugin extends Plugin {
               console.debug('[VaultSync] Not connected, reconnecting...');
               this.connect().catch(e => console.error('[VaultSync] Reconnect failed:', e));
             } else {
-              console.debug('[VaultSync] Connected, requesting full sync...');
-              this.syncManager?.requestFullSync();
+              console.debug('[VaultSync] Connected, requesting incremental sync...');
+              this.syncManager?.requestIncrementalSync();
             }
           }, 500);
         }
