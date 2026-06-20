@@ -47,7 +47,13 @@ public class McpSecurityConfig {
             .securityMatcher("/mcp/**", "/sse")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
+            // Only authorize the initial REQUEST, not ASYNC/ERROR re-dispatches: spring-ai's
+            // streamable MCP processes responses on an async dispatch that has no
+            // SecurityContext, so re-checking it there throws Access Denied + "Missing result
+            // context". The original request was already authenticated.
+            .authorizeHttpRequests(auth -> auth
+                .shouldFilterAllDispatcherTypes(false)
+                .anyRequest().authenticated())
             .addFilterBefore(mcpTokenFilter(), UsernamePasswordAuthenticationFilter.class)
             .exceptionHandling(ex -> ex.authenticationEntryPoint((request, response, authException) -> {
                 log.warn("MCP auth failed (static token) from {}", request.getRemoteAddr());
