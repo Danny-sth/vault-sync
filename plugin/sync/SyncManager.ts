@@ -380,13 +380,35 @@ export class SyncManager {
           }
         }
 
+        // Check existence first: readBinary on a missing file logs a noisy error on mobile.
+        const localExists = await this.app.vault.adapter.exists(path);
+        const existing = localExists ? await this.fileOps.readBinary(path) : null;
+
+        // Mergeable config maps (icon assignments) are shared key→value JSON edited from
+        // multiple devices. A plain last-write-wins overwrite drops the other device's keys
+        // (this is what wiped folder-icons.json down to one entry). Instead UNION the maps:
+        // keep every key, server wins on a same-key conflict. If our local copy had keys the
+        // server lacks, push the union back so the server converges. This strictly grows the
+        // key set each round → converges, no loop, and never loses an entry.
+        if (SyncManager.MERGEABLE_JSON_MAPS.has(path) && existing && existing.content.byteLength > 0) {
+          const merged = this.mergeJsonMap(existing.content, toWrite);
+          if (merged) {
+            await this.fileOps.writeBinary(path, merged.content);
+            const mergedHash = await this.serverHash(path, merged.content);
+            await this.localState.setFileHash(path, mergedHash);
+            this.markDownloadedProcessed(path);
+            if (merged.hasLocalExtra) {
+              await this.uploadMergedDirect(path, merged.content, mergedHash, hash);
+            }
+            return true;
+          }
+          // merge failed (not valid JSON maps) → fall through to a normal overwrite.
+        }
+
         // Conflict guard for EVERY download path (full-sync AND real-time broadcast):
         // if the local file has an unsynced edit (its hash differs from the last synced
         // hash and from what we're about to write), preserve it as a side copy before
         // overwriting — otherwise an offline/concurrent edit is silently lost.
-        // Check existence first: readBinary on a missing file logs a noisy error on mobile.
-        const localExists = await this.app.vault.adapter.exists(path);
-        const existing = localExists ? await this.fileOps.readBinary(path) : null;
         if (existing && existing.content.byteLength > 0) {
           const lastKnown = await this.localState.getFileHash(path);
           const existingHash = await this.serverHash(path, existing.content);
@@ -401,13 +423,7 @@ export class SyncManager {
         // detection compares like-for-like and doesn't re-upload unchanged files.
         await this.localState.setFileHash(path, hash);
 
-        const updatedFile = this.app.vault.getAbstractFileByPath(path) as TFile | null;
-        if (updatedFile) {
-          this.fileWatcher.markProcessed(path, updatedFile.stat.mtime, updatedFile.stat.size);
-        } else {
-          const stat = await this.app.vault.adapter.stat(path);
-          if (stat) this.fileWatcher.markProcessed(path, stat.mtime, stat.size);
-        }
+        await this.markDownloadedProcessed(path);
 
         return true;
 
@@ -423,6 +439,74 @@ export class SyncManager {
 
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Shared key→value JSON config maps that must be UNION-merged on download instead of
+   * overwritten, so a concurrent edit from another device never drops the other's keys.
+   */
+  private static readonly MERGEABLE_JSON_MAPS = new Set<string>([
+    '.obsidian/folder-icons.json',
+    '.obsidian/file-icons.json',
+  ]);
+
+  /** Re-sync the FileWatcher baseline for a freshly-written path so it isn't re-detected. */
+  private async markDownloadedProcessed(path: string): Promise<void> {
+    const updatedFile = this.app.vault.getAbstractFileByPath(path) as TFile | null;
+    if (updatedFile) {
+      this.fileWatcher.markProcessed(path, updatedFile.stat.mtime, updatedFile.stat.size);
+    } else {
+      const stat = await this.app.vault.adapter.stat(path);
+      if (stat) this.fileWatcher.markProcessed(path, stat.mtime, stat.size);
+    }
+  }
+
+  /**
+   * Union two JSON object maps. Every key from both sides is kept; on a same-key conflict the
+   * server (incoming) value wins. Returns the merged buffer plus whether the local copy had
+   * keys the server lacked (→ the union differs from the server and must be pushed back).
+   * Returns null when either side isn't a plain JSON object (caller falls back to overwrite).
+   */
+  private mergeJsonMap(localBuf: ArrayBuffer, serverBuf: ArrayBuffer): { content: ArrayBuffer; hasLocalExtra: boolean } | null {
+    try {
+      const local = JSON.parse(new TextDecoder().decode(localBuf));
+      const server = JSON.parse(new TextDecoder().decode(serverBuf));
+      if (!local || !server || typeof local !== 'object' || typeof server !== 'object'
+        || Array.isArray(local) || Array.isArray(server)) return null;
+      const merged: Record<string, unknown> = { ...local, ...server };
+      let hasLocalExtra = false;
+      for (const k of Object.keys(local)) {
+        if (!(k in server)) { hasLocalExtra = true; break; }
+      }
+      const json = JSON.stringify(merged, null, 2);
+      const u8 = new TextEncoder().encode(json);
+      const content = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
+      return { content, hasLocalExtra };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Push a merged config map back to the server (optimistic-concurrency against the version
+   * we just downloaded). On a 409 the server moved again — we don't retry here; the next
+   * download merges afresh and the union still converges.
+   */
+  private async uploadMergedDirect(path: string, content: ArrayBuffer, hash: string, baseHash: string): Promise<void> {
+    try {
+      const baseSeq = await this.localState.getFileSeq(path);
+      const payload = this.encodeForUpload(path, content);
+      const seq = await this.apiClient.upload(this.toServerPath(path), payload, hash, Date.now(), baseHash, baseSeq);
+      await this.localState.setFileHash(path, hash);
+      await this.localState.setFileSeq(path, seq);
+      console.debug(`[VaultSync] Merged ${path}: kept local-only keys, pushed union to server`);
+    } catch (e) {
+      if (e instanceof ConflictError) {
+        console.debug(`[VaultSync] Merge upload conflict for ${path} — reconciles on next sync`);
+        return;
+      }
+      console.error(`[VaultSync] Merge upload failed for ${path}:`, e);
+    }
   }
 
   private async deleteFile(path: string): Promise<void> {
