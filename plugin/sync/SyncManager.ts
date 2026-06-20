@@ -387,7 +387,9 @@ export class SyncManager {
         // if the local file has an unsynced edit (its hash differs from the last synced
         // hash and from what we're about to write), preserve it as a side copy before
         // overwriting — otherwise an offline/concurrent edit is silently lost.
-        const existing = await this.fileOps.readBinary(path);
+        // Check existence first: readBinary on a missing file logs a noisy error on mobile.
+        const localExists = await this.app.vault.adapter.exists(path);
+        const existing = localExists ? await this.fileOps.readBinary(path) : null;
         if (existing && existing.content.byteLength > 0) {
           const lastKnown = await this.localState.getFileHash(path);
           const existingHash = await this.serverHash(path, existing.content);
