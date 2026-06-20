@@ -66,18 +66,16 @@ function rpc(method, params, id) {
     const req = http.request({ hostname: u.hostname, port: u.port || 80, path: u.pathname, method: 'POST', headers }, (res) => {
       const sid = res.headers['mcp-session-id']; if (sid) sessionId = sid;
       let data = ''; let done = false;
+      // Wait for the server to finish and close the connection itself — closing it early
+      // aborts spring-ai's async dispatch and logs "Missing result context" + a spurious
+      // Access-Denied on the error path. The server closes after sending the response.
       const finish = () => { if (done) return; done = true; if (id == null) return resolve(null); resolve(parseSse(data).find((m) => m.id === id) || null); };
-      res.on('data', (c) => {
-        data += c;
-        // Resolve as soon as the matching response arrives, but DRAIN the rest (resume,
-        // not destroy) so the SSE connection closes cleanly — abruptly destroying it makes
-        // the server log "Missing result context".
-        if (id != null && !done && parseSse(data).some((m) => m.id === id)) { resolve(parseSse(data).find((m) => m.id === id)); done = true; res.resume(); }
-      });
+      res.on('data', (c) => { data += c; });
       res.on('end', finish);
       res.on('close', finish);
     });
     req.on('error', (e) => { if (id == null) resolve(null); else reject(e); });
+    req.setTimeout(20000, () => { req.destroy(new Error('MCP request timeout')); });
     req.write(body); req.end();
   });
 }
