@@ -130,7 +130,12 @@ async function syncMapping(m) {
   const skipRes = (m.skip || []).map((s) => new RegExp(s));
   const skipRel = (rel) => skipRes.some((re) => re.test(rel));
 
-  const state = existsSync(STATE_FILE) ? JSON.parse(readFileSync(STATE_FILE, 'utf8')) : {};
+  // A corrupt/missing state file just means "no baseline" — recompute from hashes, never crash.
+  let state = {};
+  if (existsSync(STATE_FILE)) {
+    try { state = JSON.parse(readFileSync(STATE_FILE, 'utf8')); }
+    catch (e) { console.warn(`folder-sync: bad state ${STATE_FILE}, starting fresh: ${e.message}`); }
+  }
   const nextState = {};
 
   const local = new Map();
