@@ -110,7 +110,7 @@ export default class VaultSyncPlugin extends Plugin {
 
       this.app.workspace.onLayoutReady(async () => {
         console.debug('[VaultSync] Workspace ready, initializing modules...');
-        this.dismissStaleIndexingNotice();
+        this.watchForStaleIndexingNotice();
         await this.fileIcons?.init();
         // Create today's daily note client-side. The server can't (zero-knowledge,
         // no key); the plugin has the key so the note is encrypted on sync like any file.
@@ -132,7 +132,7 @@ export default class VaultSyncPlugin extends Plugin {
       // indexing has fully completed — it just hangs on screen. The cache's 'resolved'
       // event is the authoritative "done" signal; when it fires, clear any leftover notice.
       this.registerEvent(
-        this.app.metadataCache.on('resolved', () => this.dismissStaleIndexingNotice())
+        this.app.metadataCache.on('resolved', () => this.watchForStaleIndexingNotice())
       );
 
       this.registerEvent(
@@ -212,27 +212,44 @@ export default class VaultSyncPlugin extends Plugin {
 
   onunload(): void {
     console.debug('[VaultSync] Unloading plugin');
+    this.indexNoticeObserver?.disconnect();
+    this.indexNoticeObserver = null;
     this.syncManager?.destroy();
     this.fileIcons?.destroy();
     this.pdfProgress?.destroy();
   }
 
-  /**
-   * Remove Obsidian core's "Indexing vault…" notice once it is provably stale.
-   *
-   * On mobile that notice is created with no timeout and is meant to be hidden when the
-   * metadata cache finishes resolving; on some vaults the hide never fires and it hangs on
-   * screen indefinitely. We only act when `app.metadataCache.initialized` is true — i.e.
-   * indexing is genuinely complete — so a real in-progress notice is never removed. This is
-   * a workaround for an Obsidian-core bug we can't fix directly, not a status of our own.
-   */
-  private dismissStaleIndexingNotice(): void {
+  private indexNoticeObserver: MutationObserver | null = null;
+
+  /** Remove any "Indexing vault…" notice currently on screen, if indexing is actually done. */
+  private dismissStaleIndexingNotice(): boolean {
     // `initialized` is not in the public typings but is the authoritative resolved flag.
     const resolved = (this.app.metadataCache as unknown as { initialized?: boolean }).initialized;
-    if (!resolved) return;
+    if (!resolved) return false;
+    let removed = false;
     document.querySelectorAll('.notice').forEach((el) => {
-      if (/indexing vault/i.test(el.textContent || '')) el.remove();
+      if (/indexing vault/i.test(el.textContent || '')) { el.remove(); removed = true; }
     });
+    return removed;
+  }
+
+  /**
+   * Workaround for an Obsidian-core mobile bug: its "Indexing vault…" notice (created with
+   * no timeout) sometimes never auto-dismisses after the metadata cache has fully resolved,
+   * so it hangs on screen forever. The notice can be created at any point during startup —
+   * before OR after layoutReady, and after the cache's one-shot 'resolved' event — so a
+   * single check races and misses it. Instead we watch the DOM and remove the notice the
+   * moment it appears, but ONLY while `app.metadataCache.initialized` is true (indexing
+   * genuinely complete), so a real in-progress notice is never touched. The observer stops
+   * after the first removal or a 60s startup window, whichever comes first — it is not a
+   * permanent DOM watcher.
+   */
+  private watchForStaleIndexingNotice(): void {
+    if (this.dismissStaleIndexingNotice()) return;
+    const stop = () => { this.indexNoticeObserver?.disconnect(); this.indexNoticeObserver = null; };
+    this.indexNoticeObserver = new MutationObserver(() => { if (this.dismissStaleIndexingNotice()) stop(); });
+    this.indexNoticeObserver.observe(document.body, { childList: true, subtree: true });
+    window.setTimeout(stop, 60000);
   }
 
   /**
