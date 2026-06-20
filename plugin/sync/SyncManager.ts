@@ -242,12 +242,7 @@ export class SyncManager {
     }
     this.isProcessingRemote = true;
     try {
-      const file = this.app.vault.getAbstractFileByPath(path);
-      if (file instanceof TFile) {
-        await this.app.vault.delete(file);
-      } else if (await this.app.vault.adapter.exists(path)) {
-        await this.app.vault.adapter.remove(path);
-      }
+      await this.fileOps.deleteIfPresent(path);
       await this.fileOps.cleanupEmptyParentFolders(path);
       await this.localState.deleteFileHash(path);
       await this.localState.setLastSeq(msg.seq);
@@ -573,17 +568,11 @@ export class SyncManager {
 
       this.isProcessingRemote = true;
       try {
-        const file = this.app.vault.getAbstractFileByPath(path);
-        if (file instanceof TFile) {
-          await this.app.vault.delete(file);
-          deleted++;
-        } else if (await this.app.vault.adapter.exists(path)) {
-          await this.app.vault.adapter.remove(path);
-          deleted++;
-        }
+        const removed = await this.fileOps.deleteIfPresent(path);
         await this.fileOps.cleanupEmptyParentFolders(path);
         await this.localState.deleteFileHash(path);
         this.fileWatcher.removeFromBaseline(path);
+        if (removed) deleted++;
       } catch (e) {
         console.error(`[VaultSync] Incremental delete failed for ${path}:`, e);
       } finally {
@@ -791,16 +780,10 @@ export class SyncManager {
     for (const path of tombstonedToDelete) {
       this.isProcessingRemote = true;
       try {
-        const file = this.app.vault.getAbstractFileByPath(path);
-        if (file instanceof TFile) {
-          await this.app.vault.delete(file);
-        } else if (await this.app.vault.adapter.exists(path)) {
-          await this.app.vault.adapter.remove(path);
-        }
+        const removed = await this.fileOps.deleteIfPresent(path);
         await this.localState.deleteFileHash(path);
         await this.fileOps.cleanupEmptyParentFolders(path);
-        deleted++;
-        console.log(`[VaultSync] Deleted tombstoned file: ${path}`);
+        if (removed) { deleted++; console.log(`[VaultSync] Deleted tombstoned file: ${path}`); }
       } catch (e) {
         console.error(`[VaultSync] Failed to delete tombstoned file: ${path}`, e);
       } finally {
@@ -815,16 +798,10 @@ export class SyncManager {
     for (const path of toDeleteLocallyOld) {
       this.isProcessingRemote = true;
       try {
-        const file = this.app.vault.getAbstractFileByPath(path);
-        if (file instanceof TFile) {
-          await this.app.vault.delete(file);
-        } else if (await this.app.vault.adapter.exists(path)) {
-          await this.app.vault.adapter.remove(path);
-        }
+        const removed = await this.fileOps.deleteIfPresent(path);
         await this.localState.deleteFileHash(path);
         await this.fileOps.cleanupEmptyParentFolders(path);
-        deleted++;
-        console.log(`[VaultSync] Deleted old file: ${path}`);
+        if (removed) { deleted++; console.log(`[VaultSync] Deleted old file: ${path}`); }
       } catch (e) {
         console.error(`[VaultSync] Failed to delete old file: ${path}`, e);
       } finally {
@@ -862,16 +839,9 @@ export class SyncManager {
 
       this.isProcessingRemote = true;
       try {
-        const file = this.app.vault.getAbstractFileByPath(path);
-        if (file instanceof TFile) {
-          await this.app.vault.delete(file);
-          await this.localState.deleteFileHash(path);
-          deleted++;
-        } else if (await this.app.vault.adapter.exists(path)) {
-          await this.app.vault.adapter.remove(path);
-          await this.localState.deleteFileHash(path);
-          deleted++;
-        }
+        const removed = await this.fileOps.deleteIfPresent(path);
+        await this.localState.deleteFileHash(path);
+        if (removed) deleted++;
         if (path.endsWith('.folder-marker')) {
           const parentPath = path.substring(0, path.lastIndexOf('/'));
           if (parentPath) {
@@ -1047,12 +1017,7 @@ export class SyncManager {
       console.warn(`[VaultSync] ${path} was deleted on server — removing local copy (no resurrection)`);
       this.isProcessingRemote = true;
       try {
-        const file = this.app.vault.getAbstractFileByPath(path);
-        if (file instanceof TFile) {
-          await this.app.vault.delete(file);
-        } else if (await this.app.vault.adapter.exists(path)) {
-          await this.app.vault.adapter.remove(path);
-        }
+        await this.fileOps.deleteIfPresent(path);
         await this.localState.deleteFileHash(path);
         await this.fileOps.cleanupEmptyParentFolders(path);
         this.fileWatcher.removeFromBaseline(path);
