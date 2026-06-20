@@ -1,9 +1,11 @@
 package com.vaultsync.service;
 
 import com.vaultsync.model.FileRecord;
+import com.vaultsync.model.SyncMeta;
 import com.vaultsync.model.SyncMessage;
 import com.vaultsync.model.Tombstone;
 import com.vaultsync.repository.FileRepository;
+import com.vaultsync.repository.SyncMetaRepository;
 import com.vaultsync.repository.TombstoneRepository;
 import com.vaultsync.util.HashUtil;
 import lombok.RequiredArgsConstructor;
@@ -29,7 +31,18 @@ public class SyncService {
 
     private final FileRepository fileRepository;
     private final TombstoneRepository tombstoneRepository;
+    private final SyncMetaRepository syncMetaRepository;
     private final SimpMessagingTemplate messagingTemplate;
+
+    /** sync_meta key holding the highest seq among tombstones already pruned by TTL. */
+    private static final String META_TOMBSTONE_FLOOR = "tombstoneFloorSeq";
+
+    /**
+     * A delta from a client whose lastSeq is below this value is unsafe — a deletion in its
+     * gap may have already been swept — so the server falls back to a full reconcile for it.
+     * Persisted in sync_meta so the guarantee survives restarts.
+     */
+    private volatile long tombstoneFloorSeq = 0;
 
     @Value("${vault-sync.tombstone-ttl-days:14}")
     private int tombstoneTtlDays;
@@ -71,6 +84,9 @@ public class SyncService {
     @jakarta.annotation.PostConstruct
     public void init() {
         initializeSequenceCounter();
+        tombstoneFloorSeq = syncMetaRepository.findById(META_TOMBSTONE_FLOOR)
+                .map(SyncMeta::getValue).orElse(0L);
+        log.info("Tombstone floor seq = {}", tombstoneFloorSeq);
         if (fileRepository.count() == 0) {
             scanExistingFiles();
         }
@@ -247,6 +263,7 @@ public class SyncService {
 
         return SyncMessage.SyncResponse.builder()
                 .currentSeq(currentSeq())
+                .fullState(true)
                 .files(files.stream()
                         .map(f -> SyncMessage.FileInfo.builder()
                                 .path(f.getPath())
@@ -267,11 +284,20 @@ public class SyncService {
     }
 
     public SyncMessage.SyncResponse getChangesSince(long lastSeq) {
+        // A device whose lastSeq predates a pruned tombstone may have missed that deletion;
+        // a sparse delta can't convey "this file is gone" once its tombstone is swept. Promote
+        // such a stale device to a full reconcile so absence-based deletion runs.
+        if (lastSeq < tombstoneFloorSeq) {
+            log.info("lastSeq {} below tombstone floor {} → full reconcile", lastSeq, tombstoneFloorSeq);
+            return getFullState();
+        }
+
         List<FileRecord> files = fileRepository.findBySeqGreaterThan(lastSeq);
         List<Tombstone> tombstones = tombstoneRepository.findBySeqGreaterThan(lastSeq);
 
         return SyncMessage.SyncResponse.builder()
                 .currentSeq(currentSeq())
+                .fullState(false)
                 .files(files.stream()
                         .map(f -> SyncMessage.FileInfo.builder()
                                 .path(f.getPath())
@@ -314,9 +340,18 @@ public class SyncService {
     @Transactional
     public void cleanupTombstones() {
         long cutoff = System.currentTimeMillis() - (tombstoneTtlDays * 24L * 60L * 60L * 1000L);
+        // Capture the highest seq we're about to sweep BEFORE deleting — that becomes the new
+        // floor below which a client can no longer be trusted to learn deletions from a delta.
+        long prunedMaxSeq = tombstoneRepository.findMaxSeqOlderThan(cutoff);
         int deleted = tombstoneRepository.deleteOlderThan(cutoff);
         if (deleted > 0) {
             log.info("Cleaned up {} old tombstones", deleted);
+            if (prunedMaxSeq > tombstoneFloorSeq) {
+                tombstoneFloorSeq = prunedMaxSeq;
+                syncMetaRepository.save(SyncMeta.builder()
+                        .key(META_TOMBSTONE_FLOOR).value(prunedMaxSeq).build());
+                log.info("Tombstone floor raised to {}", prunedMaxSeq);
+            }
         }
     }
 

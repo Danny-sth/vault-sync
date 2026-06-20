@@ -154,7 +154,9 @@ export class SyncManager {
       );
 
       if (this.settings.syncOnStart) {
-        await this.requestFullSync();
+        // Incremental by default; it self-promotes to a full reconcile on the first sync
+        // of the session (cold start) and on any reconnect where we have no lastSeq.
+        await this.requestIncrementalSync();
       }
 
       await this.processPendingOperations();
@@ -476,6 +478,123 @@ export class SyncManager {
     } finally {
       this.isSyncing = false;
     }
+  }
+
+  /**
+   * Pull what changed on the server since this device's last seen seq, instead of the whole
+   * manifest. Sends the persisted lastSeq; the SERVER decides what comes back:
+   *   - a sparse delta (files/tombstones with seq > lastSeq) → applied additively like batched
+   *     real-time pushes, never inferring deletions from absence (so it can't mass-delete);
+   *   - the full state (response.fullState) → when lastSeq is 0 (new device) or below the
+   *     server's tombstone floor (so stale it may have missed a pruned deletion) → reconciled
+   *     by absence via {@link processFullSync}.
+   * Either way the client never guesses; it branches on the server's `fullState` flag. Local
+   * edits/deletes still flow out via the FileWatcher and pending-ops queue, so this is the
+   * complete steady-state sync — no per-session full-scan, which is what removed the mobile
+   * "indexing" churn.
+   */
+  async requestIncrementalSync(): Promise<void> {
+    if (!this.isConnected()) {
+      this.status.error('не подключено');
+      return;
+    }
+    if (this.isSyncing) {
+      console.debug('[VaultSync] Sync already in progress, skipping');
+      return;
+    }
+
+    this.isSyncing = true;
+    this.status.begin('синхронизация…');
+    try {
+      const lastSeq = await this.localState.getLastSeq();
+      const response = await this.stompClient.requestSync(lastSeq);
+      const summary = response.fullState
+        ? await this.processFullSync(response)
+        : await this.processIncrementalSync(response);
+      await this.localState.setLastSeq(response.currentSeq);
+      this.status.done(summary);
+    } catch (e) {
+      console.error('[VaultSync] Incremental sync failed:', e);
+      this.status.error('синхронизация не удалась');
+    } finally {
+      this.isSyncing = false;
+    }
+  }
+
+  /**
+   * Apply a sparse delta (files + tombstones with seq > the requested lastSeq). Mirrors the
+   * real-time push handlers, batched: changed files are downloaded (skipping any already in
+   * sync to avoid re-fetching our own echoed uploads), tombstoned files are deleted using
+   * the SAME guards as {@link handleRemoteFileDelete} (never touch a path we never synced,
+   * leave device-local .obsidian/* alone). Absence is NOT treated as deletion.
+   */
+  private async processIncrementalSync(response: SyncResponse): Promise<string> {
+    const files = response.files || [];
+    const tombstoneList = response.tombstones || [];
+    console.debug(`[VaultSync] Incremental delta: ${files.length} files, ${tombstoneList.length} tombstones, currentSeq=${response.currentSeq}`);
+
+    let downloaded = 0;
+    let downloadFailed = 0;
+    let deleted = 0;
+
+    for (const f of files) {
+      const path = this.toRealPath(f.path);
+      if (path === null || !SyncFilter.shouldSync(path)) continue;
+      await this.localState.setFileSeq(path, f.seq);
+
+      // Already in sync (e.g. our own upload echoed back, or a redundant delta) — don't
+      // re-download. This is what keeps reconnects from re-pulling unchanged content.
+      const knownHash = await this.localState.getFileHash(path);
+      if (knownHash === f.hash) continue;
+
+      // Content changed server-side — clear any stale "can't decrypt" mark first.
+      this.undecryptable.delete(path);
+      this.isProcessingRemote = true;
+      try {
+        const ok = await this.downloadFile(path);
+        if (ok) downloaded++; else downloadFailed++;
+      } finally {
+        this.isProcessingRemote = false;
+      }
+    }
+
+    for (const t of tombstoneList) {
+      const path = this.toRealPath(t.path);
+      if (path === null || !SyncFilter.shouldSync(path)) continue;
+      await this.localState.setFileSeq(path, t.seq);
+
+      // Same guards as handleRemoteFileDelete: never delete a path we never synced (a
+      // tombstone for content this device never had), and leave device-local .obsidian/*
+      // (non-plugin) config alone.
+      if (path.startsWith('.obsidian/') && !path.startsWith('.obsidian/plugins/')) continue;
+      const knownHash = await this.localState.getFileHash(path);
+      const isPlugin = path.startsWith('.obsidian/plugins/');
+      if (!knownHash && !isPlugin) continue;
+
+      this.isProcessingRemote = true;
+      try {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) {
+          await this.app.vault.delete(file);
+          deleted++;
+        } else if (await this.app.vault.adapter.exists(path)) {
+          await this.app.vault.adapter.remove(path);
+          deleted++;
+        }
+        await this.fileOps.cleanupEmptyParentFolders(path);
+        await this.localState.deleteFileHash(path);
+        this.fileWatcher.removeFromBaseline(path);
+      } catch (e) {
+        console.error(`[VaultSync] Incremental delete failed for ${path}:`, e);
+      } finally {
+        this.isProcessingRemote = false;
+      }
+    }
+
+    const failed = downloadFailed;
+    const summary = `↓${downloaded}${downloadFailed > 0 ? '(❌' + downloadFailed + ')' : ''} ×${deleted}`;
+    console.log(`[VaultSync] Incremental sync complete: ${summary} (currentSeq=${response.currentSeq})`);
+    return failed > 0 ? `${summary} · ⚠️ ${failed} с ошибкой` : `готово · ${summary}`;
   }
 
   /**
