@@ -69,7 +69,10 @@ function rpc(method, params, id) {
       const finish = () => { if (done) return; done = true; if (id == null) return resolve(null); resolve(parseSse(data).find((m) => m.id === id) || null); };
       res.on('data', (c) => {
         data += c;
-        if (id != null && parseSse(data).some((m) => m.id === id)) { res.destroy(); finish(); }
+        // Resolve as soon as the matching response arrives, but DRAIN the rest (resume,
+        // not destroy) so the SSE connection closes cleanly — abruptly destroying it makes
+        // the server log "Missing result context".
+        if (id != null && !done && parseSse(data).some((m) => m.id === id)) { resolve(parseSse(data).find((m) => m.id === id)); done = true; res.resume(); }
       });
       res.on('end', finish);
       res.on('close', finish);
