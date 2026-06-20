@@ -110,6 +110,7 @@ export default class VaultSyncPlugin extends Plugin {
 
       this.app.workspace.onLayoutReady(async () => {
         console.debug('[VaultSync] Workspace ready, initializing modules...');
+        this.dismissStaleIndexingNotice();
         await this.fileIcons?.init();
         // Create today's daily note client-side. The server can't (zero-knowledge,
         // no key); the plugin has the key so the note is encrypted on sync like any file.
@@ -124,6 +125,14 @@ export default class VaultSyncPlugin extends Plugin {
         this.app.metadataCache.on('changed', (file) => {
           this.fileIcons?.refreshFile(file.path);
         })
+      );
+
+      // Obsidian core shows a persistent "Indexing vault…" notice on mobile while it
+      // resolves the metadata cache. On some setups it never auto-dismisses even after
+      // indexing has fully completed — it just hangs on screen. The cache's 'resolved'
+      // event is the authoritative "done" signal; when it fires, clear any leftover notice.
+      this.registerEvent(
+        this.app.metadataCache.on('resolved', () => this.dismissStaleIndexingNotice())
       );
 
       this.registerEvent(
@@ -206,6 +215,24 @@ export default class VaultSyncPlugin extends Plugin {
     this.syncManager?.destroy();
     this.fileIcons?.destroy();
     this.pdfProgress?.destroy();
+  }
+
+  /**
+   * Remove Obsidian core's "Indexing vault…" notice once it is provably stale.
+   *
+   * On mobile that notice is created with no timeout and is meant to be hidden when the
+   * metadata cache finishes resolving; on some vaults the hide never fires and it hangs on
+   * screen indefinitely. We only act when `app.metadataCache.initialized` is true — i.e.
+   * indexing is genuinely complete — so a real in-progress notice is never removed. This is
+   * a workaround for an Obsidian-core bug we can't fix directly, not a status of our own.
+   */
+  private dismissStaleIndexingNotice(): void {
+    // `initialized` is not in the public typings but is the authoritative resolved flag.
+    const resolved = (this.app.metadataCache as unknown as { initialized?: boolean }).initialized;
+    if (!resolved) return;
+    document.querySelectorAll('.notice').forEach((el) => {
+      if (/indexing vault/i.test(el.textContent || '')) el.remove();
+    });
   }
 
   /**
