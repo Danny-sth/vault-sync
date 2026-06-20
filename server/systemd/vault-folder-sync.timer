@@ -1,0 +1,10 @@
+[Unit]
+Description=Run vault-sync folder mirror every 15 min
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

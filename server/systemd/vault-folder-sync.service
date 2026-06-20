@@ -1,0 +1,12 @@
+[Unit]
+Description=vault-sync folder mirror (E2EE: local dirs <-> encrypted vault prefixes)
+After=vault-sync.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Creds resolved from /root/vault-sync-key.txt + /opt/vault-sync/application.yml;
+# .env is an optional extra source of VAULT_* if present.
+EnvironmentFile=-/root/.openclaw/.env
+ExecStart=/usr/bin/node /root/vault-sync/server/scripts/folder-sync.mjs
+TimeoutStartSec=300
