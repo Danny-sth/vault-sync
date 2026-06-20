@@ -47,12 +47,14 @@ public class McpSecurityConfig {
             .securityMatcher("/mcp/**", "/sse")
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            // Only authorize the initial REQUEST, not ASYNC/ERROR re-dispatches: spring-ai's
-            // streamable MCP processes responses on an async dispatch that has no
-            // SecurityContext, so re-checking it there throws Access Denied + "Missing result
-            // context". The original request was already authenticated.
+            // Permit ASYNC/ERROR/FORWARD re-dispatches: spring-ai's streamable MCP processes
+            // responses on an async dispatch that has no SecurityContext, so re-checking it
+            // there threw Access Denied + "Missing result context" on every MCP call. The
+            // original REQUEST is still authenticated.
             .authorizeHttpRequests(auth -> auth
-                .shouldFilterAllDispatcherTypes(false)
+                .dispatcherTypeMatchers(jakarta.servlet.DispatcherType.ASYNC,
+                        jakarta.servlet.DispatcherType.ERROR,
+                        jakarta.servlet.DispatcherType.FORWARD).permitAll()
                 .anyRequest().authenticated())
             .addFilterBefore(mcpTokenFilter(), UsernamePasswordAuthenticationFilter.class)
             .exceptionHandling(ex -> ex.authenticationEntryPoint((request, response, authException) -> {
