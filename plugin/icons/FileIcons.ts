@@ -5,17 +5,21 @@ import { DEV_ICONS } from './DevIcons';
 import { BRAND_COLORS, DEV_ICON_COLORS } from './IconColors';
 
 const FOLDER_ICONS_PATH = '.obsidian/folder-icons.json';
+const FILE_ICONS_PATH = '.obsidian/file-icons.json';
 
 /**
  * FileIcons module for vault-sync plugin.
- * Reads `icon` frontmatter property for files and folder-icons.json for folders.
- * Displays Lucide icons in file explorer.
+ * File icons come from the `icon` frontmatter property (per-note override) and, falling back,
+ * from file-icons.json (path → icon) — a central map so ANY file type (pdf, png, docx…) can
+ * have an icon without polluting note content. Folder icons live in folder-icons.json.
+ * Renders Lucide / Brand / Dev icons (or emoji) in the file explorer.
  */
 export class FileIcons {
   private app: App;
   private observer: MutationObserver | null = null;
   private styleEl: HTMLStyleElement | null = null;
   private folderIcons: Record<string, string> = {};
+  private fileIcons: Record<string, string> = {};
 
   constructor(app: App) {
     this.app = app;
@@ -27,6 +31,7 @@ export class FileIcons {
    */
   async init(): Promise<void> {
     await this.loadFolderIcons();
+    await this.loadFileIcons();
     this.injectStyles();
     this.setupObserver();
     this.applyAllIcons();
@@ -56,6 +61,28 @@ export class FileIcons {
       console.error('[VaultSync:FileIcons] Failed to load folder icons:', e);
       this.folderIcons = {};
     }
+  }
+
+  /**
+   * Load per-file icons from JSON file (path → icon name). Frontmatter `icon` still wins.
+   */
+  async loadFileIcons(): Promise<void> {
+    try {
+      if (await this.app.vault.adapter.exists(FILE_ICONS_PATH)) {
+        const content = await this.app.vault.adapter.read(FILE_ICONS_PATH);
+        this.fileIcons = JSON.parse(content);
+        console.debug('[VaultSync:FileIcons] Loaded file icons:', Object.keys(this.fileIcons).length);
+      }
+    } catch (e) {
+      console.error('[VaultSync:FileIcons] Failed to load file icons:', e);
+      this.fileIcons = {};
+    }
+  }
+
+  /** Resolve a file's icon: per-note frontmatter override first, then the central map. */
+  private fileIconFor(file: TFile): string | undefined {
+    const cache = this.app.metadataCache.getFileCache(file);
+    return (cache?.frontmatter?.icon as string | undefined) || this.fileIcons[file.path];
   }
 
   /**
@@ -185,8 +212,7 @@ export class FileIcons {
       const file = this.app.vault.getAbstractFileByPath(path);
       if (!(file instanceof TFile)) return;
 
-      const cache = this.app.metadataCache.getFileCache(file);
-      const iconName = cache?.frontmatter?.icon as string | undefined;
+      const iconName = this.fileIconFor(file);
       if (!iconName) return;
 
       this.applyIconToElement(el, iconName);
@@ -276,8 +302,7 @@ export class FileIcons {
       const file = this.app.vault.getAbstractFileByPath(filePath);
       if (!(file instanceof TFile)) return;
 
-      const cache = this.app.metadataCache.getFileCache(file);
-      const iconName = cache?.frontmatter?.icon as string | undefined;
+      const iconName = this.fileIconFor(file);
 
       if (iconName) {
         this.applyIconToElement(el, iconName);
