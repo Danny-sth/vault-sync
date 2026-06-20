@@ -392,17 +392,19 @@ export class SyncManager {
         // key set each round → converges, no loop, and never loses an entry.
         if (SyncManager.MERGEABLE_JSON_MAPS.has(path) && existing && existing.content.byteLength > 0) {
           const merged = this.mergeJsonMap(existing.content, toWrite);
-          if (merged) {
+          // Only deviate from a plain server-write when our local copy has keys the server
+          // lacks. Then the union differs from the server, so we write it AND push it up.
+          // Otherwise (local is a subset, or only same-key conflicts) the server version IS
+          // the union — write it as-is below so local matches the server byte-for-byte; a
+          // re-serialized-but-equal merge would never hash-match the server and would loop.
+          if (merged && merged.hasLocalExtra) {
             await this.fileOps.writeBinary(path, merged.content);
             const mergedHash = await this.serverHash(path, merged.content);
             await this.localState.setFileHash(path, mergedHash);
-            this.markDownloadedProcessed(path);
-            if (merged.hasLocalExtra) {
-              await this.uploadMergedDirect(path, merged.content, mergedHash, hash);
-            }
+            await this.markDownloadedProcessed(path);
+            await this.uploadMergedDirect(path, merged.content, mergedHash, hash);
             return true;
           }
-          // merge failed (not valid JSON maps) → fall through to a normal overwrite.
         }
 
         // Conflict guard for EVERY download path (full-sync AND real-time broadcast):
