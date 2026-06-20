@@ -670,6 +670,17 @@ export class SyncManager {
     for (const [path] of localHashes) {
       const isProtectedObsidian = path.startsWith('.obsidian/') && !path.startsWith('.obsidian/plugins/');
       if (!localFilePaths.has(path) && !isProtectedObsidian) {
+        // CRITICAL: only treat a localState-hash-without-local-file as a user deletion to
+        // push upstream when the SERVER also no longer has it live. If the server still has
+        // the file, our missing local copy is a DOWNLOAD case (incomplete/lost download),
+        // NOT a deletion — pushing a delete here would wipe a live file off the server (and
+        // every other device) just because this one device lost its on-disk copy while its
+        // localState lagged. That is exactly how a stale device nuked notes that still
+        // existed everywhere else. Leave it: the toDownload pass below will refetch it.
+        if (serverFiles.has(path)) {
+          console.debug(`[VaultSync] Local copy missing but server has it live — will download, not delete: ${path}`);
+          continue;
+        }
         console.debug(`[VaultSync] Detected local deletion: ${path}`);
         try {
           await this.deleteFile(path);
