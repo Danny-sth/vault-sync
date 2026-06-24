@@ -69,8 +69,10 @@ export class PdfProgress {
   private hideUiTimer: number | null = null;
   /** True while the Obsidian UI is faded out (immersive reading). */
   private uiHidden = false;
-  /** Tap handler on the PDF container — a tap brings the chrome back. */
-  private onTap: ((e: Event) => void) | null = null;
+  /** Tap-to-reveal: pointer handlers + the press origin, to tell a tap from a scroll. */
+  private onPointerDown: ((e: PointerEvent) => void) | null = null;
+  private onPointerUp: ((e: PointerEvent) => void) | null = null;
+  private tapStart: { x: number; y: number; t: number } | null = null;
   private tapTarget: HTMLElement | null = null;
   /** Water level (% remaining). */
   private level = 0;
@@ -311,20 +313,24 @@ export class PdfProgress {
     if (document.getElementById('vs-read-style')) return;
     const s = document.createElement('style');
     s.id = 'vs-read-style';
-    // Chrome elements we fade for immersive reading — desktop + mobile names.
+    // Chrome elements we fade for immersive reading — desktop + mobile names,
+    // plus the in-view PDF toolbar (page nav / zoom / search).
     const chrome =
       '.titlebar,.workspace-ribbon,.status-bar,.mobile-navbar,' +
-      '.workspace-tab-header-container,.view-header,.workspace-drawer';
+      '.workspace-tab-header-container,.view-header,.workspace-drawer,.pdf-toolbar';
     s.textContent =
       '@keyframes vsWave{to{transform:translateX(-50%)}}' +
       '.vs-wave-a{animation:vsWave 2.6s linear infinite}' +
       '.vs-wave-b{animation:vsWave 1.8s linear infinite}' +
       '@keyframes vsBubble{0%{transform:translateY(0);opacity:0}' +
       '15%{opacity:0.7}90%{opacity:0.25}100%{transform:translateY(-150px);opacity:0}}' +
-      // While a PDF is open, give the chrome a smooth fade so hide/reveal glides.
-      `body.vs-read-active :is(${chrome}){transition:opacity 0.6s ease}` +
-      // Immersive: fade the chrome out and stop it eating taps (tap-to-reveal).
-      `body.vs-read-immersive :is(${chrome}){opacity:0;pointer-events:none}`;
+      // While a PDF is open, give the chrome a smooth fade+collapse so hide/reveal glides.
+      `body.vs-read-active :is(${chrome}){transition:opacity 0.45s ease,max-height 0.45s ease}` +
+      // Immersive: fade the chrome out, collapse the space it ate (PDF goes
+      // fullscreen), and stop it taking taps (tap anywhere reveals it again).
+      `body.vs-read-immersive :is(${chrome})` +
+      '{opacity:0!important;pointer-events:none!important;max-height:0!important;' +
+      'min-height:0!important;overflow:hidden!important;border:0!important}';
     document.head.appendChild(s);
   }
 
@@ -359,10 +365,23 @@ export class PdfProgress {
     document.body.classList.add('vs-read-active');
     const container: HTMLElement | undefined = (leaf.view as any)?.containerEl;
     if (container) {
-      // A tap anywhere on the page brings the chrome back (and re-arms the hide).
-      this.onTap = () => this.showUi();
+      // A *tap* (not a scroll) anywhere on the page brings the chrome back.
+      // pdf.js swallows the synthetic 'click' on touch, so we detect the tap
+      // ourselves from pointerdown→pointerup with a small movement threshold;
+      // a drag (scroll) moves past it and is ignored — the scroll shows the pill.
       this.tapTarget = container;
-      container.addEventListener('click', this.onTap, true);
+      this.onPointerDown = (e: PointerEvent) => {
+        this.tapStart = { x: e.clientX, y: e.clientY, t: Date.now() };
+      };
+      this.onPointerUp = (e: PointerEvent) => {
+        const s = this.tapStart;
+        this.tapStart = null;
+        if (!s) return;
+        const moved = Math.hypot(e.clientX - s.x, e.clientY - s.y);
+        if (moved < 12 && Date.now() - s.t < 400) this.showUi();
+      };
+      container.addEventListener('pointerdown', this.onPointerDown, true);
+      container.addEventListener('pointerup', this.onPointerUp, true);
     }
     this.scheduleHideUi();
   }
@@ -373,11 +392,14 @@ export class PdfProgress {
       window.clearTimeout(this.hideUiTimer);
       this.hideUiTimer = null;
     }
-    if (this.tapTarget && this.onTap) {
-      this.tapTarget.removeEventListener('click', this.onTap, true);
+    if (this.tapTarget) {
+      if (this.onPointerDown) this.tapTarget.removeEventListener('pointerdown', this.onPointerDown, true);
+      if (this.onPointerUp) this.tapTarget.removeEventListener('pointerup', this.onPointerUp, true);
     }
     this.tapTarget = null;
-    this.onTap = null;
+    this.onPointerDown = null;
+    this.onPointerUp = null;
+    this.tapStart = null;
     this.uiHidden = false;
     document.body.classList.remove('vs-read-immersive');
     document.body.classList.remove('vs-read-active');
