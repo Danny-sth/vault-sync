@@ -23,6 +23,10 @@ const POLL_INTERVAL_MS = 200;
 const POLL_MAX_TRIES = 30; // ~6s
 /** Minimum gap between "bookmark saved" notices, to avoid spam while flipping pages. */
 const SAVE_NOTICE_THROTTLE_MS = 6000;
+/** Idle delay after opening a PDF (or after a tap) before the whole Obsidian UI fades away. */
+const HIDE_UI_DELAY_MS = 4000;
+/** How long the progress pill stays up after a scroll/page change before it fades out. */
+const PILL_VISIBLE_MS = 3000;
 
 interface MinimalEventBus {
   on(name: string, cb: (data: any) => void): void;
@@ -61,6 +65,13 @@ export class PdfProgress {
   private barLabel: HTMLElement | null = null;
   private fadeTimer: number | null = null;
   private drainTimer: number | null = null;
+  /** Idle timer that hides the whole Obsidian chrome while reading. */
+  private hideUiTimer: number | null = null;
+  /** True while the Obsidian UI is faded out (immersive reading). */
+  private uiHidden = false;
+  /** Tap handler on the PDF container — a tap brings the chrome back. */
+  private onTap: ((e: Event) => void) | null = null;
+  private tapTarget: HTMLElement | null = null;
   /** Water level (% remaining). */
   private level = 0;
   /** Epoch ms of the last "bookmark saved" notice, for throttling. */
@@ -169,6 +180,7 @@ export class PdfProgress {
     }
     this.attached = state;
     this.ensureBar(leaf);
+    this.enterImmersive(leaf);
 
     // If the document is already loaded, 'pagesloaded' won't fire again.
     if ((child.pdfViewer?.pagesCount ?? 0) > 0) {
@@ -201,6 +213,7 @@ export class PdfProgress {
       }
       this.attached = null;
     }
+    this.exitImmersive();
     this.clearStatus();
   }
 
@@ -298,22 +311,101 @@ export class PdfProgress {
     if (document.getElementById('vs-read-style')) return;
     const s = document.createElement('style');
     s.id = 'vs-read-style';
+    // Chrome elements we fade for immersive reading — desktop + mobile names.
+    const chrome =
+      '.titlebar,.workspace-ribbon,.status-bar,.mobile-navbar,' +
+      '.workspace-tab-header-container,.view-header,.workspace-drawer';
     s.textContent =
       '@keyframes vsWave{to{transform:translateX(-50%)}}' +
       '.vs-wave-a{animation:vsWave 2.6s linear infinite}' +
       '.vs-wave-b{animation:vsWave 1.8s linear infinite}' +
       '@keyframes vsBubble{0%{transform:translateY(0);opacity:0}' +
-      '15%{opacity:0.7}90%{opacity:0.25}100%{transform:translateY(-150px);opacity:0}}';
+      '15%{opacity:0.7}90%{opacity:0.25}100%{transform:translateY(-150px);opacity:0}}' +
+      // While a PDF is open, give the chrome a smooth fade so hide/reveal glides.
+      `body.vs-read-active :is(${chrome}){transition:opacity 0.6s ease}` +
+      // Immersive: fade the chrome out and stop it eating taps (tap-to-reveal).
+      `body.vs-read-immersive :is(${chrome}){opacity:0;pointer-events:none}`;
     document.head.appendChild(s);
   }
 
-  /** Ensure the vial is visible (it stays on screen while a PDF is open). */
+  /** Show the vial, then fade it out after a short idle (it's a transient hint). */
   private showBar(): void {
     const bar = this.barEl;
     if (!bar) return;
-    // The vial stays visible while a PDF is open — just ensure it's shown.
     bar.style.opacity = '1';
     bar.style.transform = 'translateX(0)';
+    // Auto-fade: the pill is a glance, not chrome. Re-armed on every scroll.
+    if (this.fadeTimer !== null) window.clearTimeout(this.fadeTimer);
+    this.fadeTimer = window.setTimeout(() => {
+      this.fadeTimer = null;
+      this.fadeBar();
+    }, PILL_VISIBLE_MS);
+    this.plugin.registerInterval(this.fadeTimer);
+  }
+
+  /** Fade the vial out (without removing it — next scroll brings it back instantly). */
+  private fadeBar(): void {
+    const bar = this.barEl;
+    if (!bar) return;
+    bar.style.opacity = '0';
+    bar.style.transform = 'translateX(14px)';
+  }
+
+  // --- immersive reading (hide all Obsidian chrome) ----------------------
+
+  /** Arm the auto-hide and wire a tap-to-reveal handler for this PDF view. */
+  private enterImmersive(leaf: WorkspaceLeaf): void {
+    this.injectStyle();
+    document.body.classList.add('vs-read-active');
+    const container: HTMLElement | undefined = (leaf.view as any)?.containerEl;
+    if (container) {
+      // A tap anywhere on the page brings the chrome back (and re-arms the hide).
+      this.onTap = () => this.showUi();
+      this.tapTarget = container;
+      container.addEventListener('click', this.onTap, true);
+    }
+    this.scheduleHideUi();
+  }
+
+  /** Tear down immersive mode: reveal chrome, drop listeners and timers. */
+  private exitImmersive(): void {
+    if (this.hideUiTimer !== null) {
+      window.clearTimeout(this.hideUiTimer);
+      this.hideUiTimer = null;
+    }
+    if (this.tapTarget && this.onTap) {
+      this.tapTarget.removeEventListener('click', this.onTap, true);
+    }
+    this.tapTarget = null;
+    this.onTap = null;
+    this.uiHidden = false;
+    document.body.classList.remove('vs-read-immersive');
+    document.body.classList.remove('vs-read-active');
+  }
+
+  /** (Re)start the idle countdown to hide the UI. */
+  private scheduleHideUi(): void {
+    if (this.hideUiTimer !== null) window.clearTimeout(this.hideUiTimer);
+    this.hideUiTimer = window.setTimeout(() => {
+      this.hideUiTimer = null;
+      this.hideUi();
+    }, HIDE_UI_DELAY_MS);
+    this.plugin.registerInterval(this.hideUiTimer);
+  }
+
+  private hideUi(): void {
+    if (!this.attached) return; // PDF closed mid-countdown
+    this.uiHidden = true;
+    document.body.classList.add('vs-read-immersive');
+  }
+
+  /** Bring the chrome back (tap) and re-arm the auto-hide. */
+  private showUi(): void {
+    if (this.uiHidden) {
+      this.uiHidden = false;
+      document.body.classList.remove('vs-read-immersive');
+    }
+    this.scheduleHideUi();
   }
 
   private removeBar(): void {
