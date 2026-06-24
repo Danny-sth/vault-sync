@@ -326,11 +326,16 @@ export class PdfProgress {
       '15%{opacity:0.7}90%{opacity:0.25}100%{transform:translateY(-150px);opacity:0}}' +
       // While a PDF is open, give the chrome a smooth fade+collapse so hide/reveal glides.
       `body.vs-read-active :is(${chrome}){transition:opacity 0.45s ease,max-height 0.45s ease}` +
+      `body.vs-read-active .view-content{transition:margin-top 0.45s ease}` +
       // Immersive: fade the chrome out, collapse the space it ate (PDF goes
       // fullscreen), and stop it taking taps (tap anywhere reveals it again).
       `body.vs-read-immersive :is(${chrome})` +
       '{opacity:0!important;pointer-events:none!important;max-height:0!important;' +
-      'min-height:0!important;overflow:hidden!important;border:0!important}';
+      'min-height:0!important;overflow:hidden!important;border:0!important}' +
+      // Mobile pushes .view-content down with margin-top (floating header +
+      // safe-area) — collapsing the header isn't enough, drop that margin too
+      // so the PDF actually reaches the top edge.
+      'body.vs-read-immersive .view-content{margin-top:0!important}';
     document.head.appendChild(s);
   }
 
