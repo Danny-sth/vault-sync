@@ -59,12 +59,12 @@ export class PdfProgress {
   private saveTimer: number | null = null;
   /** Last page persisted per book, to skip redundant writes. */
   private lastSaved = new Map<string, number>();
-  /** Floating progress bar pinned to the bottom edge of the active PDF view. */
+  /** Floating progress vial pinned to the right edge of the active PDF view. */
   private barEl: HTMLElement | null = null;
   private barFill: HTMLElement | null = null;
   private barLabel: HTMLElement | null = null;
+  /** Idle timer that fades the progress vial out after a scroll. */
   private fadeTimer: number | null = null;
-  private drainTimer: number | null = null;
   /** Idle timer that hides the whole Obsidian chrome while reading. */
   private hideUiTimer: number | null = null;
   /** True while the Obsidian UI is faded out (immersive reading). */
@@ -74,8 +74,6 @@ export class PdfProgress {
   private onPointerUp: ((e: PointerEvent) => void) | null = null;
   private tapStart: { x: number; y: number; t: number } | null = null;
   private tapTarget: HTMLElement | null = null;
-  /** Water level (% remaining). */
-  private level = 0;
   /** Epoch ms of the last "bookmark saved" notice, for throttling. */
   private lastNoticeAt = 0;
 
@@ -91,7 +89,6 @@ export class PdfProgress {
     );
     // The active leaf at load time won't fire the event above.
     this.app.workspace.onLayoutReady(() => this.onLeafChange(this.app.workspace.activeLeaf ?? null));
-
   }
 
   /** Flush any pending save when the plugin unloads. */
@@ -298,7 +295,6 @@ export class PdfProgress {
     // Water shows how much is LEFT: full at the start, draining to empty as you
     // read. The label is the remaining percent (100 → 0).
     const remaining = 100 - pct;
-    this.level = remaining;
     this.barFill.style.height = `${remaining}%`;
     // Colour follows reading progress: 0% read → red, sweeping through the full
     // spectrum to 100% read. Tied to the percent — it never moves on its own.
@@ -461,10 +457,6 @@ export class PdfProgress {
     if (this.fadeTimer !== null) {
       window.clearTimeout(this.fadeTimer);
       this.fadeTimer = null;
-    }
-    if (this.drainTimer !== null) {
-      window.clearTimeout(this.drainTimer);
-      this.drainTimer = null;
     }
     this.barEl?.remove();
     this.barLabel?.remove();
