@@ -403,6 +403,7 @@ export class PdfProgress {
     this.uiHidden = false;
     document.body.classList.remove('vs-read-immersive');
     document.body.classList.remove('vs-read-active');
+    this.setStatusBar(false); // never leave the device without its system bar
   }
 
   /** (Re)start the idle countdown to hide the UI. */
@@ -419,14 +420,35 @@ export class PdfProgress {
     if (!this.attached) return; // PDF closed mid-countdown
     this.uiHidden = true;
     document.body.classList.add('vs-read-immersive');
+    this.setStatusBar(true); // edge-to-edge: drop the Android system bar too
   }
 
-  /** Bring the chrome back (tap) and re-arm the auto-hide. */
+  /** Hide/show the Android system status bar via Capacitor (no-op on desktop). */
+  private setStatusBar(hidden: boolean): void {
+    try {
+      const SB = (window as any).Capacitor?.Plugins?.StatusBar;
+      if (!SB) return;
+      if (hidden) {
+        void SB.setOverlaysWebView({ overlay: true });
+        void SB.hide();
+      } else {
+        void SB.show();
+        void SB.setOverlaysWebView({ overlay: false });
+      }
+    } catch {
+      /* desktop, or the bridge shifted — immersion just keeps the OS bar */
+    }
+  }
+
+  /** Bring the chrome back (tap), flash the progress pill, and re-arm the auto-hide. */
   private showUi(): void {
     if (this.uiHidden) {
       this.uiHidden = false;
       document.body.classList.remove('vs-read-immersive');
     }
+    this.setStatusBar(false); // restore the Android system bar with the chrome
+    // A tap also brings the pill back (then it fades on its own after 3s).
+    this.showBar();
     this.scheduleHideUi();
   }
 
