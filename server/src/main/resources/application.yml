@@ -44,6 +44,11 @@ spring:
 vault-sync:
   storage-path: ${VAULT_SYNC_STORAGE:/opt/vault-sync/files}
   token: ${VAULT_SYNC_TOKEN:}
+  # Опциональные ДОП. волты (мультиюзер): каждый поднимается отдельным Spring-контекстом в
+  # этом же процессе — свой порт/watcher-поток/H2/storage/токены. Пусто → только основной волт.
+  # Пример элемента: { id: lera, port: 8445, storagePath: /opt/obsidian-vault-lera,
+  #   token: <sync-token>, mcpToken: <mcp-token>, dbPath: /opt/vault-sync-lera/data }
+  extra-vaults: []
   tombstone-ttl-days: ${TOMBSTONE_TTL_DAYS:14}
   # Daily note auto-creation (in-process scheduler, see DailyNoteScheduler)
   daily-note:
