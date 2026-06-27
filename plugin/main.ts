@@ -485,6 +485,24 @@ class VaultSyncSettingTab extends PluginSettingTab {
         })
       );
 
+    new Setting(containerEl)
+      .setName('DUQ app pairing code')
+      .setDesc('One-tap connect this vault to the DUQ app: copy the code, then paste it in DUQ → Profile → Obsidian. Holds the E2EE key — treat it like a password.')
+      .addButton((button) =>
+        button.setButtonText('Copy code for DUQ').onClick(async () => {
+          const pass = this.plugin.settings.encryptionPassphrase;
+          const salt = this.plugin.settings.encryptionSaltB64;
+          if (!pass || !salt) {
+            new Notice('Vault Sync: set the passphrase and salt first');
+            return;
+          }
+          const payload = JSON.stringify({ v: 1, p: pass, s: salt });
+          const code = 'duq1:' + btoa(unescape(encodeURIComponent(payload)));
+          await navigator.clipboard.writeText(code);
+          new Notice('Vault Sync: DUQ pairing code copied — paste it in the DUQ app');
+        })
+      );
+
     new Setting(containerEl).setName('Actions').setHeading();
 
     new Setting(containerEl)
