@@ -1,4 +1,4 @@
-import { App, Plugin, PluginSettingTab, Setting, Notice, TFile, TFolder, Menu, TAbstractFile } from 'obsidian';
+import { App, Modal, Plugin, PluginSettingTab, Setting, Notice, TFile, TFolder, Menu, TAbstractFile } from 'obsidian';
 import { SyncManager } from './sync/SyncManager';
 import { FileIcons } from './icons/FileIcons';
 import { IconPickerModal } from './icons/IconPickerModal';
@@ -498,8 +498,13 @@ class VaultSyncSettingTab extends PluginSettingTab {
           }
           const payload = JSON.stringify({ v: 1, p: pass, s: salt });
           const code = 'duq1:' + btoa(unescape(encodeURIComponent(payload)));
-          await navigator.clipboard.writeText(code);
-          new Notice('Vault Sync: DUQ pairing code copied — paste it in the DUQ app');
+          try {
+            await navigator.clipboard.writeText(code);
+            new Notice('Vault Sync: DUQ pairing code copied — paste it in the DUQ app');
+          } catch {
+            // Mobile Obsidian (webview) may block clipboard — show the code to copy manually.
+            new DuqCodeModal(this.app, code).open();
+          }
         })
       );
 
@@ -531,5 +536,42 @@ class VaultSyncSettingTab extends PluginSettingTab {
           this.plugin.syncManager?.requestFullSync();
         })
       );
+  }
+}
+
+/** Fallback for mobile Obsidian where clipboard write is blocked: show the DUQ
+ * pairing code in a selectable field so the user can copy it manually. */
+class DuqCodeModal extends Modal {
+  private code: string;
+  constructor(app: App, code: string) {
+    super(app);
+    this.code = code;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl('h3', { text: 'DUQ pairing code' });
+    contentEl.createEl('p', {
+      text: 'Copy this code and paste it in the DUQ app → Profile → Obsidian.',
+    });
+    const input = contentEl.createEl('textarea', { text: this.code });
+    input.setAttr('readonly', 'true');
+    input.style.width = '100%';
+    input.style.height = '4em';
+    input.style.userSelect = 'all';
+    input.focus();
+    input.select();
+    const btn = contentEl.createEl('button', { text: 'Copy' });
+    btn.onclick = async () => {
+      input.select();
+      try {
+        await navigator.clipboard.writeText(this.code);
+        new Notice('Vault Sync: code copied');
+      } catch {
+        new Notice('Vault Sync: select the code and copy it manually');
+      }
+    };
+  }
+  onClose() {
+    this.contentEl.empty();
   }
 }
