@@ -1,4 +1,5 @@
-import { App, TFile, moment, Notice } from 'obsidian';
+import { App, TFile, TFolder, moment, Notice } from 'obsidian';
+import { FileIcons } from '../icons/FileIcons';
 
 interface DailyNotesSettings {
   folder: string;
@@ -12,16 +13,31 @@ const DEFAULT_SETTINGS: DailyNotesSettings = {
   template: '',
 };
 
+/** Latin month names for archive folder naming (Cyrillic breaks path sync). */
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+/** Icon for month-archive folders (matches the existing "Archive": "📦"). */
+const ARCHIVE_FOLDER_ICON = '📦';
+
 /**
  * Daily Notes module for vault-sync plugin.
- * Creates daily notes on startup using Obsidian's daily-notes settings.
+ * Creates daily notes on startup using Obsidian's daily-notes settings, and
+ * archives past-month notes into Daily/<Month>.<Year>/ folders.
+ *
+ * Both jobs are CLIENT-side on purpose: under E2EE the server is zero-knowledge
+ * (no vault key), so it can neither write an encrypted note nor even see the
+ * "Daily/" folder name — the old server-side DailyNoteScheduler is disabled.
  */
 export class DailyNotes {
   private app: App;
+  private fileIcons: FileIcons | null;
   private settings: DailyNotesSettings = DEFAULT_SETTINGS;
 
-  constructor(app: App) {
+  constructor(app: App, fileIcons: FileIcons | null = null) {
     this.app = app;
+    this.fileIcons = fileIcons;
   }
 
   /**
@@ -30,13 +46,21 @@ export class DailyNotes {
    */
   async init(): Promise<void> {
     await this.loadSettings();
+    await this.run();
+  }
 
+  /**
+   * One maintenance pass: today's note + month archiving. Idempotent; safe to
+   * re-run periodically so an always-open Obsidian still rolls over at
+   * midnight / new month, not only on app restart.
+   */
+  async run(): Promise<void> {
     if (!this.settings.folder) {
       console.debug('[VaultSync:DailyNotes] No daily notes folder configured');
       return;
     }
-
     await this.createTodayNote();
+    await this.archivePastMonths();
   }
 
   /**
@@ -84,6 +108,46 @@ export class DailyNotes {
     } catch (e) {
       console.error('[VaultSync:DailyNotes] Failed to create:', e);
       return null;
+    }
+  }
+
+  /**
+   * Keep only the current month's notes in the daily folder root: every note
+   * from a previous month moves into <folder>/<Month>.<Year>/ (e.g. June.2026).
+   * Mirrors the retired server-side archiver; renameFile keeps links intact.
+   * Idempotent — an already-archived note simply isn't in the root anymore, and
+   * a concurrent device doing the same move loses the race harmlessly.
+   */
+  private async archivePastMonths(): Promise<void> {
+    try {
+      const root = this.app.vault.getAbstractFileByPath(this.settings.folder);
+      if (!(root instanceof TFolder)) return;
+      const now = moment();
+      let moved = 0;
+      for (const child of [...root.children]) {
+        if (!(child instanceof TFile) || child.extension !== 'md') continue;
+        // Strict parse against the daily-notes format — anything else in the
+        // folder root (templates, regular notes) is left alone.
+        const d = moment(child.basename, this.settings.format, true);
+        if (!d.isValid()) continue;
+        if (d.year() === now.year() && d.month() === now.month()) continue;
+        const monthDir = `${this.settings.folder}/${MONTH_NAMES[d.month()]}.${d.year()}`;
+        await this.ensureFolder(monthDir);
+        if (this.fileIcons && this.fileIcons.getFolderIcon(monthDir) !== ARCHIVE_FOLDER_ICON) {
+          await this.fileIcons.setFolderIcon(monthDir, ARCHIVE_FOLDER_ICON);
+        }
+        try {
+          // fileManager (not vault.rename) so links to the note are rewritten.
+          await this.app.fileManager.renameFile(child, `${monthDir}/${child.name}`);
+          moved++;
+          console.debug('[VaultSync:DailyNotes] Archived', child.name, '->', monthDir);
+        } catch (e) {
+          console.error('[VaultSync:DailyNotes] Failed to archive', child.path, e);
+        }
+      }
+      if (moved > 0) new Notice(`📦 Daily: ${moved} заметок прошлых месяцев убрано в архив`);
+    } catch (e) {
+      console.error('[VaultSync:DailyNotes] Archive pass failed:', e);
     }
   }
 

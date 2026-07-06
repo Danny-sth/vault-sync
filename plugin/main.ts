@@ -111,10 +111,15 @@ export default class VaultSyncPlugin extends Plugin {
       this.app.workspace.onLayoutReady(async () => {
         console.debug('[VaultSync] Workspace ready, initializing modules...');
         await this.fileIcons?.init();
-        // Create today's daily note client-side. The server can't (zero-knowledge,
-        // no key); the plugin has the key so the note is encrypted on sync like any file.
+        // Create today's daily note + archive past months client-side. The server
+        // can't (zero-knowledge, no key); the plugin has the key so the note is
+        // encrypted on sync like any file.
         try {
-          await new DailyNotes(this.app).init();
+          const daily = new DailyNotes(this.app, this.fileIcons);
+          await daily.init();
+          // Hourly re-run so an always-open Obsidian still gets its midnight
+          // note and the month rollover without an app restart.
+          this.registerInterval(window.setInterval(() => void daily.run(), 60 * 60 * 1000));
         } catch (e) {
           console.error('[VaultSync] DailyNotes init failed:', e);
         }

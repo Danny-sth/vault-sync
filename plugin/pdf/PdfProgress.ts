@@ -71,8 +71,12 @@ export class PdfProgress {
   private uiHidden = false;
   /** Tap-to-reveal: pointer handlers + the press origin, to tell a tap from a scroll. */
   private onPointerDown: ((e: PointerEvent) => void) | null = null;
+  private onPointerMove: ((e: PointerEvent) => void) | null = null;
   private onPointerUp: ((e: PointerEvent) => void) | null = null;
+  private onPointerCancel: ((e: PointerEvent) => void) | null = null;
   private tapStart: { x: number; y: number; t: number } | null = null;
+  /** Last seen pointer position — pointercancel carries no useful coords. */
+  private tapLast: { x: number; y: number } | null = null;
   private tapTarget: HTMLElement | null = null;
   /** Epoch ms of the last "bookmark saved" notice, for throttling. */
   private lastNoticeAt = 0;
@@ -87,6 +91,12 @@ export class PdfProgress {
     this.plugin.registerEvent(
       this.app.workspace.on('active-leaf-change', (leaf) => this.onLeafChange(leaf)),
     );
+    // Mobile swipe-back replaces the view INSIDE the same leaf; depending on the
+    // path that may surface as 'file-open' rather than 'active-leaf-change'.
+    // onLeafChange is idempotent, so listening to both is safe.
+    this.plugin.registerEvent(
+      this.app.workspace.on('file-open', () => this.onLeafChange(this.app.workspace.activeLeaf ?? null)),
+    );
     // The active leaf at load time won't fire the event above.
     this.app.workspace.onLayoutReady(() => this.onLeafChange(this.app.workspace.activeLeaf ?? null));
   }
@@ -100,10 +110,14 @@ export class PdfProgress {
   // --- leaf lifecycle -----------------------------------------------------
 
   private onLeafChange(leaf: WorkspaceLeaf | null): void {
-    if (this.attached && this.attached.leaf === leaf) return;
+    const path = this.pdfPathOf(leaf);
+    // Same leaf still showing the same PDF → nothing to do. The path check is
+    // essential: a mobile swipe-back navigates the SAME leaf from the PDF to
+    // another view, and a leaf-only comparison would early-return here and
+    // leave the chrome hidden (immersive mode) on the new view forever.
+    if (this.attached && this.attached.leaf === leaf && this.attached.path === path) return;
     this.detach();
 
-    const path = this.pdfPathOf(leaf);
     if (!leaf || !path) return;
 
     this.waitForViewer(leaf, path, 0);
@@ -310,10 +324,13 @@ export class PdfProgress {
     const s = document.createElement('style');
     s.id = 'vs-read-style';
     // Chrome elements we fade for immersive reading — desktop + mobile names,
-    // plus the in-view PDF toolbar (page nav / zoom / search).
+    // plus the in-view PDF toolbar (page nav / zoom / search). NOTE: the
+    // workspace drawers are deliberately NOT in this list — they only appear
+    // when the user explicitly swipes them in, and hiding them here made that
+    // swipe open an invisible, untappable drawer while immersive.
     const chrome =
       '.titlebar,.workspace-ribbon,.status-bar,.mobile-navbar,' +
-      '.workspace-tab-header-container,.view-header,.workspace-drawer,.pdf-toolbar';
+      '.workspace-tab-header-container,.view-header,.pdf-toolbar';
     s.textContent =
       '@keyframes vsWave{to{transform:translateX(-50%)}}' +
       '.vs-wave-a{animation:vsWave 2.6s linear infinite}' +
@@ -369,20 +386,42 @@ export class PdfProgress {
       // A *tap* (not a scroll) anywhere on the page brings the chrome back.
       // pdf.js swallows the synthetic 'click' on touch, so we detect the tap
       // ourselves from pointerdown→pointerup with a small movement threshold;
-      // a drag (scroll) moves past it and is ignored — the scroll shows the pill.
+      // a vertical drag (scroll) is reading and stays immersive, while a
+      // HORIZONTAL swipe is navigation (drawer / back gesture) — reveal the
+      // chrome so the user doesn't land on a UI-less screen. The gesture often
+      // ends in 'pointercancel' once Obsidian's drawer takes over, so we track
+      // the last position ourselves and treat cancel like an up.
       this.tapTarget = container;
-      this.onPointerDown = (e: PointerEvent) => {
-        this.tapStart = { x: e.clientX, y: e.clientY, t: Date.now() };
-      };
-      this.onPointerUp = (e: PointerEvent) => {
+      const finish = (x: number, y: number) => {
         const s = this.tapStart;
         this.tapStart = null;
+        this.tapLast = null;
         if (!s) return;
-        const moved = Math.hypot(e.clientX - s.x, e.clientY - s.y);
-        if (moved < 12 && Date.now() - s.t < 400) this.showUi();
+        const dx = x - s.x;
+        const dy = y - s.y;
+        if (Math.hypot(dx, dy) < 12 && Date.now() - s.t < 400) return this.showUi(); // tap
+        if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy)) this.showUi(); // horizontal swipe
+      };
+      this.onPointerDown = (e: PointerEvent) => {
+        if (!e.isPrimary) return; // ignore pinch-zoom fingers
+        this.tapStart = { x: e.clientX, y: e.clientY, t: Date.now() };
+        this.tapLast = { x: e.clientX, y: e.clientY };
+      };
+      this.onPointerMove = (e: PointerEvent) => {
+        if (e.isPrimary && this.tapStart) this.tapLast = { x: e.clientX, y: e.clientY };
+      };
+      this.onPointerUp = (e: PointerEvent) => {
+        if (e.isPrimary) finish(e.clientX, e.clientY);
+      };
+      this.onPointerCancel = () => {
+        const last = this.tapLast;
+        if (last) finish(last.x, last.y);
+        else this.tapStart = null;
       };
       container.addEventListener('pointerdown', this.onPointerDown, true);
+      container.addEventListener('pointermove', this.onPointerMove, true);
       container.addEventListener('pointerup', this.onPointerUp, true);
+      container.addEventListener('pointercancel', this.onPointerCancel, true);
     }
     this.scheduleHideUi();
   }
@@ -395,12 +434,17 @@ export class PdfProgress {
     }
     if (this.tapTarget) {
       if (this.onPointerDown) this.tapTarget.removeEventListener('pointerdown', this.onPointerDown, true);
+      if (this.onPointerMove) this.tapTarget.removeEventListener('pointermove', this.onPointerMove, true);
       if (this.onPointerUp) this.tapTarget.removeEventListener('pointerup', this.onPointerUp, true);
+      if (this.onPointerCancel) this.tapTarget.removeEventListener('pointercancel', this.onPointerCancel, true);
     }
     this.tapTarget = null;
     this.onPointerDown = null;
+    this.onPointerMove = null;
     this.onPointerUp = null;
+    this.onPointerCancel = null;
     this.tapStart = null;
+    this.tapLast = null;
     this.uiHidden = false;
     document.body.classList.remove('vs-read-immersive');
     document.body.classList.remove('vs-read-active');
