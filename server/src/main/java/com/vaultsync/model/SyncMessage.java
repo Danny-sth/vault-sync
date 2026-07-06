@@ -13,27 +13,6 @@ public class SyncMessage {
     @Builder
     @NoArgsConstructor
     @AllArgsConstructor
-    public static class FileChange {
-        private String path;
-        private String hash;
-        private long mtime;
-        private long size;
-        private String deviceId;
-    }
-
-    @Data
-    @Builder
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class FileDelete {
-        private String path;
-        private String deviceId;
-    }
-
-    @Data
-    @Builder
-    @NoArgsConstructor
-    @AllArgsConstructor
     public static class SyncRequest {
         private String requestId;
         private long lastSeq;

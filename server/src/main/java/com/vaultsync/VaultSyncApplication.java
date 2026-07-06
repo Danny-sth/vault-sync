@@ -38,7 +38,10 @@ public class VaultSyncApplication {
                 .bind("vault-sync.extra-vaults", Bindable.listOf(ExtraVault.class))
                 .orElse(List.of());
         for (ExtraVault v : vaults) {
-            if (v.id() == null || v.port() == 0 || v.storagePath() == null) {
+            // token/mcpToken included: without them toArgs() would pass the literal string
+            // "null" as the auth token — an accidentally guessable credential.
+            if (v.id() == null || v.port() == 0 || v.storagePath() == null
+                    || v.token() == null || v.mcpToken() == null) {
                 continue;
             }
             new SpringApplicationBuilder(VaultSyncApplication.class)

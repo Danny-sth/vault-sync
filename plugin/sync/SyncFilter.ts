@@ -153,7 +153,7 @@ export class SyncFilter {
         }
       }
     } catch (e) {
-      console.error('[SyncFilter] listHiddenDirs failed:', e);
+      this.noteListingError('<vault root>', e);
     }
     return result;
   }
@@ -201,7 +201,7 @@ export class SyncFilter {
           stack.push(subdir);
         }
       } catch (e) {
-        console.error(`[SyncFilter] listAllHiddenFilesInVault failed for ${dir}:`, e);
+        this.noteListingError(dir, e);
       }
     }
 
@@ -258,6 +258,27 @@ export class SyncFilter {
   }
 
   /**
+   * Directory listings that failed since the last {@link resetListingErrors}. A failed
+   * listing means the local file inventory is INCOMPLETE — callers that infer deletions
+   * from local absence (full-sync reconcile) must check this and skip those inferences,
+   * or an I/O hiccup would classify живые files as deleted.
+   */
+  private static listingErrors = 0;
+
+  static resetListingErrors(): void {
+    this.listingErrors = 0;
+  }
+
+  static getListingErrors(): number {
+    return this.listingErrors;
+  }
+
+  private static noteListingError(dir: string, e: unknown): void {
+    this.listingErrors++;
+    console.error(`[SyncFilter] list failed for ${dir}:`, e);
+  }
+
+  /**
    * Recursively list every file under a directory via adapter API.
    */
   static async listFilesInDir(app: App, rootDir: string): Promise<string[]> {
@@ -277,7 +298,7 @@ export class SyncFilter {
           stack.push(subdir);
         }
       } catch (e) {
-        console.error(`[SyncFilter] list failed for ${dir}:`, e);
+        this.noteListingError(dir, e);
       }
     }
 

@@ -47,12 +47,8 @@ export default class VaultSyncPlugin extends Plugin {
         name: 'Full Sync',
         callback: () => this.syncManager?.requestFullSync(),
       });
-
-      this.addCommand({
-        id: 'vault-sync-create-daily',
-        name: 'Sync Daily Note (pull from server)',
-        callback: () => this.syncManager?.requestFullSync(),
-      });
+      // (the old 'vault-sync-create-daily' command was a misleading duplicate of Full
+      // Sync — daily notes are created client-side by DailyNotes now)
 
       this.commandExecutor = new CommandExecutor(this.app, this.settings);
 
@@ -63,6 +59,11 @@ export default class VaultSyncPlugin extends Plugin {
       this.syncManager.onConnectionChange = (connected) => {
         console.debug('[VaultSync] Connection state changed:', connected);
         this.updateStatusBar(connected);
+      };
+      // Icon maps written by sync (union-merged from another device) → re-render live,
+      // not on the next app restart.
+      this.syncManager.onConfigMapDownloaded = () => {
+        void this.fileIcons?.reloadFromDisk();
       };
 
       console.debug('[VaultSync] Initializing SyncManager...');
@@ -168,10 +169,12 @@ export default class VaultSyncPlugin extends Plugin {
       console.debug('[VaultSync] AutoConnect:', this.settings.autoConnect, 'Token exists:', !!this.settings.token);
       if (this.settings.autoConnect && this.settings.token) {
         console.debug('[VaultSync] Will auto-connect in 2 seconds...');
-        setTimeout(() => {
+        // Registered so a plugin disable within these 2s cancels the timer instead of
+        // calling connect() on a destroyed SyncManager.
+        this.registerInterval(window.setTimeout(() => {
           console.debug('[VaultSync] Auto-connect triggered');
           this.connect().catch(e => console.error('[VaultSync] Auto-connect failed:', e));
-        }, 2000);
+        }, 2000));
       }
 
       this.registerDomEvent(document, 'visibilitychange', () => {
@@ -214,7 +217,9 @@ export default class VaultSyncPlugin extends Plugin {
   }
 
   /**
-   * Register commands dynamically from server whitelist.
+   * Register Obsidian commands for the runnable scripts CommandExecutor discovers.
+   * NB: since v2.1.0 these are LOCAL scripts from the vault's commands folder (no server
+   * whitelist round-trip) — see CommandExecutor for the discovery rules.
    */
   async registerDynamicCommands(): Promise<void> {
     if (!this.commandExecutor) {
@@ -280,7 +285,14 @@ export default class VaultSyncPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const stored = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, stored);
+    // DEFAULT_SETTINGS generates a random deviceId per plugin load — persist the first
+    // one immediately, otherwise the id changes on every restart until the user happens
+    // to save settings, breaking self-echo filtering and conflict-copy attribution.
+    if (!stored?.deviceId) {
+      await this.saveSettings();
+    }
   }
 
   async saveSettings(): Promise<void> {
@@ -481,6 +493,13 @@ class VaultSyncSettingTab extends PluginSettingTab {
       )
       .addButton((button) =>
         button.setButtonText('Generate').onClick(async () => {
+          // Regenerating the salt on a CONFIGURED device is destructive: the derived key
+          // changes, every server path/blob stops decrypting, and a full sync would look
+          // like "the server deleted everything". Demand explicit confirmation.
+          if (this.plugin.settings.encryptionSaltB64
+            && !window.confirm('Соль уже задана. Новая соль СЛОМАЕТ расшифровку существующего волта на всех устройствах. Точно сгенерировать новую?')) {
+            return;
+          }
           const salt = new Uint8Array(16);
           crypto.getRandomValues(salt);
           this.plugin.settings.encryptionSaltB64 = btoa(String.fromCharCode(...salt));

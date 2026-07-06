@@ -107,18 +107,19 @@ export class ReadingDashboard {
     if (this.updating.has(file.path)) return; // another handler is already on it
     this.updating.add(file.path);
     try {
-      const content = await this.app.vault.read(file);
       const block = `${MARK_START}\n${await this.renderMarkdown()}\n${MARK_END}`;
-
-      let next: string;
-      if (BLOCK_RE.test(content)) {
-        next = content.replace(BLOCK_RE, block);
-      } else if (this.isDailyNote(file)) {
-        next = `${content.replace(/\s*$/, '')}\n\n## 📚 Сейчас читаю\n\n${block}\n`;
-      } else {
-        return;
-      }
-      if (next !== content) await this.app.vault.modify(file, next);
+      // vault.process = ATOMIC read-transform-write. The old read → modify pair raced
+      // the user's typing: keystrokes landing between the two calls were overwritten
+      // by our stale snapshot of the note.
+      await this.app.vault.process(file, (content) => {
+        if (BLOCK_RE.test(content)) {
+          return content.replace(BLOCK_RE, block);
+        }
+        if (this.isDailyNote(file)) {
+          return `${content.replace(/\s*$/, '')}\n\n## 📚 Сейчас читаю\n\n${block}\n`;
+        }
+        return content; // not ours — leave untouched
+      });
     } catch (e) {
       console.error('[VaultSync][reading] failed to update note:', e);
     } finally {

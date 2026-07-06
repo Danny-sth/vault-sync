@@ -236,15 +236,11 @@ export class FileIcons {
    * Apply icon to a specific element.
    */
   private applyIconToElement(el: HTMLElement, iconName: string, isFolder = false): void {
-    const iconHtml = this.getIconHtml(iconName);
-    if (!iconHtml) {
+    const iconEl = this.buildIconElement(iconName);
+    if (!iconEl) {
       console.debug(`[VaultSync:FileIcons] Unknown icon: ${iconName}`);
       return;
     }
-
-    const iconEl = document.createElement('span');
-    iconEl.className = 'vault-sync-file-icon';
-    iconEl.innerHTML = iconHtml;
 
     if (isFolder) {
       const content = el.querySelector('.nav-folder-title-content');
@@ -262,9 +258,38 @@ export class FileIcons {
   }
 
   /**
-   * Get HTML for an icon (SVG for Lucide/Brand/Dev, span for emoji).
+   * Build the icon element. Known icon sets (Lucide/Brand/Dev) render as inline SVG
+   * from our OWN bundled markup; anything user-supplied (frontmatter `icon`, icon maps)
+   * only ever reaches the DOM through textContent.
+   *
+   * SECURITY: the emoji branch previously did `innerHTML = iconName` behind a
+   * `/\p{Emoji}/u` test — which matches plain DIGITS too, so a synced note with
+   * `icon: "1<img src=x onerror=…>"` executed script inside Obsidian. textContent
+   * makes injection impossible regardless of what the regex lets through.
    */
-  private getIconHtml(iconName: string): string | null {
+  private buildIconElement(iconName: string): HTMLElement | null {
+    const wrapper = document.createElement('span');
+    wrapper.className = 'vault-sync-file-icon';
+
+    const svgMarkup = this.getSvgMarkup(iconName);
+    if (svgMarkup) {
+      wrapper.innerHTML = svgMarkup; // trusted: our own bundled icon data
+      return wrapper;
+    }
+
+    if (/\p{Extended_Pictographic}/u.test(iconName)) {
+      const span = document.createElement('span');
+      span.className = 'vault-sync-emoji-icon';
+      span.textContent = iconName; // untrusted: never innerHTML
+      wrapper.appendChild(span);
+      return wrapper;
+    }
+
+    return null;
+  }
+
+  /** SVG markup for the bundled icon sets only (trusted content). */
+  private getSvgMarkup(iconName: string): string | null {
     if (LUCIDE_ICONS[iconName]) {
       return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${LUCIDE_ICONS[iconName]}</svg>`;
     }
@@ -281,11 +306,18 @@ export class FileIcons {
       return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="vault-sync-fill-icon"${style}>${DEV_ICONS[iconName]}</svg>`;
     }
 
-    if (/\p{Emoji}/u.test(iconName)) {
-      return `<span class="vault-sync-emoji-icon">${iconName}</span>`;
-    }
-
     return null;
+  }
+
+  /**
+   * Re-read the icon maps from disk and re-render. Called by the sync layer after it
+   * writes folder-icons.json / file-icons.json, so icons set on ANOTHER device appear
+   * without restarting Obsidian.
+   */
+  async reloadFromDisk(): Promise<void> {
+    await this.loadFolderIcons();
+    await this.loadFileIcons();
+    this.applyAllIcons();
   }
 
   /**

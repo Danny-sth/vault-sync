@@ -66,7 +66,10 @@ if (cmd === 'read') {
       if (!g.success) continue;
       const txt = decryptBlob(key, real, Buffer.from(g.blobBase64, 'base64')).toString('utf8');
       if (txt.toLowerCase().includes(query)) console.log(real);
-    } catch {}
+    } catch (e) {
+      // Don't fail the whole search on one bad blob, but don't hide it either.
+      console.error(`vault-cli: skipping ${real}: ${e.message}`);
+    }
   }
 } else {
   console.error('usage: vault-cli.mjs read|write|append|list|search|delete <path> [content on stdin]');

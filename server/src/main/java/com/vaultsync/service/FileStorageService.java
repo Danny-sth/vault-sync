@@ -9,12 +9,10 @@ import org.springframework.core.io.Resource;
 import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.multipart.MultipartFile;
 
 import com.vaultsync.util.HashUtil;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.nio.file.*;
 
@@ -39,38 +37,6 @@ public class FileStorageService {
     private int versionsTtlDays;
 
     @Transactional
-    public FileRecord store(String path, MultipartFile file, String expectedHash, String deviceId, long seq) throws IOException {
-        Path targetPath = getFullPath(path);
-
-        Files.createDirectories(targetPath.getParent());
-
-        backupExisting(targetPath, path);
-
-        try (InputStream is = file.getInputStream()) {
-            Files.copy(is, targetPath, StandardCopyOption.REPLACE_EXISTING);
-        }
-
-        String actualHash = HashUtil.sha256(targetPath);
-        if (expectedHash != null && !expectedHash.equals(actualHash)) {
-            log.warn("Hash mismatch for {}: expected={}, actual={}", path, expectedHash, actualHash);
-        }
-
-        long size = Files.size(targetPath);
-        long mtime = Files.getLastModifiedTime(targetPath).toMillis();
-
-        FileRecord record = FileRecord.builder()
-                .path(path)
-                .hash(actualHash)
-                .mtime(mtime)
-                .size(size)
-                .seq(seq)
-                .lastModifiedBy(deviceId)
-                .build();
-
-        return fileRepository.save(record);
-    }
-
-    @Transactional
     public FileRecord storeBytes(String path, byte[] content, String expectedHash, String deviceId, long seq, long mtime) throws IOException {
         Path targetPath = getFullPath(path);
 
@@ -86,7 +52,65 @@ public class FileStorageService {
         }
 
         long size = content.length;
-        long actualMtime = mtime > 0 ? mtime : System.currentTimeMillis();
+        long actualMtime = alignDiskMtime(targetPath, mtime);
+
+        FileRecord record = FileRecord.builder()
+                .path(path)
+                .hash(actualHash)
+                .mtime(actualMtime)
+                .size(size)
+                .seq(seq)
+                .lastModifiedBy(deviceId)
+                .build();
+
+        return fileRepository.save(record);
+    }
+
+    /**
+     * Make the on-disk mtime match the client-reported one recorded in the DB. Without
+     * this the watcher/reconciler sees a &gt;1s mtime gap on every uploaded file, re-hashes
+     * it, and quietly rewrites the record's mtime — churning metadata that devices
+     * already received. Falls back to "now" when the client sent no mtime.
+     */
+    private long alignDiskMtime(Path targetPath, long clientMtime) {
+        long mtime = clientMtime > 0 ? clientMtime : System.currentTimeMillis();
+        try {
+            Files.setLastModifiedTime(targetPath, java.nio.file.attribute.FileTime.fromMillis(mtime));
+        } catch (IOException e) {
+            log.debug("Could not set mtime for {}: {}", targetPath, e.getMessage());
+        }
+        return mtime;
+    }
+
+    /**
+     * Commit an already-on-disk temp file (an assembled chunked upload) as the new content
+     * of {@code path}. Never buffers the content: the hash is computed by streaming and the
+     * file is MOVED into place (atomic on the same filesystem, with a copy fallback), so a
+     * multi-hundred-MB attachment costs O(8KB) heap instead of O(size). The temp file is
+     * consumed by this call — on success it no longer exists.
+     */
+    @Transactional
+    public FileRecord storeFromTempFile(String path, Path tempFile, String expectedHash, String deviceId, long seq, long mtime) throws IOException {
+        Path targetPath = getFullPath(path);
+
+        Files.createDirectories(targetPath.getParent());
+
+        backupExisting(targetPath, path);
+
+        String actualHash = HashUtil.sha256(tempFile);
+        if (expectedHash != null && !expectedHash.isEmpty() && !expectedHash.equals(actualHash)) {
+            log.warn("Hash mismatch for {}: expected={}, actual={}", path, expectedHash, actualHash);
+        }
+        long size = Files.size(tempFile);
+
+        try {
+            Files.move(tempFile, targetPath, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            // Different filesystem (uploads dir mounted elsewhere) — plain move still avoids buffering.
+            Files.move(tempFile, targetPath, StandardCopyOption.REPLACE_EXISTING);
+        }
+
+        long actualMtime = alignDiskMtime(targetPath, mtime);
 
         FileRecord record = FileRecord.builder()
                 .path(path)
@@ -174,10 +198,18 @@ public class FileStorageService {
 
     private Path getFullPath(String relativePath) {
         String normalized = relativePath.replace("\\", "/");
-        if (normalized.contains("..")) {
+        // An absolute path would WIN in resolve() (dropping the storage root entirely),
+        // so reject it alongside traversal; then double-check the normalized result is
+        // still inside the root — defence in depth against any encoding trick.
+        if (normalized.contains("..") || normalized.startsWith("/") || normalized.contains(":")) {
             throw new IllegalArgumentException("Invalid path: " + relativePath);
         }
-        return Paths.get(storagePath).resolve(normalized);
+        Path root = Paths.get(storagePath).toAbsolutePath().normalize();
+        Path resolved = root.resolve(normalized).normalize();
+        if (!resolved.startsWith(root)) {
+            throw new IllegalArgumentException("Invalid path: " + relativePath);
+        }
+        return resolved;
     }
 
     public boolean exists(String path) {

@@ -1,8 +1,6 @@
 import { Client, IMessage, StompSubscription } from '@stomp/stompjs';
 import {
   ServerMessage,
-  FileChangeRequest,
-  FileDeleteRequest,
   SyncRequest,
   SyncResponse,
   ConnectionState
@@ -17,16 +15,39 @@ interface PendingRequest {
   timeout: ReturnType<typeof setTimeout>;
 }
 
+export interface StompClientOptions {
+  /** Delay before stompjs auto-reconnects a dropped socket. */
+  reconnectDelayMs: number;
+  /** STOMP heartbeat interval, both directions. */
+  heartbeatIntervalMs: number;
+  /** How long requestSync waits for the server's response frame. */
+  syncTimeoutMs: number;
+  /** How long connect() waits before rejecting an unreachable server. */
+  connectTimeoutMs: number;
+}
+
+const DEFAULT_OPTIONS: StompClientOptions = {
+  reconnectDelayMs: 10000,
+  heartbeatIntervalMs: 60000,
+  syncTimeoutMs: 120000,
+  connectTimeoutMs: 20000,
+};
+
 export class StompClient {
   private client: Client | null = null;
   private subscriptions: StompSubscription[] = [];
   private messageHandler: MessageHandler | null = null;
   private connectionHandler: ConnectionHandler | null = null;
   private pendingRequests: Map<string, PendingRequest> = new Map();
+  private readonly options: StompClientOptions;
 
   private serverUrl: string = '';
   private token: string = '';
   private deviceId: string = '';
+
+  constructor(options: Partial<StompClientOptions> = {}) {
+    this.options = { ...DEFAULT_OPTIONS, ...options };
+  }
 
   setMessageHandler(handler: MessageHandler): void {
     this.messageHandler = handler;
@@ -37,12 +58,33 @@ export class StompClient {
   }
 
   async connect(serverUrl: string, token: string, deviceId: string): Promise<void> {
+    // One live Client at a time. Without this, every connect() while the server was
+    // unreachable leaked a previous Client whose reconnectDelay kept it retrying
+    // forever — when the server came back, N sockets all subscribed and every
+    // broadcast was processed N times.
+    if (this.client) {
+      void this.client.deactivate();
+      this.client = null;
+      this.subscriptions = [];
+    }
+
     this.serverUrl = serverUrl;
     this.token = token;
     this.deviceId = deviceId;
 
     return new Promise((resolve, reject) => {
       this.connectionHandler?.('connecting');
+
+      // connect() must SETTLE even when the server is down — an unsettled promise
+      // left connectionState at 'connecting' forever and blocked all reconnects.
+      // stompjs keeps auto-reconnecting in the background after this rejection;
+      // onConnect still fires later and recovers the session.
+      let settled = false;
+      const connectTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error(`Connect timeout after ${this.options.connectTimeoutMs}ms`));
+      }, this.options.connectTimeoutMs);
 
       this.client = new Client({
         brokerURL: serverUrl,
@@ -53,20 +95,31 @@ export class StompClient {
 
         webSocketFactory: () => new WebSocket(serverUrl),
 
-        reconnectDelay: 10000,
-        heartbeatIncoming: 60000,
-        heartbeatOutgoing: 60000,
+        reconnectDelay: this.options.reconnectDelayMs,
+        heartbeatIncoming: this.options.heartbeatIntervalMs,
+        heartbeatOutgoing: this.options.heartbeatIntervalMs,
 
         onConnect: () => {
-          this.connectionHandler?.('connected');
+          // Fires on the FIRST connect and on every silent stompjs auto-reconnect;
+          // subscriptions died with the old socket, so they are re-created each time.
+          this.subscriptions = [];
           this.setupSubscriptions();
-          resolve();
+          this.connectionHandler?.('connected');
+          if (!settled) {
+            settled = true;
+            clearTimeout(connectTimer);
+            resolve();
+          }
         },
 
         onStompError: (frame) => {
           console.error('[VaultSync] STOMP error:', frame.headers['message']);
           this.connectionHandler?.('error');
-          reject(new Error(frame.headers['message'] || 'STOMP connection error'));
+          if (!settled) {
+            settled = true;
+            clearTimeout(connectTimer);
+            reject(new Error(frame.headers['message'] || 'STOMP connection error'));
+          }
         },
 
         onWebSocketError: (event) => {
@@ -126,9 +179,6 @@ export class StompClient {
     });
     this.subscriptions.push(syncSub);
 
-    const pongSub = this.client.subscribe('/user/queue/pong', () => {
-    });
-    this.subscriptions.push(pongSub);
   }
 
   disconnect(): void {
@@ -154,30 +204,6 @@ export class StompClient {
     return this.client?.connected ?? false;
   }
 
-  sendFileChange(request: FileChangeRequest): void {
-    if (!this.isConnected()) {
-      console.warn('[VaultSync] Cannot send file change - not connected');
-      return;
-    }
-
-    this.client!.publish({
-      destination: '/app/file.change',
-      body: JSON.stringify(request),
-    });
-  }
-
-  sendFileDelete(request: FileDeleteRequest): void {
-    if (!this.isConnected()) {
-      console.warn('[VaultSync] Cannot send file delete - not connected');
-      return;
-    }
-
-    this.client!.publish({
-      destination: '/app/file.delete',
-      body: JSON.stringify(request),
-    });
-  }
-
   requestSync(lastSeq: number): Promise<SyncResponse> {
     return new Promise((resolve, reject) => {
       if (!this.isConnected()) {
@@ -190,7 +216,7 @@ export class StompClient {
       const timeout = setTimeout(() => {
         this.pendingRequests.delete(requestId);
         reject(new Error('Sync request timeout'));
-      }, 120000);
+      }, this.options.syncTimeoutMs);
 
       this.pendingRequests.set(requestId, { resolve, reject, timeout });
 
@@ -209,14 +235,5 @@ export class StompClient {
 
   private generateRequestId(): string {
     return `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
-  }
-
-  sendPing(): void {
-    if (!this.isConnected()) return;
-
-    this.client!.publish({
-      destination: '/app/ping',
-      body: '',
-    });
   }
 }

@@ -14,7 +14,8 @@ public class WebConfig implements WebMvcConfigurer {
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD")
                 .allowedHeaders("*")
                 .exposedHeaders("X-File-Hash", "X-File-Mtime", "X-File-Size")
-                .allowCredentials(true)
+                // Auth is a static token header, not cookies — credentialed CORS with a
+                // wildcard origin is both unnecessary and a bad pattern.
                 .maxAge(3600);
     }
 }

@@ -6,7 +6,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.Payload;
-import org.springframework.messaging.handler.annotation.SendTo;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.messaging.simp.annotation.SendToUser;
 import org.springframework.stereotype.Controller;
@@ -20,44 +19,11 @@ public class SyncController {
 
     private final SyncService syncService;
 
-    /**
-     * Handle file change notification from client.
-     * Broadcasts to all other clients via /topic/sync
-     */
-    @MessageMapping("/file.change")
-    @SendTo("/topic/sync")
-    public SyncMessage.FileChanged handleFileChange(
-            @Payload SyncMessage.FileChange message,
-            Principal principal) {
-
-        log.info("STOMP change from {}: {}", message.getDeviceId(), message.getPath());
-
-        return syncService.processFileChange(
-                message.getPath(),
-                message.getHash(),
-                message.getMtime(),
-                message.getSize(),
-                message.getDeviceId()
-        );
-    }
-
-    /**
-     * Handle file delete notification from client.
-     * Broadcasts to all other clients via /topic/sync
-     */
-    @MessageMapping("/file.delete")
-    @SendTo("/topic/sync")
-    public SyncMessage.FileDeleted handleFileDelete(
-            @Payload SyncMessage.FileDelete message,
-            Principal principal) {
-
-        log.info("STOMP delete from {}: {}", message.getDeviceId(), message.getPath());
-
-        return syncService.processFileDelete(
-                message.getPath(),
-                message.getDeviceId()
-        );
-    }
+    // NOTE: the legacy STOMP /app/file.change and /app/file.delete mappings are gone.
+    // No client ever sent them (uploads/deletes go through the REST chunked API), and
+    // file.change was actively dangerous: it registered a FileRecord from bare metadata
+    // (no bytes on disk → the reconciler would tombstone it) and cleared tombstones
+    // without the resurrection guard the REST path enforces.
 
     /**
      * Handle sync request from client.

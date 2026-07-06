@@ -38,16 +38,35 @@ export class SyncManager {
   private readonly undecryptable = new Set<string>();
 
   private pendingChanges: Map<string, ReturnType<typeof setTimeout>> = new Map();
-  private isProcessingRemote = false;
+  /**
+   * Paths this manager is CURRENTLY writing/deleting because of a remote event. Local
+   * change events for exactly these paths are echoes of our own writes and are ignored;
+   * everything else keeps flowing. (The old single boolean flag silently dropped ALL
+   * concurrent local edits whenever any remote download was in flight.)
+   */
+  private readonly remoteWrites = new Set<string>();
   private isSyncing = false;
   private connectionState: ConnectionState = 'disconnected';
+  /**
+   * Lowest server seq whose download failed this session. lastSeq must never advance
+   * past it — otherwise the failed file falls out of every future delta and this device
+   * keeps a stale copy until a manual full sync. null = no outstanding failure.
+   */
+  private lowestFailedSeq: number | null = null;
 
   onConnectionChange?: (connected: boolean) => void;
+  /** Fired after a mergeable config map (icon assignments) is written by sync,
+   *  so in-memory consumers (FileIcons) can reload without an app restart. */
+  onConfigMapDownloaded?: (path: string) => void;
 
   constructor(app: App, settings: VaultSyncSettings) {
     this.app = app;
     this.settings = settings;
-    this.stompClient = new StompClient();
+    this.stompClient = new StompClient({
+      reconnectDelayMs: settings.reconnectDelayMs,
+      heartbeatIntervalMs: settings.heartbeatIntervalMs,
+      syncTimeoutMs: settings.syncTimeoutMs,
+    });
     this.localState = new LocalState();
     this.fileWatcher = new FileWatcher(app);
     this.apiClient = new SyncApiClient(settings);
@@ -152,15 +171,8 @@ export class SyncManager {
         this.settings.token,
         this.settings.deviceId
       );
-
-      if (this.settings.syncOnStart) {
-        // Incremental by default; it self-promotes to a full reconcile on the first sync
-        // of the session (cold start) and on any reconnect where we have no lastSeq.
-        await this.requestIncrementalSync();
-      }
-
-      await this.processPendingOperations();
-
+      // Catch-up (incremental sync + pending ops) runs from handleConnectionChange,
+      // which also covers silent stompjs auto-reconnects — one recovery path.
     } catch (e) {
       console.error('[VaultSync] Connection failed:', e);
       this.status.error('нет связи с сервером');
@@ -176,14 +188,49 @@ export class SyncManager {
   }
 
   private handleConnectionChange(state: ConnectionState): void {
+    const wasConnected = this.connectionState === 'connected';
     this.connectionState = state;
 
     if (state === 'connected') {
       console.debug('[VaultSync] Connected');
       this.onConnectionChange?.(true);
+      // Catch up on everything missed while offline — this fires on the FIRST connect
+      // and on every silent stompjs auto-reconnect. Without it, broadcasts dropped
+      // during an outage were simply never applied until an app restart.
+      if (!wasConnected) {
+        void this.requestIncrementalSync()
+          .then(() => this.processPendingOperations())
+          .catch((e) => console.error('[VaultSync] Post-connect catch-up failed:', e));
+      }
     } else if (state === 'disconnected') {
       this.onConnectionChange?.(false);
     }
+  }
+
+  /** Mark a path as being written by remote processing (suppresses our own echo). */
+  private beginRemote(path: string): void {
+    this.remoteWrites.add(path);
+  }
+
+  private endRemote(path: string): void {
+    this.remoteWrites.delete(path);
+  }
+
+  /** Record a failed download's seq so lastSeq can't advance past it. */
+  private noteFailedSeq(seq: number | undefined): void {
+    if (typeof seq !== 'number' || seq <= 0) return;
+    if (this.lowestFailedSeq === null || seq < this.lowestFailedSeq) {
+      this.lowestFailedSeq = seq;
+    }
+  }
+
+  /**
+   * Advance the persisted lastSeq, clamped below any failed download's seq so the
+   * next incremental sync re-delivers (and retries) the failed file.
+   */
+  private async advanceLastSeq(seq: number): Promise<void> {
+    const capped = this.lowestFailedSeq !== null ? Math.min(seq, this.lowestFailedSeq - 1) : seq;
+    await this.localState.setLastSeq(capped);
   }
 
   private async handleServerMessage(message: ServerMessage): Promise<void> {
@@ -202,63 +249,93 @@ export class SyncManager {
     // decrypt is from a non-encrypting writer (duq plaintext) — record seq and skip.
     const path = this.toRealPath(msg.path);
     if (path === null || !SyncFilter.shouldSync(path)) {
-      await this.localState.setLastSeq(msg.seq);
+      await this.advanceLastSeq(msg.seq);
       return;
     }
     // The content changed on the server — clear any prior "can't decrypt" mark so a now
     // properly-encrypted version (e.g. duq switching to put_blob) is fetched and decrypted.
     this.undecryptable.delete(path);
-    this.isProcessingRemote = true;
+    this.beginRemote(path);
     try {
       const success = await this.downloadFile(path);
       if (success) {
-        await this.localState.setLastSeq(msg.seq);
         await this.localState.setFileSeq(path, msg.seq);
       } else {
         console.error(`[VaultSync] Remote file change failed to download: ${path}`);
+        this.noteFailedSeq(msg.seq);
       }
+      await this.advanceLastSeq(msg.seq);
     } finally {
-      this.isProcessingRemote = false;
+      this.endRemote(path);
     }
   }
 
   private async handleRemoteFileDelete(msg: FileDeletedMessage): Promise<void> {
     const path = this.toRealPath(msg.path);
     if (path === null || !SyncFilter.shouldSync(path)) {
-      await this.localState.setLastSeq(msg.seq);
+      await this.advanceLastSeq(msg.seq);
       return;
     }
     if (path.startsWith('.obsidian/') && !path.startsWith('.obsidian/plugins/')) {
       console.debug(`[VaultSync] Ignoring remote delete for .obsidian/* path (not plugins): ${path}`);
-      await this.localState.setLastSeq(msg.seq);
+      await this.advanceLastSeq(msg.seq);
       return;
     }
     const knownHash = await this.localState.getFileHash(path);
     const isPlugin = path.startsWith('.obsidian/plugins/');
     if (!knownHash && !isPlugin) {
       console.debug(`[VaultSync] Ignoring remote delete for never-synced path: ${path}`);
-      await this.localState.setLastSeq(msg.seq);
+      await this.advanceLastSeq(msg.seq);
       return;
     }
-    this.isProcessingRemote = true;
+    this.beginRemote(path);
     try {
-      await this.fileOps.deleteIfPresent(path);
-      await this.fileOps.cleanupEmptyParentFolders(path);
-      await this.localState.deleteFileHash(path);
-      await this.localState.setLastSeq(msg.seq);
+      await this.applyRemoteDelete(path);
+      await this.advanceLastSeq(msg.seq);
       // Remember the DELETE's seq (survives deletion) so a later re-create can
       // prove this device knew about the deletion → genuine recreation.
       await this.localState.setFileSeq(path, msg.seq);
-      this.fileWatcher.removeFromBaseline(path);
     } catch (e) {
       console.error(`[VaultSync] Failed to delete ${path}:`, e);
     } finally {
-      this.isProcessingRemote = false;
+      this.endRemote(path);
     }
   }
 
+  /**
+   * Delete a local file because the server says it was deleted — but never throw away
+   * an UNSYNCED local edit with it: if the current content differs from the last hash
+   * this device synced, the edit is preserved as a "(conflict …)" side copy first.
+   * (Scenario this guards: device A edits offline, device B deletes the file, A comes
+   * online — the tombstone used to silently destroy A's edit.)
+   */
+  private async applyRemoteDelete(path: string): Promise<boolean> {
+    try {
+      const lastKnown = await this.localState.getFileHash(path);
+      if (lastKnown && !path.startsWith('.obsidian/')) {
+        const read = await this.fileOps.readBinary(path);
+        if (read && read.content.byteLength > 0) {
+          const currentHash = await this.serverHash(path, read.content);
+          if (currentHash !== lastKnown) {
+            await this.saveConflictCopy(path, read.content);
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`[VaultSync] Edit-guard check failed for ${path}:`, e);
+    }
+    const removed = await this.fileOps.deleteIfPresent(path);
+    await this.fileOps.cleanupEmptyParentFolders(path);
+    await this.localState.deleteFileHash(path);
+    this.fileWatcher.removeFromBaseline(path);
+    return removed;
+  }
+
   private handleFileWatcherChanges(changes: FileChange[]): void {
-    if (this.isProcessingRemote) return;
+    // Per-path suppression: only our own in-flight remote writes are echoes; a change
+    // to any OTHER path is a real local edit and must not be dropped.
+    changes = changes.filter((c) => !this.remoteWrites.has(c.path));
+    if (changes.length === 0) return;
 
     console.debug(`[VaultSync] FileWatcher detected ${changes.length} external changes`);
 
@@ -284,7 +361,7 @@ export class SyncManager {
   }
 
   queueUploadByPath(path: string): void {
-    if (this.isProcessingRemote) return;
+    if (this.remoteWrites.has(path)) return;
     if (!SyncFilter.shouldSync(path)) return;
 
     const existing = this.pendingChanges.get(path);
@@ -300,7 +377,7 @@ export class SyncManager {
   }
 
   queueFileChange(file: TFile): void {
-    if (this.isProcessingRemote) return;
+    if (this.remoteWrites.has(file.path)) return;
     if (!SyncFilter.shouldSync(file.path)) return;
 
     const existing = this.pendingChanges.get(file.path);
@@ -316,7 +393,7 @@ export class SyncManager {
   }
 
   queueFileDelete(path: string): void {
-    if (this.isProcessingRemote) return;
+    if (this.remoteWrites.has(path)) return;
     if (!SyncFilter.shouldSync(path)) return;
 
     const existing = this.pendingChanges.get(path);
@@ -332,8 +409,7 @@ export class SyncManager {
   }
 
   queueFileRename(file: TFile, oldPath: string): void {
-    if (this.isProcessingRemote) return;
-
+    // Per-path suppression happens inside the two queue calls.
     this.queueFileDelete(oldPath);
     this.queueFileChange(file);
   }
@@ -342,7 +418,7 @@ export class SyncManager {
     return this.uploadByPath(file.path);
   }
 
-  private async downloadFile(path: string, retries = 3): Promise<boolean> {
+  private async downloadFile(path: string, retries = this.settings.retryAttempts): Promise<boolean> {
     // Known-plaintext (undecryptable) file from a non-encrypting writer — don't re-fetch.
     if (this.undecryptable.has(path)) return true;
     console.debug(`[VaultSync] downloadFile starting: ${path}`);
@@ -372,8 +448,15 @@ export class SyncManager {
           try {
             toWrite = this.cipher.decryptToArrayBuffer(path, content);
           } catch (e) {
-            // Not a VSE blob / wrong tag → plaintext from a non-encrypting writer (duq).
-            // Skip once (no retry, not a failure) so it doesn't spam the sync with errors.
+            if (VaultCipher.isEncryptedBlob(content)) {
+              // A REAL VSE blob that fails its GCM tag = wrong key or corruption. This
+              // must be loud: silently skipping made a device with a typo'd passphrase
+              // look "fully synced" while its vault quietly diverged.
+              this.reportKeyMismatch(path);
+              return false;
+            }
+            // No VSE header → plaintext from a non-encrypting writer. Benign: skip once
+            // (no retry, not a failure) so it doesn't spam the sync with errors.
             this.undecryptable.add(path);
             console.debug(`[VaultSync] Skipping undecryptable (plaintext) file: ${path}`);
             return true;
@@ -403,6 +486,7 @@ export class SyncManager {
             await this.localState.setFileHash(path, mergedHash);
             await this.markDownloadedProcessed(path);
             await this.uploadMergedDirect(path, merged.content, mergedHash, hash);
+            this.onConfigMapDownloaded?.(path);
             return true;
           }
         }
@@ -410,11 +494,16 @@ export class SyncManager {
         // Conflict guard for EVERY download path (full-sync AND real-time broadcast):
         // if the local file has an unsynced edit (its hash differs from the last synced
         // hash and from what we're about to write), preserve it as a side copy before
-        // overwriting — otherwise an offline/concurrent edit is silently lost.
-        if (existing && existing.content.byteLength > 0) {
+        // overwriting — otherwise an offline/concurrent edit is silently lost. This
+        // includes lastKnown === undefined: a NEVER-synced local file (both devices
+        // created "Meeting.md" independently) is by definition unsynced content, and
+        // requiring lastKnown here silently discarded the local version. .obsidian/*
+        // is exempt — config/plugin files are machine-generated, conflict copies there
+        // would be pure noise (icon maps are union-merged above instead).
+        if (existing && existing.content.byteLength > 0 && !path.startsWith('.obsidian/')) {
           const lastKnown = await this.localState.getFileHash(path);
           const existingHash = await this.serverHash(path, existing.content);
-          if (lastKnown && existingHash !== lastKnown && existingHash !== hash) {
+          if (existingHash !== hash && existingHash !== lastKnown) {
             await this.saveConflictCopy(path, existing.content);
           }
         }
@@ -426,6 +515,8 @@ export class SyncManager {
         await this.localState.setFileHash(path, hash);
 
         await this.markDownloadedProcessed(path);
+
+        if (SyncManager.MERGEABLE_JSON_MAPS.has(path)) this.onConfigMapDownloaded?.(path);
 
         return true;
 
@@ -441,6 +532,18 @@ export class SyncManager {
 
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /** True after the wrong-key banner was shown, so it fires once per session, not per file. */
+  private keyMismatchReported = false;
+
+  /** Loud, once-per-session alarm for "server blob exists but our key can't open it". */
+  private reportKeyMismatch(path: string): void {
+    console.error(`[VaultSync] DECRYPT FAILED for a real VSE blob: ${path} — wrong passphrase/salt?`);
+    if (this.keyMismatchReported) return;
+    this.keyMismatchReported = true;
+    this.status.error('E2EE: ключ не подходит к данным сервера');
+    new Notice('Vault Sync: НЕ УДАЛОСЬ РАСШИФРОВАТЬ данные сервера — проверь passphrase/salt. Синк этих файлов остановлен.', 15000);
   }
 
   /**
@@ -517,20 +620,23 @@ export class SyncManager {
         await this.queuePendingOperation('delete', path);
         return;
       }
-
-      const deleteSeq = await this.apiClient.delete(this.toServerPath(path));
-
-      await this.localState.deleteFileHash(path);
-      // Remember the delete's seq (survives the deletion) so a later re-create
-      // at this path proves we observed the deletion → genuine recreation.
-      await this.localState.setFileSeq(path, deleteSeq);
-
-      await this.fileOps.cleanupEmptyParentFolders(path);
-
+      await this.deleteFileCore(path);
     } catch (e) {
       console.error(`[VaultSync] Delete failed for ${path}:`, e);
       await this.queuePendingOperation('delete', path);
     }
+  }
+
+  /** Push a deletion to the server. Throws on failure (callers decide about queueing). */
+  private async deleteFileCore(path: string): Promise<void> {
+    const deleteSeq = await this.apiClient.delete(this.toServerPath(path));
+
+    await this.localState.deleteFileHash(path);
+    // Remember the delete's seq (survives the deletion) so a later re-create
+    // at this path proves we observed the deletion → genuine recreation.
+    await this.localState.setFileSeq(path, deleteSeq);
+
+    await this.fileOps.cleanupEmptyParentFolders(path);
   }
 
   async requestFullSync(): Promise<void> {
@@ -547,10 +653,11 @@ export class SyncManager {
     this.isSyncing = true;
     this.status.begin('синхронизация…');
     try {
+      this.lowestFailedSeq = null; // full pass retries everything; failures re-note below
       const response = await this.stompClient.requestSync(0);
 
       const summary = await this.processFullSync(response);
-      await this.localState.setLastSeq(response.currentSeq);
+      await this.advanceLastSeq(response.currentSeq);
 
       this.status.done(summary);
     } catch (e) {
@@ -587,12 +694,15 @@ export class SyncManager {
     this.isSyncing = true;
     this.status.begin('синхронизация…');
     try {
+      this.lowestFailedSeq = null; // this pass retries everything; failures re-note below
       const lastSeq = await this.localState.getLastSeq();
       const response = await this.stompClient.requestSync(lastSeq);
       const summary = response.fullState
         ? await this.processFullSync(response)
         : await this.processIncrementalSync(response);
-      await this.localState.setLastSeq(response.currentSeq);
+      // Clamped below the lowest failed seq (if any), so a failed download stays
+      // inside the next delta instead of being skipped forever.
+      await this.advanceLastSeq(response.currentSeq);
       this.status.done(summary);
     } catch (e) {
       console.error('[VaultSync] Incremental sync failed:', e);
@@ -630,12 +740,17 @@ export class SyncManager {
 
       // Content changed server-side — clear any stale "can't decrypt" mark first.
       this.undecryptable.delete(path);
-      this.isProcessingRemote = true;
+      this.beginRemote(path);
       try {
         const ok = await this.downloadFile(path);
-        if (ok) downloaded++; else downloadFailed++;
+        if (ok) {
+          downloaded++;
+        } else {
+          downloadFailed++;
+          this.noteFailedSeq(f.seq); // keep this file inside the next delta
+        }
       } finally {
-        this.isProcessingRemote = false;
+        this.endRemote(path);
       }
     }
 
@@ -652,17 +767,14 @@ export class SyncManager {
       const isPlugin = path.startsWith('.obsidian/plugins/');
       if (!knownHash && !isPlugin) continue;
 
-      this.isProcessingRemote = true;
+      this.beginRemote(path);
       try {
-        const removed = await this.fileOps.deleteIfPresent(path);
-        await this.fileOps.cleanupEmptyParentFolders(path);
-        await this.localState.deleteFileHash(path);
-        this.fileWatcher.removeFromBaseline(path);
+        const removed = await this.applyRemoteDelete(path);
         if (removed) deleted++;
       } catch (e) {
         console.error(`[VaultSync] Incremental delete failed for ${path}:`, e);
       } finally {
-        this.isProcessingRemote = false;
+        this.endRemote(path);
       }
     }
 
@@ -700,22 +812,41 @@ export class SyncManager {
     // Server paths are encrypted — decrypt each to the real vault path (and skip any
     // that won't decrypt: plaintext entries from a non-encrypting writer like duq).
     const serverFiles = new Map<string, typeof files[number]>();
+    let undecryptablePaths = 0;
     for (const f of files) {
       const real = this.toRealPath(f.path);
-      if (real === null || !SyncFilter.shouldSync(real)) continue;
+      if (real === null) { undecryptablePaths++; continue; }
+      if (!SyncFilter.shouldSync(real)) continue;
       serverFiles.set(real, { ...f, path: real });
     }
+
+    // SAFETY VALVE (wrong key/salt): with a bad key every server path fails to decrypt,
+    // serverFiles comes out empty, and the "deleted on server → delete locally" pass
+    // below would interpret that as "everything was deleted" and WIPE THE LOCAL VAULT.
+    // A vault where most paths won't decrypt is a key problem, never a real state.
+    if (this.cipher && files.length > 0 && undecryptablePaths > files.length / 2) {
+      this.reportKeyMismatch(`${undecryptablePaths}/${files.length} server paths`);
+      throw new Error(`E2EE key mismatch: ${undecryptablePaths}/${files.length} server paths undecryptable — full sync aborted`);
+    }
+
     const tombstones = new Set<string>();
     for (const t of tombstoneList) {
       const real = this.toRealPath(t.path);
       if (real !== null && SyncFilter.shouldSync(real)) tombstones.add(real);
     }
 
+    SyncFilter.resetListingErrors();
     const vaultFiles = this.app.vault.getFiles().filter(f => SyncFilter.shouldSync(f.path));
     const obsidianPaths = (await SyncFilter.listObsidianFiles(this.app)).filter(p => SyncFilter.shouldSync(p));
     const hiddenPaths = (await SyncFilter.listHiddenFiles(this.app)).filter(p => SyncFilter.shouldSync(p));
     const allHiddenInVault = (await SyncFilter.listAllHiddenFilesInVault(this.app)).filter(p => SyncFilter.shouldSync(p));
     const localFilePaths = new Set<string>([...vaultFiles.map(f => f.path), ...obsidianPaths, ...hiddenPaths, ...allHiddenInVault]);
+    // A failed directory listing means localFilePaths is INCOMPLETE — treating a
+    // missing entry as "user deleted it" would push bogus deletions to the server.
+    const localListingIncomplete = SyncFilter.getListingErrors() > 0;
+    if (localListingIncomplete) {
+      console.warn(`[VaultSync] ${SyncFilter.getListingErrors()} directory listing(s) failed — deletion inference disabled this pass`);
+    }
     const localHashes = await this.localState.getAllHashes();
 
     // Record the seq the server reports for every path (live files AND
@@ -754,6 +885,7 @@ export class SyncManager {
     let deleted = 0;
 
     for (const [path] of localHashes) {
+      if (localListingIncomplete) break; // can't trust absence — skip deletion inference
       const isProtectedObsidian = path.startsWith('.obsidian/') && !path.startsWith('.obsidian/plugins/');
       if (!localFilePaths.has(path) && !isProtectedObsidian) {
         // CRITICAL: only treat a localState-hash-without-local-file as a user deletion to
@@ -816,12 +948,18 @@ export class SyncManager {
         this.status.update(`загрузка ${i + 1}/${toDownload.length}…`);
       }
 
-      const success = await this.downloadFile(path);
-      if (success) {
-        downloaded++;
-      } else {
-        downloadFailed++;
-        console.error(`[VaultSync] Failed to download after retries: ${path}`);
+      this.beginRemote(path);
+      try {
+        const success = await this.downloadFile(path);
+        if (success) {
+          downloaded++;
+        } else {
+          downloadFailed++;
+          this.noteFailedSeq(serverFiles.get(path)?.seq);
+          console.error(`[VaultSync] Failed to download after retries: ${path}`);
+        }
+      } finally {
+        this.endRemote(path);
       }
 
       if (i < toDownload.length - 1) {
@@ -829,10 +967,11 @@ export class SyncManager {
       }
     }
 
+    // ONE tombstone pass (there used to be two near-identical ones — a divergence
+    // magnet). Applied after uploads, below.
     const tombstonedToDelete: string[] = [];
     for (const path of tombstones) {
-      if (localFilePaths.has(path) && this.tombstoneApplies(path, localHashes, serverFiles)) {
-        console.log(`[VaultSync] TOMBSTONE found for local file, will delete: ${path}`);
+      if (this.tombstoneApplies(path, localHashes, serverFiles)) {
         tombstonedToDelete.push(path);
       }
     }
@@ -870,39 +1009,20 @@ export class SyncManager {
 
     console.log(`[VaultSync] SYNC PLAN: Upload=${toUpload.length}, Delete(old)=${toDeleteLocallyOld.length}, Delete(tombstone)=${tombstonedToDelete.length}`);
 
-    if (tombstonedToDelete.length > 0) {
-      this.status.update(`удаление ${tombstonedToDelete.length}…`);
-    }
-
-    for (const path of tombstonedToDelete) {
-      this.isProcessingRemote = true;
-      try {
-        const removed = await this.fileOps.deleteIfPresent(path);
-        await this.localState.deleteFileHash(path);
-        await this.fileOps.cleanupEmptyParentFolders(path);
-        if (removed) { deleted++; console.log(`[VaultSync] Deleted tombstoned file: ${path}`); }
-      } catch (e) {
-        console.error(`[VaultSync] Failed to delete tombstoned file: ${path}`, e);
-      } finally {
-        this.isProcessingRemote = false;
-      }
-    }
-
     if (toDeleteLocallyOld.length > 0) {
       this.status.update(`удаление ${toDeleteLocallyOld.length}…`);
     }
 
     for (const path of toDeleteLocallyOld) {
-      this.isProcessingRemote = true;
+      this.beginRemote(path);
       try {
-        const removed = await this.fileOps.deleteIfPresent(path);
-        await this.localState.deleteFileHash(path);
-        await this.fileOps.cleanupEmptyParentFolders(path);
+        // applyRemoteDelete keeps an unsynced local edit as a conflict copy.
+        const removed = await this.applyRemoteDelete(path);
         if (removed) { deleted++; console.log(`[VaultSync] Deleted old file: ${path}`); }
       } catch (e) {
         console.error(`[VaultSync] Failed to delete old file: ${path}`, e);
       } finally {
-        this.isProcessingRemote = false;
+        this.endRemote(path);
       }
     }
 
@@ -930,25 +1050,19 @@ export class SyncManager {
       }
     }
 
-    for (const path of tombstones) {
-      // Same single source of truth as the first pass (no more divergence).
-      if (!this.tombstoneApplies(path, localHashes, serverFiles)) continue;
+    if (tombstonedToDelete.length > 0) {
+      this.status.update(`удаление ${tombstonedToDelete.length}…`);
+    }
 
-      this.isProcessingRemote = true;
+    for (const path of tombstonedToDelete) {
+      this.beginRemote(path);
       try {
-        const removed = await this.fileOps.deleteIfPresent(path);
-        await this.localState.deleteFileHash(path);
-        if (removed) deleted++;
-        if (path.endsWith('.folder-marker')) {
-          const parentPath = path.substring(0, path.lastIndexOf('/'));
-          if (parentPath) {
-            await this.fileOps.cleanupEmptyParentFolders(path);
-          }
-        }
+        const removed = await this.applyRemoteDelete(path);
+        if (removed) { deleted++; console.log(`[VaultSync] Deleted tombstoned file: ${path}`); }
       } catch (e) {
-        console.error(`[VaultSync] Delete failed: ${path}`, e);
+        console.error(`[VaultSync] Failed to delete tombstoned file: ${path}`, e);
       } finally {
-        this.isProcessingRemote = false;
+        this.endRemote(path);
       }
     }
 
@@ -989,7 +1103,9 @@ export class SyncManager {
 
   private async queuePendingOperation(type: 'upload' | 'delete', path: string): Promise<void> {
     const op: PendingOperation = {
-      id: `${type}-${path}-${Date.now()}`,
+      // Deterministic id: re-queueing the same (type, path) upserts the existing op
+      // (LocalState uses put) — a repeatedly failing operation never piles up copies.
+      id: `${type}:${path}`,
       type,
       path,
       timestamp: Date.now(),
@@ -998,6 +1114,10 @@ export class SyncManager {
     await this.localState.addPendingOperation(op);
   }
 
+  /** A pending op that keeps failing is dropped after this many attempts — the file is
+   *  still local and the next full sync reconciles it, so nothing is lost. */
+  private static readonly PENDING_OP_MAX_RETRIES = 20;
+
   private async processPendingOperations(): Promise<void> {
     const operations = await this.localState.getPendingOperations();
     if (operations.length === 0) return;
@@ -1005,16 +1125,24 @@ export class SyncManager {
     for (const op of operations) {
       try {
         if (op.type === 'upload') {
-          const file = this.app.vault.getAbstractFileByPath(op.path);
-          if (file instanceof TFile) {
-            await this.uploadFile(file);
-          }
+          // Core variant THROWS on transport failure (the wrapper would silently
+          // re-queue and this loop would then wrongly remove the op). It handles both
+          // vault-indexed files and adapter-only paths (.obsidian/*, hidden files) —
+          // an offline config edit is a valid pending upload without being a TFile.
+          await this.uploadByPathCore(op.path);
         } else if (op.type === 'delete') {
-          await this.deleteFile(op.path);
+          await this.deleteFileCore(op.path);
         }
         await this.localState.removePendingOperation(op.id);
       } catch (e) {
         console.error(`[VaultSync] Failed to process pending op:`, op, e);
+        op.retries = (op.retries ?? 0) + 1;
+        if (op.retries >= SyncManager.PENDING_OP_MAX_RETRIES) {
+          console.error(`[VaultSync] Dropping pending op after ${op.retries} attempts: ${op.type} ${op.path}`);
+          await this.localState.removePendingOperation(op.id);
+        } else {
+          await this.localState.addPendingOperation(op); // upsert with the bumped retry count
+        }
       }
     }
   }
@@ -1067,7 +1195,35 @@ export class SyncManager {
   }
 
   private async uploadByPath(path: string): Promise<void> {
-    if (this.isProcessingRemote) return;
+    try {
+      if (!this.isConnected()) {
+        // Only queue when there is actually something to send.
+        if (await this.hasUnsyncedContent(path)) await this.queuePendingOperation('upload', path);
+        return;
+      }
+      await this.uploadByPathCore(path);
+    } catch (e) {
+      console.error(`[VaultSync] uploadByPath failed for ${path}:`, e);
+      await this.queuePendingOperation('upload', path);
+    }
+  }
+
+  /** True when the local content at path differs from what this device last synced. */
+  private async hasUnsyncedContent(path: string): Promise<boolean> {
+    if (!SyncFilter.shouldSync(path)) return false;
+    const read = await this.fileOps.readBinary(path);
+    if (!read) return false;
+    const hash = await this.serverHash(path, read.content);
+    return (await this.localState.getFileHash(path)) !== hash;
+  }
+
+  /**
+   * Upload a path's current content. Conflict resolution (409) is handled here; any
+   * transport failure THROWS so callers (fire-and-forget wrapper vs pending-ops loop)
+   * decide how to queue/retry it.
+   */
+  private async uploadByPathCore(path: string): Promise<void> {
+    if (this.remoteWrites.has(path)) return;
     if (!SyncFilter.shouldSync(path)) return;
 
     const read = await this.fileOps.readBinary(path);
@@ -1077,11 +1233,6 @@ export class SyncManager {
     const hash = await this.serverHash(path, content);
     const existingHash = await this.localState.getFileHash(path);
     if (existingHash === hash) return;
-
-    if (!this.isConnected()) {
-      await this.queuePendingOperation('upload', path);
-      return;
-    }
 
     const baseSeq = await this.localState.getFileSeq(path);
     try {
@@ -1096,8 +1247,7 @@ export class SyncManager {
         await this.reconcileConflict(path, content, e.deleted);
         return;
       }
-      console.error(`[VaultSync] uploadByPath failed for ${path}:`, e);
-      await this.queuePendingOperation('upload', path);
+      throw e;
     }
   }
 
@@ -1112,27 +1262,26 @@ export class SyncManager {
     // instead of resurrecting it. This stops the "deleted folders keep coming back" loop.
     if (deleted) {
       console.warn(`[VaultSync] ${path} was deleted on server — removing local copy (no resurrection)`);
-      this.isProcessingRemote = true;
+      this.beginRemote(path);
       try {
-        await this.fileOps.deleteIfPresent(path);
-        await this.localState.deleteFileHash(path);
-        await this.fileOps.cleanupEmptyParentFolders(path);
-        this.fileWatcher.removeFromBaseline(path);
+        // The rejected local content is preserved below in the caller-independent way:
+        // applyRemoteDelete's edit-guard sees the unsynced content and keeps a copy.
+        await this.applyRemoteDelete(path);
       } catch (e) {
         console.error(`[VaultSync] Failed to honor remote deletion of ${path}:`, e);
       } finally {
-        this.isProcessingRemote = false;
+        this.endRemote(path);
       }
       return;
     }
 
     console.warn(`[VaultSync] Upload conflict for ${path} — adopting server version, preserving local copy`);
 
-    this.isProcessingRemote = true;
+    this.beginRemote(path);
     try {
       await this.downloadFile(path);
     } finally {
-      this.isProcessingRemote = false;
+      this.endRemote(path);
     }
 
     const serverContent = await this.fileOps.readBinary(path);
@@ -1162,6 +1311,7 @@ export class SyncManager {
       clearTimeout(timeout);
     }
     this.pendingChanges.clear();
+    this.remoteWrites.clear();
 
     this.disconnect();
     this.localState.close();

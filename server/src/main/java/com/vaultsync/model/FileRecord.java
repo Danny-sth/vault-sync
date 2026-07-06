@@ -15,7 +15,7 @@ import lombok.NoArgsConstructor;
 public class FileRecord {
 
     @Id
-    @Column(length = 1024)
+    @Column(length = 4096) // encrypted per-component paths are long; 1024 overflowed on deep trees
     private String path;
 
     @Column(length = 64)

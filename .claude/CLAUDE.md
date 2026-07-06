@@ -47,8 +47,7 @@ vault-sync/
 │   │   ├── config/                          # Security(static-token), WebSocket, Jackson, Web
 │   │   ├── controller/                      # FileController(/api/**), SyncController
 │   │   ├── service/                         # SyncService(getChangesSince/floor),
-│   │   │                                    #   FileStorageService, VaultWatcherService,
-│   │   │                                    #   DailyNoteScheduler
+│   │   │                                    #   FileStorageService, VaultWatcherService
 │   │   ├── repository/                      # FileRepository, TombstoneRepository,
 │   │   │                                    #   SyncMetaRepository (tombstone floor)
 │   │   ├── model/                           # FileRecord, SyncMessage, Tombstone, SyncMeta
@@ -61,7 +60,6 @@ vault-sync/
 │   │   │                                    #   vault-mcp-client.mjs — общий MCP-клиент+creds
 │   │   │                                    #   vault-cli.mjs — duq читает/пишет волт (E2EE)
 │   │   ├── commands/                        # whitelist shell: git-pull, git-status, vpn-russia
-│   ├── systemd/                             # daily-note .service/.timer (легаси; создание — в плагине)
 │   └── Dockerfile
 ├── plugin/                                  # Obsidian плагин (TypeScript)
 │   ├── main.ts / main.js                    # main.js едет СИНКОМ (с 2026-07-07); data.json — per-device
@@ -94,20 +92,30 @@ vault-sync/
   на VPS в `/root/vault-sync-key.txt` (для duq-инструментов). Сервер видит только шифр.
 - Клиент шифрует ДО отправки, расшифровывает ПОСЛЕ; sync и MCP гоняют только шифротекст.
 - На VPS аудит: всё в `/opt/obsidian-vault` (кроме `.vault-sync*`) — зашифровано, 0 плейнтекста.
+- ⚠️ Осознанный tradeoff: шифрование **конвергентное** (детерминированный nonce =
+  HMAC(key, path|plain)) — одинаковый (путь, контент) даёт одинаковый блоб. Это нужно
+  протоколу (стабильный blob-hash для dedup/конфликтов), но раскрывает серверу факт
+  равенства/изменения контента. Для GCM безопасно (nonce-reuse только на идентичном сообщении).
+- Защита от неверного ключа: full sync абортится, если >50% серверных путей не расшифровались
+  (иначе пустой serverFiles выглядел бы как «сервер всё удалил» и снёс бы локальный волт);
+  VSE-блоб с упавшим GCM-тегом = громкая ошибка ключа, а не тихий скип.
 
 **Sync — инкрементальная дельта:** клиент шлёт сохранённый `lastSeq`, сервер отдаёт
 `getChangesSince` (только seq>lastSeq) с флагом `fullState=false`, либо полный стейт
 (`fullState=true`) если `lastSeq < tombstone-floor` (max seq вычищенных по TTL tombstone'ов,
 в таблице `sync_meta`) или lastSeq=0. **Никогда не удалять файл, который сервер держит живым**
 (absence ≠ deletion — это case загрузки). Конфиг-карты (`folder-icons.json`/`file-icons.json`)
-мержатся union'ом при download (не теряют ключи).
+мержатся union'ом при download НА КЛИЕНТЕ (сервер контента не видит — E2EE).
+Удаление с сервера при несинкнутой локальной правке сохраняет «(conflict …)»-копию;
+lastSeq не перепрыгивает через упавшие загрузки (retry в следующей дельте); тихий
+STOMP-реконнект сам догоняется (incremental + pending ops).
 
 ## Дейли-заметки
 
 Создание сегодняшней заметки и архивация прошлых месяцев (`Daily/<Month>.<Year>/`, иконка 📦) —
 **в плагине** (`plugin/daily/DailyNotes.ts`): под E2EE сервер zero-knowledge и не может ни
-написать шифрованную заметку, ни увидеть имя `Daily/`. Серверный `DailyNoteScheduler` отключён
-(не бин), systemd `vault-sync-daily-note.timer` — легаси. Плагин гоняет проход на старте
+написать шифрованную заметку, ни увидеть имя `Daily/`. Серверный `DailyNoteScheduler` и
+systemd `vault-sync-daily-note.*` УДАЛЕНЫ (аудит 2026-07-07). Плагин гоняет проход на старте
 и раз в час (rollover при незакрытом Obsidian).
 
 ⚰️ 2026-07-07: фича folder-sync (зеркало workspace ↔ `cortex/`) ВЫРЕЗАНА вместе с openclaw:

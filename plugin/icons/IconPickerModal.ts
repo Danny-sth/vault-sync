@@ -94,6 +94,7 @@ export class IconPickerModal extends Modal {
       { type: 'emoji', label: '😀 Emoji' },
       { type: 'lucide', label: '🔲 Lucide' },
       { type: 'brand', label: '🏢 Brand' },
+      { type: 'dev', label: '👨‍💻 Dev' },
     ];
 
     for (const tab of tabs) {

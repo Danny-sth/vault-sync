@@ -33,6 +33,14 @@ public class SyncService {
     private final TombstoneRepository tombstoneRepository;
     private final SyncMetaRepository syncMetaRepository;
     private final SimpMessagingTemplate messagingTemplate;
+    private final FileStorageService fileStorageService;
+    /**
+     * Programmatic transactions for the indexing helpers: they are invoked internally
+     * (reconcile → private methods), where {@code @Transactional} would be silently
+     * ignored (self-invocation bypasses the Spring proxy). The template keeps
+     * delete+tombstone atomic without dragging a whole vault walk into one transaction.
+     */
+    private final org.springframework.transaction.support.TransactionTemplate transactionTemplate;
 
     /** sync_meta key holding the highest seq among tombstones already pruned by TTL. */
     private static final String META_TOMBSTONE_FLOOR = "tombstoneFloorSeq";
@@ -70,8 +78,17 @@ public class SyncService {
             }
         }
         for (String pattern : EXCLUDED_PATTERNS) {
-            if (path.contains(pattern)) {
-                return true;
+            // Word-boundary match, not bare contains(): ".tmp" must exclude "x.tmp" and
+            // "x.tmp/y" but NOT "my.tmpl.md" or "a.temperature.md" (same rule as the
+            // plugin's SyncFilter — a bare substring silently dropped legit files).
+            int idx = path.indexOf(pattern);
+            while (idx != -1) {
+                int after = idx + pattern.length();
+                char next = after < path.length() ? path.charAt(after) : '\0';
+                if (next == '\0' || next == '.' || next == '/') {
+                    return true;
+                }
+                idx = path.indexOf(pattern, idx + 1);
             }
         }
         return false;
@@ -92,7 +109,8 @@ public class SyncService {
         }
     }
 
-    @Transactional(readOnly = true)
+    // NB: no @Transactional here — it's called from init() through `this` (self-invocation),
+    // where the annotation is silently ignored anyway; these are two plain reads.
     protected void initializeSequenceCounter() {
         long maxFileSeq = fileRepository.findMaxSeq();
         long maxTombstoneSeq = tombstoneRepository.findMaxSeq();
@@ -171,47 +189,16 @@ public class SyncService {
     }
 
     @Transactional
-    public SyncMessage.FileChanged processFileChange(String path, String hash, long mtime, long size, String deviceId) {
-        long seq = nextSeq();
-
-        tombstoneRepository.deleteById(path);
-
-        FileRecord record = FileRecord.builder()
-                .path(path)
-                .hash(hash)
-                .mtime(mtime)
-                .size(size)
-                .seq(seq)
-                .lastModifiedBy(deviceId)
-                .build();
-        fileRepository.save(record);
-
-        log.info("File changed: {} by {} (seq={})", path, deviceId, seq);
-
-        return SyncMessage.FileChanged.builder()
-                .path(path)
-                .hash(hash)
-                .mtime(mtime)
-                .size(size)
-                .seq(seq)
-                .deviceId(deviceId)
-                .build();
-    }
-
-    @Transactional
     public SyncMessage.FileDeleted processFileDelete(String path, String deviceId) {
         long seq = nextSeq();
 
-        fileRepository.deleteById(path);
-
+        // Disk removal + DB row + empty-parent cleanup all live in FileStorageService —
+        // one owner for physical storage, no duplicated cleanup logic here.
         try {
-            Path filePath = Paths.get(storagePath).resolve(path);
-            if (Files.deleteIfExists(filePath)) {
-                log.debug("Physically deleted file: {}", path);
-                cleanupEmptyParentDirectories(filePath.getParent());
-            }
+            fileStorageService.delete(path);
         } catch (IOException e) {
             log.warn("Could not delete file from disk: {} - {}", path, e.getMessage());
+            fileRepository.deleteById(path); // still drop the index entry
         }
 
         Tombstone tombstone = Tombstone.builder()
@@ -229,32 +216,6 @@ public class SyncService {
                 .seq(seq)
                 .deviceId(deviceId)
                 .build();
-    }
-
-    private void cleanupEmptyParentDirectories(Path directory) {
-        Path root = Paths.get(storagePath);
-        Path current = directory;
-
-        while (current != null && !current.equals(root) && current.startsWith(root)) {
-            try {
-                if (Files.isDirectory(current) && isDirectoryEmpty(current)) {
-                    Files.delete(current);
-                    log.debug("Deleted empty directory: {}", current);
-                    current = current.getParent();
-                } else {
-                    break;
-                }
-            } catch (IOException e) {
-                log.debug("Could not delete directory {}: {}", current, e.getMessage());
-                break;
-            }
-        }
-    }
-
-    private boolean isDirectoryEmpty(Path directory) throws IOException {
-        try (var entries = Files.list(directory)) {
-            return entries.findFirst().isEmpty();
-        }
     }
 
     public SyncMessage.SyncResponse getFullState() {
@@ -428,14 +389,16 @@ public class SyncService {
 
     private void saveAndBroadcastChange(String relativePath, String hash, long mtime, long size) {
         long seq = nextSeq();
-        fileRepository.save(FileRecord.builder()
+        // Persist atomically first, broadcast only after the commit — a client reacting
+        // to the broadcast must never observe pre-commit state.
+        transactionTemplate.executeWithoutResult(tx -> fileRepository.save(FileRecord.builder()
                 .path(relativePath)
                 .hash(hash)
                 .mtime(mtime)
                 .size(size)
                 .seq(seq)
                 .lastModifiedBy("filesystem")
-                .build());
+                .build()));
         messagingTemplate.convertAndSend("/topic/sync", SyncMessage.FileChanged.builder()
                 .path(relativePath)
                 .hash(hash)
@@ -451,13 +414,17 @@ public class SyncService {
             return;
         }
         long seq = nextSeq();
-        fileRepository.deleteById(relativePath);
-        tombstoneRepository.save(Tombstone.builder()
-                .path(relativePath)
-                .deletedAt(System.currentTimeMillis())
-                .deletedBy(deletedBy)
-                .seq(seq)
-                .build());
+        // delete + tombstone must be atomic: a crash in between would leave the file
+        // neither live nor tombstoned, and a device could then misread its absence.
+        transactionTemplate.executeWithoutResult(tx -> {
+            fileRepository.deleteById(relativePath);
+            tombstoneRepository.save(Tombstone.builder()
+                    .path(relativePath)
+                    .deletedAt(System.currentTimeMillis())
+                    .deletedBy(deletedBy)
+                    .seq(seq)
+                    .build());
+        });
         messagingTemplate.convertAndSend("/topic/sync", SyncMessage.FileDeleted.builder()
                 .path(relativePath)
                 .seq(seq)
@@ -472,14 +439,18 @@ public class SyncService {
      * an inotify-queue overflow. Streams hashes, pre-filtered by size+mtime, so it never
      * loads a whole file into the heap.
      */
+    // NB: deliberately NOT @Transactional — one transaction spanning a full vault walk
+    // (with per-file stream hashing) would pin a DB connection and the persistence
+    // context for minutes. The indexing helpers create their own short transactions.
     @Scheduled(fixedRateString = "${vault-sync.reconcile-interval-ms:300000}")
-    @Transactional
     public void reconcile() {
         Path root = Paths.get(storagePath);
         if (!Files.exists(root)) {
             return;
         }
 
+        // Everything indexed after this point raced the walk — leave it to the next pass.
+        final long walkStartSeq = currentSeq();
         java.util.Set<String> diskFiles = new java.util.HashSet<>();
 
         try {
@@ -510,144 +481,25 @@ public class SyncService {
             });
 
             for (FileRecord dbFile : fileRepository.findAll()) {
-                if (!diskFiles.contains(dbFile.getPath())) {
-                    indexDeletionInternal(dbFile.getPath(), "filesystem");
+                if (diskFiles.contains(dbFile.getPath())) {
+                    continue;
                 }
+                // Race guards against tombstoning a file that was uploaded DURING the walk
+                // (the walk missed it on disk, but findAll already sees its record — without
+                // these checks the reconciler would broadcast a bogus deletion and every
+                // device would drop the freshly-uploaded file):
+                //  1) skip records newer than the walk start;
+                //  2) re-check the disk at decision time.
+                if (dbFile.getSeq() > walkStartSeq) {
+                    continue;
+                }
+                if (Files.exists(root.resolve(dbFile.getPath()))) {
+                    continue;
+                }
+                indexDeletionInternal(dbFile.getPath(), "filesystem");
             }
         } catch (IOException e) {
             log.error("Error during reconciliation scan", e);
         }
-
-        // syncEmptyFolderMarkers() intentionally NOT called under E2EE: it writes
-        // real-named ".folder-marker" files, which are incompatible with the encrypted
-        // path scheme (clients can't decrypt the path and skip them). Empty-folder sync
-        // is handled client-side (the plugin manages its own markers at encrypted paths).
-    }
-
-    private static final String FOLDER_MARKER = ".folder-marker";
-
-    /**
-     * Ensure empty folders have .folder-marker files and non-empty folders don't.
-     */
-    private void syncEmptyFolderMarkers() {
-        log.debug("syncEmptyFolderMarkers() started");
-        Path root = Paths.get(storagePath);
-        if (!Files.exists(root)) {
-            log.debug("syncEmptyFolderMarkers(): root path doesn't exist");
-            return;
-        }
-
-        AtomicInteger markersCreated = new AtomicInteger(0);
-        AtomicInteger markersDeleted = new AtomicInteger(0);
-
-        try {
-            Files.walkFileTree(root, new SimpleFileVisitor<>() {
-                @Override
-                public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                    String name = dir.getFileName() != null ? dir.getFileName().toString() : "";
-                    if (shouldExcludeDir(name)) {
-                        return FileVisitResult.SKIP_SUBTREE;
-                    }
-                    return FileVisitResult.CONTINUE;
-                }
-
-                @Override
-                public FileVisitResult postVisitDirectory(Path dir, IOException exc) {
-                    if (dir.equals(root)) {
-                        return FileVisitResult.CONTINUE;
-                    }
-
-                    String relativePath = root.relativize(dir).toString().replace("\\", "/");
-                    if (shouldExcludePath(relativePath + "/")) {
-                        return FileVisitResult.CONTINUE;
-                    }
-
-                    try {
-                        Path markerPath = dir.resolve(FOLDER_MARKER);
-                        String markerRelativePath = root.relativize(markerPath).toString().replace("\\", "/");
-
-                        long realFileCount;
-                        long subdirCount;
-                        try (var stream = Files.list(dir)) {
-                            var entries = stream.toList();
-                            realFileCount = entries.stream()
-                                .filter(p -> Files.isRegularFile(p) && !p.getFileName().toString().equals(FOLDER_MARKER))
-                                .count();
-                            subdirCount = entries.stream()
-                                .filter(Files::isDirectory)
-                                .count();
-                        }
-
-                        boolean markerExists = Files.exists(markerPath);
-
-                        if (realFileCount == 0 && subdirCount == 0) {
-                            // Do NOT recreate a marker that was deliberately deleted (live tombstone),
-                            // otherwise the server resurrects empty folders the user just removed.
-                            // Mirrors the client's syncEmptyFolderMarkers tombstone check.
-                            if (!markerExists && !tombstoneRepository.existsById(markerRelativePath)) {
-                                Files.createFile(markerPath);
-                                log.info("Created folder marker: {}", markerRelativePath);
-
-                                long seq = nextSeq();
-                                String hash = HashUtil.sha256(new byte[0]);
-                                FileRecord record = FileRecord.builder()
-                                    .path(markerRelativePath)
-                                    .hash(hash)
-                                    .mtime(System.currentTimeMillis())
-                                    .size(0)
-                                    .seq(seq)
-                                    .lastModifiedBy("server")
-                                    .build();
-                                fileRepository.save(record);
-
-                                SyncMessage.FileChanged changeMsg = SyncMessage.FileChanged.builder()
-                                    .path(markerRelativePath)
-                                    .hash(hash)
-                                    .mtime(System.currentTimeMillis())
-                                    .size(0)
-                                    .seq(seq)
-                                    .deviceId("server")
-                                    .build();
-                                messagingTemplate.convertAndSend("/topic/sync", changeMsg);
-                                markersCreated.incrementAndGet();
-                            }
-                        } else if (markerExists) {
-                            Files.delete(markerPath);
-                            fileRepository.deleteById(markerRelativePath);
-
-                            long seq = nextSeq();
-                            Tombstone tombstone = Tombstone.builder()
-                                .path(markerRelativePath)
-                                .deletedAt(System.currentTimeMillis())
-                                .deletedBy("server")
-                                .seq(seq)
-                                .build();
-                            tombstoneRepository.save(tombstone);
-
-                            SyncMessage.FileDeleted deleteMsg = SyncMessage.FileDeleted.builder()
-                                .path(markerRelativePath)
-                                .seq(seq)
-                                .deviceId("server")
-                                .build();
-                            messagingTemplate.convertAndSend("/topic/sync", deleteMsg);
-
-                            log.info("Removed folder marker: {}", markerRelativePath);
-                            markersDeleted.incrementAndGet();
-                        }
-                    } catch (IOException e) {
-                        log.error("Error syncing folder marker for {}: {}", dir, e.getMessage());
-                    }
-
-                    return FileVisitResult.CONTINUE;
-                }
-            });
-        } catch (IOException e) {
-            log.error("Error syncing folder markers", e);
-        }
-
-        if (markersCreated.get() > 0 || markersDeleted.get() > 0) {
-            log.info("Folder markers sync: {} created, {} deleted", markersCreated.get(), markersDeleted.get());
-        }
-        log.debug("syncEmptyFolderMarkers() finished");
     }
 }

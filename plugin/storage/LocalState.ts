@@ -155,7 +155,9 @@ export class LocalState {
 
     return new Promise((resolve, reject) => {
       const tx = this.db!.transaction(STORE_PENDING, 'readwrite');
-      const request = tx.objectStore(STORE_PENDING).add(op);
+      // put (upsert), not add: op ids are deterministic (`type:path`), so re-queueing
+      // the same failed operation updates it in place instead of piling up duplicates.
+      const request = tx.objectStore(STORE_PENDING).put(op);
 
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve();

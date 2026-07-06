@@ -567,8 +567,6 @@ export class PdfProgress {
 
   private async save(path: string, page: number, total = 0): Promise<void> {
     if (this.lastSaved.get(path) === page) return;
-    this.lastSaved.set(path, page);
-    this.notifySaved(page, total);
     try {
       await this.ensureDir();
       const filePath = progressFilePath(path);
@@ -579,6 +577,11 @@ export class PdfProgress {
       } else {
         await this.app.vault.create(filePath, content);
       }
+      // Only mark saved (and show the notice) AFTER the write succeeded — the old
+      // pre-write marking meant a failed write showed «Закладка» and then silently
+      // refused to retry that page forever.
+      this.lastSaved.set(path, page);
+      this.notifySaved(page, total);
     } catch (e) {
       console.error('[VaultSync][pdf] failed to save progress:', e);
     }

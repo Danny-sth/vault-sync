@@ -28,15 +28,27 @@ import java.security.Principal;
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     /**
+     * STOMP frame ceiling. The full-state sync response is ONE frame listing every file
+     * and tombstone; on a large vault (long encrypted paths) it can pass 4MB, and an
+     * oversized frame is dropped SILENTLY — the stale device just never syncs. So the
+     * limit is config (prod raises it) instead of a hardcoded 4MB.
+     */
+    @Value("${vault-sync.ws-message-size-bytes:16777216}")
+    private int wsMessageSizeBytes;
+
+    @Value("${vault-sync.ws-session-idle-timeout-ms:600000}")
+    private long wsSessionIdleTimeoutMs;
+
+    /**
      * Configure native WebSocket container buffer sizes.
      * Required for Tomcat 11+ to handle large STOMP messages.
      */
     @Bean
     public ServletServerContainerFactoryBean createWebSocketContainer() {
         ServletServerContainerFactoryBean container = new ServletServerContainerFactoryBean();
-        container.setMaxTextMessageBufferSize(4 * 1024 * 1024);
-        container.setMaxBinaryMessageBufferSize(4 * 1024 * 1024);
-        container.setMaxSessionIdleTimeout(600000L);
+        container.setMaxTextMessageBufferSize(wsMessageSizeBytes);
+        container.setMaxBinaryMessageBufferSize(wsMessageSizeBytes);
+        container.setMaxSessionIdleTimeout(wsSessionIdleTimeoutMs);
         return container;
     }
 
@@ -72,8 +84,8 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void configureWebSocketTransport(WebSocketTransportRegistration registration) {
-        registration.setSendBufferSizeLimit(4 * 1024 * 1024);
-        registration.setMessageSizeLimit(4 * 1024 * 1024);
+        registration.setSendBufferSizeLimit(wsMessageSizeBytes);
+        registration.setMessageSizeLimit(wsMessageSizeBytes);
         registration.setSendTimeLimit(120 * 1000);
     }
 

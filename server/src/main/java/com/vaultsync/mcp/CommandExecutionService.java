@@ -4,9 +4,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CompletableFuture;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -14,7 +15,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 /**
  * Service for executing pre-approved shell commands.
@@ -78,12 +78,13 @@ public class CommandExecutionService {
 
         Process process = pb.start();
 
-        StringBuilder stdout = new StringBuilder();
-        StringBuilder stderr = new StringBuilder();
+        // Drain stdout/stderr CONCURRENTLY with waitFor. A child writing more than the
+        // ~64KB pipe buffer blocks on write() until someone reads — draining only after
+        // waitFor deadlocks such commands into a false "timed out".
+        CompletableFuture<String> stdoutFuture = CompletableFuture.supplyAsync(() -> readFully(process.getInputStream()));
+        CompletableFuture<String> stderrFuture = CompletableFuture.supplyAsync(() -> readFully(process.getErrorStream()));
 
-        try (BufferedReader outReader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-             BufferedReader errReader = new BufferedReader(new InputStreamReader(process.getErrorStream()))) {
-
+        try {
             boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
 
             if (!finished) {
@@ -91,25 +92,28 @@ public class CommandExecutionService {
                 throw new IOException("Command timed out after " + timeoutSeconds + " seconds");
             }
 
-            outReader.lines().forEach(line -> stdout.append(line).append("\n"));
-            errReader.lines().forEach(line -> stderr.append(line).append("\n"));
-
             int exitCode = process.exitValue();
+            // The process exited, so its pipes are at EOF — these joins return promptly.
+            String stdout = stdoutFuture.join();
+            String stderr = stderrFuture.join();
 
             log.info("Command '{}' completed with exit code {}", commandName, exitCode);
 
-            return new ExecutionResult(
-                    exitCode == 0,
-                    commandName,
-                    exitCode,
-                    stdout.toString(),
-                    stderr.toString()
-            );
+            return new ExecutionResult(exitCode == 0, commandName, exitCode, stdout, stderr);
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             process.destroyForcibly();
             throw new IOException("Command execution interrupted", e);
+        }
+    }
+
+    /** Read an entire process stream as UTF-8; a read failure yields what was captured. */
+    private static String readFully(InputStream in) {
+        try (in) {
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            return "";
         }
     }
 

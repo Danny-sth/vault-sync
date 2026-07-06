@@ -39,6 +39,17 @@ public class FileController {
     @Value("${vault-sync.storage-path}")
     private String storagePath;
 
+    /** Upper bound for a single uploaded file; also caps chunk offsets so a bogus
+     *  offset can't create a multi-terabyte sparse temp file. */
+    @Value("${vault-sync.max-upload-bytes:2147483648}")
+    private long maxUploadBytes;
+
+    /** Per-path monitors serialising concurrent finalizations of the SAME path — without
+     *  this two devices committing one path simultaneously both pass the optimistic
+     *  concurrency check and the loser's version is silently clobbered (only the version
+     *  backup would save it). Bounded by the number of distinct vault paths. */
+    private final java.util.concurrent.ConcurrentHashMap<String, Object> pathLocks = new java.util.concurrent.ConcurrentHashMap<>();
+
     /**
      * Streamed chunked upload (parallel-safe). The client sends the encrypted blob in
      * binary chunks (octet-stream), each written at its byte offset so chunks may arrive
@@ -53,6 +64,9 @@ public class FileController {
             @RequestHeader("X-Chunk-Offset") long offset) {
         if (!uploadId.matches("[A-Za-z0-9_.-]{1,128}")) {
             return ResponseEntity.badRequest().body(Map.of("error", "invalid uploadId"));
+        }
+        if (offset < 0 || offset + chunk.length > maxUploadBytes) {
+            return ResponseEntity.badRequest().body(Map.of("error", "chunk offset out of bounds"));
         }
         java.nio.file.Path tmp = Paths.get(storagePath, UPLOADS_DIR, uploadId);
         try {
@@ -89,18 +103,22 @@ public class FileController {
             return ResponseEntity.badRequest().body(Map.of("error", "invalid uploadId"));
         }
         java.nio.file.Path tmp = Paths.get(storagePath, UPLOADS_DIR, uploadId);
+        // Serialise concurrent finalizations of the same path (see pathLocks).
+        synchronized (pathLocks.computeIfAbsent(path, k -> new Object())) {
         try {
             if (!Files.exists(tmp)) {
                 return ResponseEntity.badRequest().body(Map.of("error", "no chunks for uploadId"));
             }
-            byte[] content = Files.readAllBytes(tmp);
-            Files.deleteIfExists(tmp);
+            // NOTE: the assembled upload is committed straight from the temp file — hashed by
+            // streaming and MOVED into place, never read into the heap (a large attachment
+            // would otherwise OOM the 512MB JVM). Reject paths must consume the temp file too.
             com.vaultsync.model.Tombstone tomb = syncService.getTombstone(path);
             boolean clearTombstoneAfterStore = false;
             if (tomb != null) {
                 if (baseSeq != 0 && baseSeq < tomb.getSeq()) {
                     log.warn("Resurrection blocked for {} by {}: baseSeq={} < tombstone seq={} — stale re-push, rejected",
                             path, deviceId, baseSeq, tomb.getSeq());
+                    Files.deleteIfExists(tmp);
                     return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
                             "error", "deleted", "deletedSeq", tomb.getSeq()));
                 }
@@ -109,10 +127,11 @@ public class FileController {
 
             FileRecord existing = fileStorageService.getFileInfo(path);
             if (existing != null && baseHash != null && !baseHash.isBlank()) {
-                String incomingHash = HashUtil.sha256(content);
+                String incomingHash = HashUtil.sha256(tmp);
                 if (!existing.getHash().equals(incomingHash) && !existing.getHash().equals(baseHash)) {
                     log.warn("Upload conflict for {} by {}: base={} but server={} — rejected",
                             path, deviceId, baseHash, existing.getHash());
+                    Files.deleteIfExists(tmp);
                     return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
                             "error", "conflict",
                             "currentHash", existing.getHash(),
@@ -123,7 +142,7 @@ public class FileController {
             }
 
             long seq = syncService.nextSeq();
-            FileRecord record = fileStorageService.storeBytes(path, content, hash, deviceId, seq, mtime);
+            FileRecord record = fileStorageService.storeFromTempFile(path, tmp, hash, deviceId, seq, mtime);
 
             if (clearTombstoneAfterStore) {
                 syncService.clearTombstone(path);
@@ -140,6 +159,7 @@ public class FileController {
         } catch (IOException e) {
             log.error("Failed to upload file (binary): {}", path, e);
             return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
         }
     }
 

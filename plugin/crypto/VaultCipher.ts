@@ -1,4 +1,4 @@
-import { deriveKey, encryptBlob, decryptBlob, encryptPath, decryptPath } from './VaultCrypto';
+import { deriveKey, encryptBlob, decryptBlob, encryptPath, decryptPath, BLOB_MAGIC } from './VaultCrypto';
 
 /**
  * Sync-engine-facing wrapper around {@link VaultCrypto}.
@@ -49,6 +49,18 @@ export class VaultCipher {
   /** Encrypted server path → real vault path. */
   decryptPath(path: string): string {
     return decryptPath(this.key, path);
+  }
+
+  /**
+   * True when the bytes carry the VSE blob header — i.e. they ARE an encrypted blob.
+   * Lets callers distinguish "legacy plaintext from a non-encrypting writer" (not a
+   * blob — safe to skip) from "a real blob we failed to decrypt" (wrong key or
+   * corruption — must be surfaced, silently skipping would mask a key mismatch).
+   */
+  static isEncryptedBlob(bytes: ArrayBuffer): boolean {
+    const u8 = new Uint8Array(bytes);
+    return u8.byteLength >= BLOB_MAGIC.length
+      && u8[0] === BLOB_MAGIC[0] && u8[1] === BLOB_MAGIC[1] && u8[2] === BLOB_MAGIC[2];
   }
 
   /**

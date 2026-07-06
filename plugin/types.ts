@@ -43,19 +43,6 @@ export interface TombstoneInfo {
   seq: number;
 }
 
-export interface FileChangeRequest {
-  path: string;
-  hash: string;
-  mtime: number;
-  size: number;
-  deviceId: string;
-}
-
-export interface FileDeleteRequest {
-  path: string;
-  deviceId: string;
-}
-
 export interface SyncRequest {
   requestId: string;
   lastSeq: number;
