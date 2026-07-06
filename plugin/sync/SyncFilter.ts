@@ -21,10 +21,11 @@ export class SyncFilter {
     '.obsidian/icons/',
     '.obsidian/file-recovery/',
     '.obsidian/cache',
-    // Never sync this plugin's own code/manifest. Syncing them lets a stale device
-    // delete or conflict the running plugin's files (manifest.json went missing →
-    // the plugin failed to load). It is deployed out-of-band (per device), not via sync.
-    '.obsidian/plugins/vault-sync/',
+    // NOTE: this plugin's own dir (.obsidian/plugins/vault-sync/) IS synced again
+    // (2026-07-07, Danny's call): the incident that got it excluded — a stale device
+    // deleting manifest.json of the running plugin — predates tombstone-floor and
+    // "absence ≠ deletion", which now prevent that class of loss. main.js/manifest
+    // ride sync like any file; only data.json below stays per-device.
   ];
 
   /**
