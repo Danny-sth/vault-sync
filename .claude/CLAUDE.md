@@ -64,7 +64,7 @@ vault-sync/
 │   ├── systemd/                             # daily-note .service/.timer (легаси; создание — в плагине)
 │   └── Dockerfile
 ├── plugin/                                  # Obsidian плагин (TypeScript)
-│   ├── main.ts / main.js                    # main.js деплоится out-of-band (adb/cp), НЕ синком
+│   ├── main.ts / main.js                    # main.js едет СИНКОМ (с 2026-07-07); data.json — per-device
 │   ├── crypto/                              # VaultCrypto, VaultCipher (AES-256-GCM, путь+контент)
 │   ├── sync/                                # SyncManager(incremental+merge), StompClient,
 │   │                                        #   ConflictResolver, FileWatcher, FileOperationService,
