@@ -392,15 +392,21 @@ export class PdfProgress {
       // ends in 'pointercancel' once Obsidian's drawer takes over, so we track
       // the last position ourselves and treat cancel like an up.
       this.tapTarget = container;
-      const finish = (x: number, y: number) => {
+      const finish = (x: number, y: number, cancelled: boolean) => {
         const s = this.tapStart;
         this.tapStart = null;
         this.tapLast = null;
         if (!s) return;
         const dx = x - s.x;
         const dy = y - s.y;
-        if (Math.hypot(dx, dy) < 12 && Date.now() - s.t < 400) return this.showUi(); // tap
-        if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy)) this.showUi(); // horizontal swipe
+        // TAP — only on a real pointerup. A CANCELLED gesture is by definition not a
+        // tap: the browser fires pointercancel the moment native scrolling claims the
+        // touch, typically after just a few px — treating that as a tap made every
+        // reading scroll pop the chrome back in.
+        if (!cancelled && Math.hypot(dx, dy) < 12 && Date.now() - s.t < 400) return this.showUi();
+        // HORIZONTAL swipe (drawer / navigation) — requires clear horizontal dominance
+        // (1.5×) so a slightly diagonal reading flick never counts.
+        if (Math.abs(dx) >= 48 && Math.abs(dx) > Math.abs(dy) * 1.5) this.showUi();
       };
       this.onPointerDown = (e: PointerEvent) => {
         if (!e.isPrimary) return; // ignore pinch-zoom fingers
@@ -411,11 +417,11 @@ export class PdfProgress {
         if (e.isPrimary && this.tapStart) this.tapLast = { x: e.clientX, y: e.clientY };
       };
       this.onPointerUp = (e: PointerEvent) => {
-        if (e.isPrimary) finish(e.clientX, e.clientY);
+        if (e.isPrimary) finish(e.clientX, e.clientY, false);
       };
       this.onPointerCancel = () => {
         const last = this.tapLast;
-        if (last) finish(last.x, last.y);
+        if (last) finish(last.x, last.y, true);
         else this.tapStart = null;
       };
       container.addEventListener('pointerdown', this.onPointerDown, true);

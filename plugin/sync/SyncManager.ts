@@ -187,7 +187,12 @@ export class SyncManager {
     return this.stompClient.isConnected();
   }
 
+  /** True after destroy(): every late async callback (zombie STOMP client from a
+   *  plugin reload, in-flight timer) must become a no-op — the IndexedDB is closed. */
+  private destroyed = false;
+
   private handleConnectionChange(state: ConnectionState): void {
+    if (this.destroyed) return;
     const wasConnected = this.connectionState === 'connected';
     this.connectionState = state;
 
@@ -640,6 +645,7 @@ export class SyncManager {
   }
 
   async requestFullSync(): Promise<void> {
+    if (this.destroyed) return;
     if (!this.isConnected()) {
       this.status.error('не подключено');
       return;
@@ -682,6 +688,7 @@ export class SyncManager {
    * "indexing" churn.
    */
   async requestIncrementalSync(): Promise<void> {
+    if (this.destroyed) return;
     if (!this.isConnected()) {
       this.status.error('не подключено');
       return;
@@ -1119,6 +1126,7 @@ export class SyncManager {
   private static readonly PENDING_OP_MAX_RETRIES = 20;
 
   private async processPendingOperations(): Promise<void> {
+    if (this.destroyed) return;
     const operations = await this.localState.getPendingOperations();
     if (operations.length === 0) return;
 
@@ -1305,6 +1313,7 @@ export class SyncManager {
   }
 
   destroy(): void {
+    this.destroyed = true;
     this.fileWatcher.stop();
 
     for (const timeout of this.pendingChanges.values()) {

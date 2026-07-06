@@ -193,8 +193,18 @@ export class StompClient {
     this.subscriptions = [];
 
     if (this.client) {
-      this.client.deactivate();
+      const dying = this.client;
       this.client = null;
+      // Neutralise the callbacks BEFORE deactivating: deactivate() is async, and a
+      // client mid-handshake can still fire onConnect afterwards. On a plugin reload
+      // that zombie resurrected the OLD SyncManager (closed IndexedDB) and spammed
+      // "Database not initialized" / "unknown requestId" errors.
+      dying.onConnect = () => {};
+      dying.onDisconnect = () => {};
+      dying.onStompError = () => {};
+      dying.onWebSocketError = () => {};
+      dying.onWebSocketClose = () => {};
+      void dying.deactivate();
     }
 
     this.connectionHandler?.('disconnected');
