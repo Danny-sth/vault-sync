@@ -10,10 +10,7 @@ import { readdirSync, statSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { deriveKey, encryptBlob, decryptBlob, isBlob } from './vault-crypto.mjs';
 
-// cortex/ is duq/openclaw's live plaintext workspace — it reads/writes those files
-// directly, so encrypting them would break duq. Left as plaintext; device clients skip
-// what they can't decrypt (see SyncManager.undecryptable).
-const EXCLUDED_DIRS = new Set(['.git', '.idea', '.smart-env', 'node_modules', '.vault-sync-versions', '.trash', 'cortex']);
+const EXCLUDED_DIRS = new Set(['.git', '.idea', '.smart-env', 'node_modules', '.vault-sync-versions', '.trash']);
 const EXCLUDED_NAMES = new Set(['.DS_Store', 'Thumbs.db', '.folder-marker']);
 
 const vaultDir = process.argv[2];

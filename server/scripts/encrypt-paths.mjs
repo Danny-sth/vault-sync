@@ -2,14 +2,14 @@
 // One-time path migration: rename every vault file from its real path to the encrypted
 // path (component-wise, base32). Content blobs are NOT touched (their AAD is the real path,
 // which clients still know). Idempotent: a path that already decrypts is skipped. Excludes
-// duq's plaintext workspace (cortex) and service dirs.
+// service dirs.
 //
 //   VAULT_PASSPHRASE=.. VAULT_SALT_B64=.. node encrypt-paths.mjs <vaultDir> [--dry-run]
 import { readdirSync, statSync, renameSync, mkdirSync, rmdirSync } from 'node:fs';
 import { join, relative, dirname, sep } from 'node:path';
 import { deriveKey, encryptPath, decryptPath } from './vault-crypto.mjs';
 
-const EXCLUDED_DIRS = new Set(['.git', '.idea', '.smart-env', 'node_modules', '.vault-sync-versions', '.vault-sync-uploads', '.trash', 'cortex']);
+const EXCLUDED_DIRS = new Set(['.git', '.idea', '.smart-env', 'node_modules', '.vault-sync-versions', '.vault-sync-uploads', '.trash']);
 const EXCLUDED_NAMES = new Set(['.DS_Store', 'Thumbs.db', '.folder-marker']);
 
 const vaultDir = process.argv[2];

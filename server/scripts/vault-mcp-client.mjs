@@ -1,4 +1,4 @@
-// Shared E2EE-vault MCP client for the server-side Node tools (vault-cli, folder-sync).
+// Shared E2EE-vault MCP client for the server-side Node tools (vault-cli).
 // One place for: credential resolution + the minimal MCP streamable-HTTP transport.
 // Crypto (encrypt/decrypt path & blob) stays in vault-crypto.mjs; callers import that directly.
 import { readFileSync, existsSync } from 'node:fs';

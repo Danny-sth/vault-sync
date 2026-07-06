@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Encrypted Obsidian-vault CLI for duq (openclaw). Works THROUGH the vault MCP server
+// Encrypted Obsidian-vault CLI for duq. Works THROUGH the vault MCP server
 // (get_blob/put_blob/list_blobs/delete_blob) — duq treats this as the Obsidian vault.
 // Content and paths are encrypted client-side with the vault key, so the zero-knowledge
 // server only ever sees ciphertext, and anything duq writes syncs to Denis's devices.

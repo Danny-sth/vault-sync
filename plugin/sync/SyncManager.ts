@@ -32,7 +32,7 @@ export class SyncManager {
   private cipher: VaultCipher | null = null;
 
   // Paths whose server bytes are NOT a VSE blob (plaintext written by a non-encrypting
-  // server-side process, e.g. duq/openclaw writing into cortex/). They can't be decrypted
+  // server-side process, e.g. a legacy server-side writer). They can't be decrypted
   // with the vault key, so we skip them once instead of failing+retrying every sync. They
   // simply don't appear on this device until that writer encrypts them.
   private readonly undecryptable = new Set<string>();

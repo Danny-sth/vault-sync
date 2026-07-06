@@ -27,7 +27,7 @@ import java.io.IOException;
  *
  * MCP endpoints (`/mcp/**`, `/sse`) require a static bearer token
  * (`vault-sync.mcp-token`) — same model as the sync REST API. The token does not
- * expire, so there is no refresh-flow that can hang the openclaw agent startup.
+ * expire, so there is no refresh-flow that can hang the duq agent startup.
  */
 @Configuration
 @EnableWebSecurity

@@ -60,9 +60,8 @@ vault-sync/
 │   │   │                                    #   vault-crypto.mjs — крипта (зеркало VaultCrypto)
 │   │   │                                    #   vault-mcp-client.mjs — общий MCP-клиент+creds
 │   │   │                                    #   vault-cli.mjs — duq читает/пишет волт (E2EE)
-│   │   │                                    #   folder-sync.mjs — зеркалит локальную папку↔волт
 │   │   ├── commands/                        # whitelist shell: git-pull, git-status, vpn-russia
-│   ├── systemd/                             # daily-note + vault-folder-sync .service/.timer
+│   ├── systemd/                             # daily-note .service/.timer (легаси; создание — в плагине)
 │   └── Dockerfile
 ├── plugin/                                  # Obsidian плагин (TypeScript)
 │   ├── main.ts / main.js                    # main.js деплоится out-of-band (adb/cp), НЕ синком
@@ -103,15 +102,16 @@ vault-sync/
 (absence ≠ deletion — это case загрузки). Конфиг-карты (`folder-icons.json`/`file-icons.json`)
 мержатся union'ом при download (не теряют ключи).
 
-## folder-sync — openclaw workspace ↔ зашифрованный cortex
+## Дейли-заметки
 
-duq/openclaw живёт в `/root/.openclaw/workspace` (плейнтекст, движок читает напрямую).
-`server/scripts/folder-sync.mjs` two-way зеркалит его в волт как `cortex/*` — **зашифрованным**
-тем же механизмом (vault-crypto + MCP put/get_blob), т.к. сервер сам шифровать не может.
-Так мозги duq видно и правишь в Obsidian на устройствах, правки едут обратно. Конфиг путей —
-`/opt/vault-sync/folder-sync.json`; гоняет systemd `vault-folder-sync.timer` (15 мин). `cortex/`
-НЕ исключён из синка (раньше был — когда лежал плейнтекстом). Удаление не пропагируется
-(защита мозга). Старый `duq-workspace-sync` бридж снесён.
+Создание сегодняшней заметки и архивация прошлых месяцев (`Daily/<Month>.<Year>/`, иконка 📦) —
+**в плагине** (`plugin/daily/DailyNotes.ts`): под E2EE сервер zero-knowledge и не может ни
+написать шифрованную заметку, ни увидеть имя `Daily/`. Серверный `DailyNoteScheduler` отключён
+(не бин), systemd `vault-sync-daily-note.timer` — легаси. Плагин гоняет проход на старте
+и раз в час (rollover при незакрытом Obsidian).
+
+⚰️ 2026-07-07: фича folder-sync (зеркало workspace ↔ `cortex/`) ВЫРЕЗАНА вместе с openclaw:
+скрипт/юниты удалены из репо и с VPS, `cortex/` удалён из волта.
 
 ## Деплой
 
