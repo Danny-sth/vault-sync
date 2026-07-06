@@ -30,7 +30,10 @@ if (cmd === 'read') {
   const real = safe(arg1);
   const r = await callTool('get_blob', { path: encryptPath(key, real) });
   if (!r.success) { console.error('not found: ' + real); process.exit(1); }
-  process.stdout.write(decryptBlob(key, real, Buffer.from(r.blobBase64, 'base64')));
+  // Await the flush: piped stdout is async, and the process.exit(0) below would
+  // otherwise cut anything beyond the OS pipe buffer (~64KB) off large files.
+  const out = decryptBlob(key, real, Buffer.from(r.blobBase64, 'base64'));
+  await new Promise((res, rej) => process.stdout.write(out, (e) => (e ? rej(e) : res())));
 } else if (cmd === 'write' || cmd === 'append') {
   const real = safe(arg1);
   let content = (() => { try { return readFileSync(0); } catch { return Buffer.alloc(0); } })();
