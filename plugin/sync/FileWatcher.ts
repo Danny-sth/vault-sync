@@ -84,6 +84,9 @@ export class FileWatcher {
     if (this.isScanning) return;
     this.isScanning = true;
     const changes: FileChange[] = [];
+    // Baseline entries whose path vanished from a listing but is still on disk —
+    // an index-lag/race artifact, not a deletion. Re-bucketed after the loops.
+    const refuted: Array<{ path: string; mtime: number; size: number }> = [];
 
     try {
       const currentFiles = new Map<string, TFile>();
@@ -98,8 +101,10 @@ export class FileWatcher {
           changes.push({ type: 'modify', path, file });
         }
       }
-      for (const [path] of this.lastScanFiles) {
-        if (!currentFiles.has(path)) changes.push({ type: 'delete', path });
+      for (const [path, last] of this.lastScanFiles) {
+        if (currentFiles.has(path)) continue;
+        if (await this.reallyGone(path)) changes.push({ type: 'delete', path });
+        else refuted.push({ path, ...last });
       }
       this.lastScanFiles.clear();
       for (const [path, file] of currentFiles) {
@@ -120,8 +125,10 @@ export class FileWatcher {
           changes.push({ type: 'modify', path });
         }
       }
-      for (const [path] of this.lastScanConfigFiles) {
-        if (!currentConfigs.has(path)) changes.push({ type: 'delete', path });
+      for (const [path, last] of this.lastScanConfigFiles) {
+        if (currentConfigs.has(path)) continue;
+        if (await this.reallyGone(path)) changes.push({ type: 'delete', path });
+        else refuted.push({ path, ...last });
       }
       this.lastScanConfigFiles.clear();
       for (const [path, stat] of currentConfigs) {
@@ -141,8 +148,10 @@ export class FileWatcher {
           changes.push({ type: 'modify', path });
         }
       }
-      for (const [path] of this.lastScanHiddenFiles) {
-        if (!currentHidden.has(path)) changes.push({ type: 'delete', path });
+      for (const [path, last] of this.lastScanHiddenFiles) {
+        if (currentHidden.has(path)) continue;
+        if (await this.reallyGone(path)) changes.push({ type: 'delete', path });
+        else refuted.push({ path, ...last });
       }
       this.lastScanHiddenFiles.clear();
       for (const [path, stat] of currentHidden) {
@@ -162,12 +171,23 @@ export class FileWatcher {
           changes.push({ type: 'modify', path });
         }
       }
-      for (const [path] of this.lastScanAllHiddenFiles) {
-        if (!currentAllHidden.has(path)) changes.push({ type: 'delete', path });
+      for (const [path, last] of this.lastScanAllHiddenFiles) {
+        if (currentAllHidden.has(path)) continue;
+        if (await this.reallyGone(path)) changes.push({ type: 'delete', path });
+        else refuted.push({ path, ...last });
       }
       this.lastScanAllHiddenFiles.clear();
       for (const [path, stat] of currentAllHidden) {
         this.lastScanAllHiddenFiles.set(path, stat);
+      }
+
+      // A refuted delete usually means the file moved between listing buckets mid-scan
+      // (e.g. Obsidian indexed a freshly-downloaded file after vault.getFiles() ran but
+      // before listAllHiddenFilesInVault took its index snapshot — then the path is in
+      // NEITHER listing this pass). Re-seed it into the bucket matching its CURRENT
+      // index state so the next scan tracks it normally instead of re-flagging forever.
+      for (const r of refuted) {
+        this.markProcessed(r.path, r.mtime, r.size);
       }
 
       if (changes.length > 0 && this.onChangesDetected) {
@@ -193,6 +213,22 @@ export class FileWatcher {
       console.error('[FileWatcher] Scan error:', e);
     } finally {
       this.isScanning = false;
+    }
+  }
+
+  /**
+   * Confirm a "missing from listing" path is REALLY gone from disk before treating it
+   * as a deletion. The listings this scanner diffs (vault index, adapter walks with an
+   * index snapshot) can transiently drop a live file — mobile index lag turned exactly
+   * that into a pushed server deletion followed by a resurrection upload (the
+   * delete→resurrect flip-flop). The adapter is FS truth and immune to index state.
+   * An exists() failure counts as "still there": never infer deletion from an error.
+   */
+  private async reallyGone(path: string): Promise<boolean> {
+    try {
+      return !(await this.app.vault.adapter.exists(path));
+    } catch {
+      return false;
     }
   }
 

@@ -734,10 +734,14 @@ export class SyncManager {
     let downloaded = 0;
     let downloadFailed = 0;
     let deleted = 0;
+    // Every real path this delta touches — the offline-deletion pass below must not
+    // reason about paths the server changed after our lastSeq.
+    const deltaPaths = new Set<string>();
 
     for (const f of files) {
       const path = this.toRealPath(f.path);
       if (path === null || !SyncFilter.shouldSync(path)) continue;
+      deltaPaths.add(path);
       await this.localState.setFileSeq(path, f.seq);
 
       // Already in sync (e.g. our own upload echoed back, or a redundant delta) — don't
@@ -764,6 +768,7 @@ export class SyncManager {
     for (const t of tombstoneList) {
       const path = this.toRealPath(t.path);
       if (path === null || !SyncFilter.shouldSync(path)) continue;
+      deltaPaths.add(path);
       await this.localState.setFileSeq(path, t.seq);
 
       // Same guards as handleRemoteFileDelete: never delete a path we never synced (a
@@ -785,10 +790,86 @@ export class SyncManager {
       }
     }
 
+    // Deletions made while the plugin wasn't running (vault reorganized with Obsidian
+    // closed) leave no watcher event and no pending op — the only trace is a localState
+    // hash for a path that's gone from disk. This is the one place that can push them
+    // safely: for every path NOT in this delta the server copy is unchanged since our
+    // lastSeq, i.e. this device had seen exactly the version the server still holds, so
+    // its local absence is a genuine user deletion — not the stale-device case that
+    // forbids absence-inference in full sync.
+    let offlinePushed = 0;
+    if (!this.offlineDeletionScanDone) {
+      offlinePushed = await this.pushOfflineDeletions(deltaPaths);
+    }
+
     const failed = downloadFailed;
-    const summary = `↓${downloaded}${downloadFailed > 0 ? '(❌' + downloadFailed + ')' : ''} ×${deleted}`;
+    const summary = `↓${downloaded}${downloadFailed > 0 ? '(❌' + downloadFailed + ')' : ''} ×${deleted}${offlinePushed > 0 ? ` ↑×${offlinePushed}` : ''}`;
     console.log(`[VaultSync] Incremental sync complete: ${summary} (currentSeq=${response.currentSeq})`);
     return failed > 0 ? `${summary} · ⚠️ ${failed} с ошибкой` : `готово · ${summary}`;
+  }
+
+  /** One pass per session: offline deletions can only predate startup, and the watcher
+   *  covers everything after it. Left false when a pass couldn't run (listing errors)
+   *  so a later delta retries. */
+  private offlineDeletionScanDone = false;
+
+  /**
+   * Detect files deleted while the plugin was off and push those deletions to the
+   * server. A candidate must satisfy ALL of:
+   *   - localState has a hash → this device HAD the file fully synced at some point;
+   *   - the path is absent from every local listing AND from a direct adapter probe;
+   *   - the path is not in the current delta → the server copy is unchanged since our
+   *     lastSeq, so we're deleting exactly the version this device had seen.
+   * Guards: any failed directory listing skips the pass (incomplete inventory must not
+   * fabricate deletions), and a mass-deletion valve refuses to act when the local state
+   * looks broken (empty vault / most known files "missing") rather than cleaned up.
+   */
+  private async pushOfflineDeletions(deltaPaths: Set<string>): Promise<number> {
+    SyncFilter.resetListingErrors();
+    const vaultPaths = this.app.vault.getFiles().map(f => f.path).filter(p => SyncFilter.shouldSync(p));
+    const obsidianPaths = (await SyncFilter.listObsidianFiles(this.app)).filter(p => SyncFilter.shouldSync(p));
+    const hiddenPaths = (await SyncFilter.listHiddenFiles(this.app)).filter(p => SyncFilter.shouldSync(p));
+    const allHiddenInVault = (await SyncFilter.listAllHiddenFilesInVault(this.app)).filter(p => SyncFilter.shouldSync(p));
+    const localFilePaths = new Set<string>([...vaultPaths, ...obsidianPaths, ...hiddenPaths, ...allHiddenInVault]);
+    if (SyncFilter.getListingErrors() > 0) {
+      console.warn(`[VaultSync] ${SyncFilter.getListingErrors()} listing(s) failed — offline-deletion scan postponed`);
+      return 0;
+    }
+
+    const localHashes = await this.localState.getAllHashes();
+    const candidates: string[] = [];
+    for (const [path] of localHashes) {
+      if (localFilePaths.has(path)) continue;
+      if (deltaPaths.has(path)) continue;
+      if (!SyncFilter.shouldSync(path)) continue;
+      // Non-plugin .obsidian/* is device-local territory — never inferred (same
+      // exemption as the full-sync reconcile and the tombstone handlers).
+      if (path.startsWith('.obsidian/') && !path.startsWith('.obsidian/plugins/')) continue;
+      if (await this.fileOps.exists(path)) continue; // listing raced the FS — it's there
+      candidates.push(path);
+    }
+
+    // SAFETY VALVE: an empty vault listing or "most known files missing" is a broken
+    // mount / wrong vault / listing bug, never a real cleanup — refuse to mass-delete.
+    if (candidates.length > 0 && (localFilePaths.size === 0 || candidates.length > Math.max(20, localHashes.size / 2))) {
+      console.error(`[VaultSync] Offline-deletion scan ABORTED: ${candidates.length}/${localHashes.size} known files missing (local listing: ${localFilePaths.size} files) — refusing to mass-delete`);
+      this.offlineDeletionScanDone = true;
+      return 0;
+    }
+
+    let pushed = 0;
+    for (const path of candidates) {
+      console.log(`[VaultSync] Deleted while plugin was off — pushing deletion: ${path}`);
+      try {
+        await this.deleteFile(path);
+        pushed++;
+      } catch (e) {
+        console.error(`[VaultSync] Failed to push offline deletion: ${path}`, e);
+      }
+    }
+    this.offlineDeletionScanDone = true;
+    if (pushed > 0) console.log(`[VaultSync] Pushed ${pushed} offline deletion(s) to server`);
+    return pushed;
   }
 
   /**
