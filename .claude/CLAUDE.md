@@ -72,6 +72,12 @@ vault-sync/
 │   ├── pdf/                                 # PdfProgressStore, ReadingDashboard (фича чтения)
 │   ├── storage/ commands/ daily/
 │   └── types.ts
+├── local-mcp/                               # stdio MCP-мост для Claude Code на ноуте Danny:
+│   │                                        #   index.mjs (офиц. @modelcontextprotocol/sdk),
+│   │                                        #   тулзы vault_read/write/append/delete/list/search,
+│   │                                        #   E2EE локально, апстрим https://.../vault-mcp
+│   │                                        #   (Bearer mcp-token + edge X-Auth-Token duq-nginx),
+│   │                                        #   креды в ~/.config/vault-sync/
 ├── docker-compose.yml
 └── .claude/CLAUDE.md
 ```
