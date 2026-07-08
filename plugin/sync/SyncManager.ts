@@ -734,14 +734,17 @@ export class SyncManager {
     let downloaded = 0;
     let downloadFailed = 0;
     let deleted = 0;
-    // Every real path this delta touches — the offline-deletion pass below must not
-    // reason about paths the server changed after our lastSeq.
-    const deltaPaths = new Set<string>();
+    // Paths the offline-deletion pass below must NOT reason about: tombstones already
+    // being applied, and delta files whose seq is beyond what this device had seen
+    // (someone else changed them — absence here proves nothing). A delta file whose
+    // version we HAD seen (usually our own upload echoed back) stays eligible.
+    const deltaSkip = new Set<string>();
 
     for (const f of files) {
       const path = this.toRealPath(f.path);
       if (path === null || !SyncFilter.shouldSync(path)) continue;
-      deltaPaths.add(path);
+      const priorSeq = await this.localState.getFileSeq(path);
+      if (f.seq > priorSeq) deltaSkip.add(path);
       await this.localState.setFileSeq(path, f.seq);
 
       // Already in sync (e.g. our own upload echoed back, or a redundant delta) — don't
@@ -768,7 +771,7 @@ export class SyncManager {
     for (const t of tombstoneList) {
       const path = this.toRealPath(t.path);
       if (path === null || !SyncFilter.shouldSync(path)) continue;
-      deltaPaths.add(path);
+      deltaSkip.add(path);
       await this.localState.setFileSeq(path, t.seq);
 
       // Same guards as handleRemoteFileDelete: never delete a path we never synced (a
@@ -799,7 +802,7 @@ export class SyncManager {
     // forbids absence-inference in full sync.
     let offlinePushed = 0;
     if (!this.offlineDeletionScanDone) {
-      offlinePushed = await this.pushOfflineDeletions(deltaPaths);
+      offlinePushed = await this.pushOfflineDeletions(deltaSkip);
     }
 
     const failed = downloadFailed;
@@ -818,13 +821,13 @@ export class SyncManager {
    * server. A candidate must satisfy ALL of:
    *   - localState has a hash → this device HAD the file fully synced at some point;
    *   - the path is absent from every local listing AND from a direct adapter probe;
-   *   - the path is not in the current delta → the server copy is unchanged since our
-   *     lastSeq, so we're deleting exactly the version this device had seen.
+   *   - the path is not in `skipPaths` → the server holds a version this device had
+   *     already seen, so we're deleting exactly what the user saw and removed.
    * Guards: any failed directory listing skips the pass (incomplete inventory must not
    * fabricate deletions), and a mass-deletion valve refuses to act when the local state
    * looks broken (empty vault / most known files "missing") rather than cleaned up.
    */
-  private async pushOfflineDeletions(deltaPaths: Set<string>): Promise<number> {
+  private async pushOfflineDeletions(skipPaths: Set<string>): Promise<number> {
     SyncFilter.resetListingErrors();
     const vaultPaths = this.app.vault.getFiles().map(f => f.path).filter(p => SyncFilter.shouldSync(p));
     const obsidianPaths = (await SyncFilter.listObsidianFiles(this.app)).filter(p => SyncFilter.shouldSync(p));
@@ -840,7 +843,7 @@ export class SyncManager {
     const candidates: string[] = [];
     for (const [path] of localHashes) {
       if (localFilePaths.has(path)) continue;
-      if (deltaPaths.has(path)) continue;
+      if (skipPaths.has(path)) continue;
       if (!SyncFilter.shouldSync(path)) continue;
       // Non-plugin .obsidian/* is device-local territory — never inferred (same
       // exemption as the full-sync reconcile and the tombstone handlers).
