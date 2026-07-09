@@ -195,6 +195,10 @@ curl -sk https://localhost:8443/api/health -H "X-Auth-Token: <VAULT_SYNC_TOKEN>"
 - **НЕ редактировать файлы волта на VPS напрямую** — только через sync.
 - Сервер — source of truth.
 - Tombstone (deletion log) TTL по умолчанию **14 дней** (`TOMBSTONE_TTL_DAYS`).
+- **`.trash` НЕ синкается** (с 2026-07-09): корзина device-local; синк корзины
+  плодил воскресший мусор и петлю conflict-копий. Клиент: `SyncFilter`
+  EXCLUDE_PATTERNS; сервер: EXCLUDED_DIRS. «Удаление в корзину» синкает только
+  само удаление.
 - `VaultWatcherService` отслеживает ВСЕ изменения волта на VPS в реальном времени
   (WatchService + периодический reconcile).
 - **Клапан массовых filesystem-удалений** (`util/FsDeletionValve`, с 2026-07-09):
