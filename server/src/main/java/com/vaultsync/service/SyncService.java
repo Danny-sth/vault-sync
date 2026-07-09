@@ -58,6 +58,20 @@ public class SyncService {
     @Value("${vault-sync.storage-path}")
     private String storagePath;
 
+    /**
+     * Mass-deletion valve for filesystem-origin deletions (watcher/reconcile). Device- and
+     * MCP-initiated deletions are deliberate and never valved. Incident 2026-07-09: a rekey
+     * on the live server made the watcher tombstone 781 files nobody deleted — the valve
+     * refuses such bursts instead of fanning them out to every device.
+     */
+    @Value("${vault-sync.fs-deletion-valve.threshold:20}")
+    private int fsDeletionValveThreshold;
+
+    @Value("${vault-sync.fs-deletion-valve.window-ms:60000}")
+    private long fsDeletionValveWindowMs;
+
+    private com.vaultsync.util.FsDeletionValve fsDeletionValve;
+
     private final AtomicLong sequenceCounter = new AtomicLong(0);
 
     private static final Set<String> EXCLUDED_DIRS = Set.of(
@@ -100,6 +114,7 @@ public class SyncService {
 
     @jakarta.annotation.PostConstruct
     public void init() {
+        fsDeletionValve = new com.vaultsync.util.FsDeletionValve(fsDeletionValveWindowMs, fsDeletionValveThreshold);
         initializeSequenceCounter();
         tombstoneFloorSeq = syncMetaRepository.findById(META_TOMBSTONE_FLOOR)
                 .map(SyncMeta::getValue).orElse(0L);
@@ -413,6 +428,19 @@ public class SyncService {
         if (fileRepository.findById(relativePath).isEmpty()) {
             return;
         }
+        // VALVE: filesystem deletions arrive from the watcher one by one; an rm -rf /
+        // broken mount / wrong storage dir looks like a storm of them. Suppress past the
+        // window budget — a wrongly-suppressed genuine deletion re-converges via a later
+        // reconcile once the storm is over; a wrongly-applied storm nukes every device.
+        if ("filesystem".equals(deletedBy) && !fsDeletionValve.allowOne(System.currentTimeMillis())) {
+            if (fsDeletionValve.shouldLogTrip()) {
+                log.error("MASS-DELETION VALVE TRIPPED: >{} filesystem deletions in {} ms — suppressing further "
+                                + "filesystem deletions this window (first suppressed: {}). Disk view is likely wrong "
+                                + "(moved storage dir / mount / rekey). Deletions via devices and MCP are unaffected.",
+                        fsDeletionValve.threshold(), fsDeletionValveWindowMs, relativePath);
+            }
+            return;
+        }
         long seq = nextSeq();
         // delete + tombstone must be atomic: a crash in between would leave the file
         // neither live nor tombstoned, and a device could then misread its absence.
@@ -480,6 +508,7 @@ public class SyncService {
                 }
             });
 
+            java.util.List<String> missing = new java.util.ArrayList<>();
             for (FileRecord dbFile : fileRepository.findAll()) {
                 if (diskFiles.contains(dbFile.getPath())) {
                     continue;
@@ -496,7 +525,21 @@ public class SyncService {
                 if (Files.exists(root.resolve(dbFile.getPath()))) {
                     continue;
                 }
-                indexDeletionInternal(dbFile.getPath(), "filesystem");
+                missing.add(dbFile.getPath());
+            }
+            // VALVE: a batch of vanished files this size is never a real cleanup — it's a
+            // moved storage dir, broken mount or mid-flight rekey (incident 2026-07-09:
+            // 781 bogus tombstones). Refuse the whole pass and scream; a genuine state
+            // converges on a later pass once the disk view is sane again.
+            if (!fsDeletionValve.batchAllowed(missing.size())) {
+                log.error("MASS-DELETION VALVE TRIPPED in reconcile: {} of {} indexed files missing from disk "
+                                + "(threshold {}) — refusing to tombstone. Check storage dir/mount/rekey; "
+                                + "if intentional, delete via clients/MCP or raise vault-sync.fs-deletion-valve.threshold.",
+                        missing.size(), fileRepository.count(), fsDeletionValve.threshold());
+                return;
+            }
+            for (String path : missing) {
+                indexDeletionInternal(path, "filesystem");
             }
         } catch (IOException e) {
             log.error("Error during reconciliation scan", e);
