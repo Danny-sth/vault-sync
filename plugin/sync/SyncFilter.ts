@@ -32,6 +32,11 @@ export class SyncFilter {
    * Patterns to exclude from sync (matched via includes()).
    */
   private static readonly EXCLUDE_PATTERNS = [
+    // Obsidian's trash is DEVICE-LOCAL by definition. Syncing it kept deleted junk
+    // alive server-side for months and every glitch resurrected it on all devices;
+    // worse, a tombstone applied to a diverged .trash file saved a conflict copy
+    // INTO the same synced .trash — a self-feeding loop (incident 2026-07-09).
+    '.trash/',
     '.git/',
     '.DS_Store',
     'Thumbs.db',

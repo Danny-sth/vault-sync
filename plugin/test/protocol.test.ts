@@ -222,6 +222,25 @@ describe('stale-устройство и tombstone-floor', () => {
   });
 });
 
+describe('корзина (.trash) — device-local, не синкается', () => {
+  it('файл в .trash не уезжает на сервер, «удаление в корзину» синкает только удаление', async () => {
+    const a = await bootDevice('A');
+    await a.writeLocal('note.md', 'текст');
+    await a.scan();
+    expect(server.livePaths()).toEqual(['note.md']);
+
+    // Пользователь удаляет заметку «в корзину»: Obsidian = delete оригинала + копия в .trash
+    await a.deleteLocal('note.md');
+    await a.writeLocal('.trash/note.md', 'текст');
+    await a.scan();
+
+    expect(server.livePaths()).toEqual([]); // удаление синкнулось
+    expect(server.tombstones.has('note.md')).toBe(true);
+    expect(server.livePaths().some(p => p.startsWith('.trash/'))).toBe(false); // корзина — нет
+    a.stop();
+  });
+});
+
 describe('конфликты и resurrection', () => {
   it('удаление на B при несинкнутой правке на A сохраняет conflict-копию', async () => {
     const a = await bootDevice('A');

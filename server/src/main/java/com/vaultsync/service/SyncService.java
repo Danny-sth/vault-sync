@@ -75,6 +75,11 @@ public class SyncService {
     private final AtomicLong sequenceCounter = new AtomicLong(0);
 
     private static final Set<String> EXCLUDED_DIRS = Set.of(
+            // .trash: Obsidian's device-local корзина — синк корзины держал удалённый мусор
+            // живым на сервере и плодил conflict-копии в самого себя (инцидент 2026-07-09).
+            // NB: серверные пути зашифрованы per-component, поэтому ".trash" здесь ловит
+            // только плейнтекст-развёртывания; для E2EE-волта фильтрует клиент (SyncFilter).
+            ".trash",
             ".git", ".idea", ".smart-env", ".DS_Store", "node_modules", ".vault-sync-versions", ".vault-sync-uploads"
     );
 
