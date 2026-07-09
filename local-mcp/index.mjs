@@ -3,7 +3,7 @@
 // Bridges Claude Code (stdio) to the remote vault-sync MCP endpoint (streamable HTTP,
 // static bearer): blobs travel encrypted, key never leaves this machine / the VPS.
 //
-// Tools: vault_read / vault_write / vault_append / vault_delete / vault_list / vault_search.
+// Tools: vault_read / vault_write / vault_edit / vault_append / vault_delete / vault_list / vault_search.
 // Credentials: ~/.config/vault-sync/key.txt (VAULT_PASSPHRASE/VAULT_SALT_B64 lines, same
 // format as /root/vault-sync-key.txt) and ~/.config/vault-sync/mcp-token.
 // Env overrides: VAULT_MCP_URL, VAULT_MCP_TOKEN, VAULT_PASSPHRASE, VAULT_SALT_B64.
@@ -127,6 +127,31 @@ server.registerTool('vault_append', {
   const r = await call('put_blob', { path: encryptPath(key, real), blobBase64: blob.toString('base64') });
   if (!r.success) throw new Error('append failed: ' + (r.error || 'unknown'));
   return text(`ok: ${real} (now ${full.length} bytes)`);
+});
+
+server.registerTool('vault_edit', {
+  description: 'Edit a note by EXACT string replacement — changes ONLY the matched fragment, the rest of the note stays intact. This is THE tool for точечные правки existing notes (безопаснее vault_write, который перезаписывает всё). old_string must match the current note text verbatim (read it first with vault_read); if it is not unique, extend it or pass replace_all=true.',
+  inputSchema: {
+    path: z.string().describe('Vault path, e.g. "Coding/duq/Roadmap.md"'),
+    old_string: z.string().describe('Exact existing fragment to replace (verbatim match)'),
+    new_string: z.string().describe('Replacement text (empty string deletes the fragment)'),
+    replace_all: z.boolean().optional().describe('Replace every occurrence (default false — old_string must be unique)'),
+  },
+}, async ({ path, old_string, new_string, replace_all }) => {
+  const real = checkPath(path);
+  if (!old_string) throw new Error('old_string required');
+  if (old_string === new_string) throw new Error('old_string и new_string совпадают — нечего менять');
+  const cur = await call('get_blob', { path: encryptPath(key, real) });
+  if (!cur.success) throw new Error('not found: ' + real);
+  const content = decryptBlob(key, real, Buffer.from(cur.blobBase64, 'base64')).toString('utf8');
+  const count = content.split(old_string).length - 1;
+  if (count === 0) throw new Error(`old_string не найдена в ${real}: ${old_string.slice(0, 60)}…`);
+  if (count > 1 && !replace_all) throw new Error(`old_string не уникальна (${count} совпадений) — расширь фрагмент или передай replace_all=true`);
+  const updated = replace_all ? content.split(old_string).join(new_string) : content.replace(old_string, new_string);
+  const blob = encryptBlob(key, real, Buffer.from(updated, 'utf8'));
+  const r = await call('put_blob', { path: encryptPath(key, real), blobBase64: blob.toString('base64') });
+  if (!r.success) throw new Error('edit failed: ' + (r.error || 'unknown'));
+  return text(`ok: ${real} — ${replace_all ? count : 1} замен(а), теперь ${Buffer.byteLength(updated)} bytes. Остальное содержимое не тронуто.`);
 });
 
 server.registerTool('vault_delete', {
