@@ -290,6 +290,26 @@ describe('конфликты и resurrection', () => {
     a.stop(); b.stop();
   });
 
+  it('delete + re-create за офлайн: устройство не стирает пересозданный файл (tombstone старее live)', async () => {
+    const a = await bootDevice('A');
+    await a.writeLocal('reborn.md', 'v1');
+    await a.scan();
+    const b = await bootDevice('B');
+    expect(await b.readLocal('reborn.md')).toBe('v1');
+
+    b.stomp.disconnect(); // B офлайн пропускает и удаление, и пересоздание
+    await a.deleteLocal('reborn.md');
+    await a.scan();
+    await a.writeLocal('reborn.md', 'v2 после пересоздания');
+    await a.scan();
+
+    await b.connectAndSync(); // дельта несёт И tombstone, И более новую live-запись
+
+    expect(await b.readLocal('reborn.md')).toBe('v2 после пересоздания');
+    expect(server.livePaths()).toEqual(['reborn.md']);
+    a.stop(); b.stop();
+  });
+
   it('stale re-push на затомбстоненный путь отклоняется и не воскрешает файл', async () => {
     const a = await bootDevice('A');
     await a.writeLocal('stale.md', 'v1');
