@@ -197,3 +197,8 @@ curl -sk https://localhost:8443/api/health -H "X-Auth-Token: <VAULT_SYNC_TOKEN>"
 - Tombstone (deletion log) TTL по умолчанию **14 дней** (`TOMBSTONE_TTL_DAYS`).
 - `VaultWatcherService` отслеживает ВСЕ изменения волта на VPS в реальном времени
   (WatchService + периодический reconcile).
+- **Клапан массовых filesystem-удалений** (`util/FsDeletionValve`, с 2026-07-09):
+  reconcile отклоняет батч, где с диска пропало > порога файлов; событийный путь
+  вотчера ограничен окном. Дефолт 20, конфиг `vault-sync.fs-deletion-valve.{threshold,window-ms}`.
+  Удаления от устройств/MCP не клапанятся. «VALVE TRIPPED» в логе = вид диска
+  сломан (маунт/перенос/rekey) — чинить причину, не поднимать порог вслепую.
