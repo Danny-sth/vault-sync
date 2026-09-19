@@ -82,8 +82,8 @@ vault-sync/
 │   │                                        #   креды в ~/.config/vault-sync/
 ├── deploy/                                  # ПРОД-деплой на VPS (самостоятельный, ни от чего не зависит):
 │   ├── docker-compose.yml                   #   edge: vault-sync-nginx (TLS+edge-токен) + vault-sync-certbot
-│   ├── nginx/nginx.conf                     #   /vault-sync/ws, /vault-sync/api/, /vault-mcp
-│   ├── nginx/edge-token.conf.example        #   шаблон; реальный edge-token.conf — СЕКРЕТ, не в git
+│   ├── nginx/conf.d/vault-sync.conf         #   /vault-sync/ws, /vault-sync/api/, /vault-mcp
+│   ├── nginx/conf.d/00-edge-token.conf.example # шаблон; реальный 00-edge-token.conf — СЕКРЕТ, не в git
 │   ├── fail2ban/                            #   jail+filter vault-sync-edge (бан при 401)
 │   └── systemd/vault-sync.service           #   юнит jar-сервера
 ├── docker-compose.yml
@@ -194,8 +194,8 @@ curl -sk https://localhost:8443/api/health -H "X-Auth-Token: <VAULT_SYNC_TOKEN>"
 ```
 
 **Edge (TLS on-za-menya.online):** `cd /root/vault-sync/deploy && docker compose up -d` — контейнеры
-`vault-sync-nginx` + `vault-sync-certbot` (тома `vault-sync-edge_letsencrypt`, `_certbot-www`); после правки
-`nginx.conf` — `docker exec vault-sync-nginx nginx -s reload`. fail2ban: `deploy/fail2ban/*` →
+`vault-sync-nginx` + `vault-sync-certbot` (тома `vault-sync-edge_letsencrypt`, `_certbot-www`); после `git pull` — `docker exec vault-sync-nginx nginx -s reload`
+(conf.d смонтирован каталогом). fail2ban: `deploy/fail2ban/*` →
 `/etc/fail2ban/{filter.d,jail.d}/vault-sync-edge.conf`. Снаружи открыты 22/80/443 (+46156/udp VPN), ufw.
 
 Прод-порт **8444 (http, за nginx TLS)**; дефолт в application.yml — 8443 (SSL). Конфиг прод: `/opt/vault-sync/application.yml`
