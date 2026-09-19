@@ -2,7 +2,7 @@
 # Развёртывание vault-sync на сервере ОДНОЙ командой (новый сервер или повторный деплой — идемпотентно).
 #
 #   git clone https://github.com/Danny-sth/vault-sync.git /root/vault-sync
-#   cp /путь/к/.env /root/vault-sync/deploy/.env        # единственный секрет вне git (копия в вольте, Creds)
+#   cp /путь/к/.env /root/vault-sync/deploy/.env        # единственный секрет вне git (копия — вольт Coding/Vault Sync/Creds)
 #   /root/vault-sync/deploy/install.sh [--restore FILE.tar.gz | --restore-from root@OLD_HOST]
 #
 # Делает: пакеты → git pull → сборка jar → /opt/vault-sync (jar, application.yml, commands) →
