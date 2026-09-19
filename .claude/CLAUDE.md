@@ -174,7 +174,7 @@ systemd `vault-sync-daily-note.*` УДАЛЕНЫ (аудит 2026-07-07). Пла
 ## Деплой
 
 **ТОЛЬКО через `deploy/install.sh`** — никаких ручных шагов на сервере. Всё в git, кроме одного файла
-секретов `deploy/.env` (шаблон `deploy/.env.example`, копия — вольт `Coding/mallard/Creds/vault-sync-deploy.env.md`).
+секретов `deploy/.env` (шаблон `deploy/.env.example`, копия — вольт `Coding/Vault Sync/Creds/vault-sync-deploy.env.md`).
 
 ```bash
 # обычный деплой (после git push): на VPS

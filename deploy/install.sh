@@ -26,7 +26,7 @@ done
 
 log() { echo -e "\n== $*"; }
 [ "$(id -u)" = 0 ] || { echo "запускать от root" >&2; exit 1; }
-[ -f "$DEPLOY/.env" ] || { echo "нет $DEPLOY/.env (шаблон: .env.example, копия — в вольте Creds)" >&2; exit 1; }
+[ -f "$DEPLOY/.env" ] || { echo "нет $DEPLOY/.env (шаблон: .env.example, копия — вольт Coding/Vault Sync/Creds)" >&2; exit 1; }
 chmod 600 "$DEPLOY/.env"
 set -a; . "$DEPLOY/.env"; set +a
 for v in DOMAIN VAULT_SYNC_TOKEN VAULT_SYNC_MCP_TOKEN VAULT_PASSPHRASE VAULT_SALT_B64; do
