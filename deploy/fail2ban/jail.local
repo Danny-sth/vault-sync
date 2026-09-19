@@ -1,0 +1,13 @@
+# /etc/fail2ban/jail.local — базовая защита сервера (ставит install.sh).
+[DEFAULT]
+ignoreip = 127.0.0.1/8 ::1 10.8.1.0/24 172.16.0.0/12
+bantime  = 1h
+findtime = 10m
+maxretry = 4
+backend  = auto
+
+[sshd]
+enabled  = true
+port     = ssh
+maxretry = 4
+bantime  = 24h

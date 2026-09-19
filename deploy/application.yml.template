@@ -1,0 +1,50 @@
+# /opt/vault-sync/application.yml — рендерит install.sh из deploy/.env (секреты в git не попадают).
+server:
+  port: 8444
+
+spring:
+  datasource:
+    url: jdbc:h2:file:/opt/vault-sync/data/metadata
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+  threads:
+    virtual:
+      enabled: true
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+vault-sync:
+  storage-path: /opt/obsidian-vault
+  token: ${VAULT_SYNC_TOKEN}
+  mcp-token: ${VAULT_SYNC_MCP_TOKEN}
+  tombstone-ttl-days: 14
+  max-json-string-length: 15000000
+  commands-path: /opt/vault-sync/commands
+  command-timeout-seconds: 30
+  allowed-commands: vpn-russia,git-status,git-pull
+
+spring.ai.mcp.server:
+  enabled: true
+  name: vault-sync-mcp
+  version: 1.0.0
+  type: SYNC
+  protocol: STREAMABLE
+  streamable-http:
+    mcp-endpoint: /mcp
+
+logging:
+  level:
+    root: INFO
+    com.vaultsync: INFO
+    io.modelcontextprotocol: INFO
+    org.springframework.web: INFO
+    org.springframework.security: INFO
+    org.springframework.ai.mcp: INFO
+
+server.tomcat:
+  max-http-form-post-size: 10485760

@@ -1,2 +1,2 @@
-nginx/conf.d/00-edge-token.conf
+.env
 nginx/log/

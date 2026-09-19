@@ -1,4 +1,4 @@
-# vault-sync public TLS ingress (on-za-menya.online).
+# vault-sync public TLS ingress (${DOMAIN} — подставляет entrypoint nginx из env).
 # Бэкенд — vault-sync на хосте: :8444.
 
 map $http_upgrade $connection_upgrade {
@@ -8,7 +8,7 @@ map $http_upgrade $connection_upgrade {
 
 server {
     listen 80;
-    server_name on-za-menya.online;
+    server_name ${DOMAIN};
 
     # ACME http-01 (certbot webroot) — только по plain HTTP.
     location /.well-known/acme-challenge/ {
@@ -23,10 +23,10 @@ server {
 server {
     listen 443 ssl;
     http2 on;
-    server_name on-za-menya.online;
+    server_name ${DOMAIN};
 
-    ssl_certificate     /etc/letsencrypt/live/on-za-menya.online/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/on-za-menya.online/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
 
     client_max_body_size 25m;

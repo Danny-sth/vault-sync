@@ -80,11 +80,15 @@ vault-sync/
 │   │                                        #   E2EE локально, апстрим https://.../vault-mcp
 │   │                                        #   (Bearer mcp-token + edge X-Auth-Token vault-sync-nginx),
 │   │                                        #   креды в ~/.config/vault-sync/
-├── deploy/                                  # ПРОД-деплой на VPS (самостоятельный, ни от чего не зависит):
+├── deploy/                                  # ПРОД-деплой ОДНОЙ командой (всё в git, кроме deploy/.env):
+│   ├── install.sh                           #   идемпотентный деплой/переезд: пакеты, сборка jar, /opt/vault-sync,
+│   │                                        #   systemd, TLS (выпуск если нет), edge, fail2ban, ufw, проверки
+│   ├── backup.sh                            #   бэкап волта + H2 (для переезда: install.sh --restore-from root@old)
+│   ├── .env.example                         #   секреты (DOMAIN, токены, ключ vault-cli); реальный .env — НЕ в git
+│   ├── application.yml.template             #   → /opt/vault-sync/application.yml (envsubst)
 │   ├── docker-compose.yml                   #   edge: vault-sync-nginx (TLS+edge-токен) + vault-sync-certbot
-│   ├── nginx/conf.d/vault-sync.conf         #   /vault-sync/ws, /vault-sync/api/, /vault-mcp
-│   ├── nginx/conf.d/00-edge-token.conf.example # шаблон; реальный 00-edge-token.conf — СЕКРЕТ, не в git
-│   ├── fail2ban/                            #   jail+filter vault-sync-edge (бан при 401)
+│   ├── nginx/templates/*.template           #   штатные шаблоны образа nginx (envsubst DOMAIN/VAULT_SYNC_TOKEN)
+│   ├── fail2ban/                            #   jail.local (sshd) + jail/filter vault-sync-edge
 │   └── systemd/vault-sync.service           #   юнит jar-сервера
 ├── docker-compose.yml
 └── .claude/CLAUDE.md
@@ -169,39 +173,26 @@ systemd `vault-sync-daily-note.*` УДАЛЕНЫ (аудит 2026-07-07). Пла
 
 ## Деплой
 
-systemd-сервис `vault-sync` на ЖИВОМ VPS `187.124.131.127` (Vilnius, домен
-on-za-menya.online). Старые IP `88.222.245.74` (Mumbai) и `90.156.230.49` — МЁРТВЫ.
-Сборка тяжёлая — собирать на VPS, не локально.
+**ТОЛЬКО через `deploy/install.sh`** — никаких ручных шагов на сервере. Всё в git, кроме одного файла
+секретов `deploy/.env` (шаблон `deploy/.env.example`, копия — вольт `Coding/mallard/Creds/vault-sync-deploy.env.md`).
 
 ```bash
-# 1) локально: правка → commit → push
-git push origin main
+# обычный деплой (после git push): на VPS
+/root/vault-sync/deploy/install.sh
 
-# 2) на VPS: pull + maven build + замена jar + рестарт
-ssh root@187.124.131.127   # пароль (ключей нет), см. ~/.claude/CLAUDE.md
-cd /root/vault-sync && git pull
-cd server && mvn -q -DskipTests clean package
-cp target/vault-sync-server-2.0.0.jar /opt/vault-sync/vault-sync.jar
-systemctl restart vault-sync
+# переезд на НОВЫЙ сервер (A-запись домена уже на нём):
+git clone https://github.com/Danny-sth/vault-sync.git /root/vault-sync
+# положить deploy/.env (из вольта), затем:
+/root/vault-sync/deploy/install.sh --restore-from root@<СТАРЫЙ_IP>   # или --restore backup.tar.gz
 
-# 3) проверка
-systemctl is-active vault-sync
-journalctl -u vault-sync -n 20 --no-pager
-# health без токена (actuator):
-curl -sk https://localhost:8443/actuator/health
-# health с токеном (FileController):
-curl -sk https://localhost:8443/api/health -H "X-Auth-Token: <VAULT_SYNC_TOKEN>"
+# бэкап данных (волт + H2):
+/root/vault-sync/deploy/backup.sh
 ```
 
-**Edge (TLS on-za-menya.online):** `cd /root/vault-sync/deploy && docker compose up -d` — контейнеры
-`vault-sync-nginx` + `vault-sync-certbot` (тома `vault-sync-edge_letsencrypt`, `_certbot-www`); после `git pull` — `docker exec vault-sync-nginx nginx -s reload`
-(conf.d смонтирован каталогом). fail2ban: `deploy/fail2ban/*` →
-`/etc/fail2ban/{filter.d,jail.d}/vault-sync-edge.conf`. Снаружи открыты 22/80/443 (+46156/udp VPN), ufw.
-
-Прод-порт **8444 (http, за nginx TLS)**; дефолт в application.yml — 8443 (SSL). Конфиг прод: `/opt/vault-sync/application.yml`
-(токены, storage-path). H2-метаданные: `${VAULT_SYNC_DATA:/opt/vault-sync/data}/metadata`.
-Файлы волта (source of truth): `/opt/obsidian-vault`. Daily-note TZ по умолчанию
-`Asia/Almaty`.
+`install.sh` идемпотентен и сам проверяет результат (api 200 / без токена 401 / mcp 401 / ws 101 /
+vault-cli расшифровывает пути). VPS: `187.124.131.127`, домен `on-za-menya.online`, пароль SSH — в Creds.
+Прод-порт **8444 (http, за nginx TLS)**. Конфиг прод: `/opt/vault-sync/application.yml` (рендерится
+из шаблона). H2: `/opt/vault-sync/data`. Файлы волта (source of truth): `/opt/obsidian-vault`.
 
 ## Важно
 

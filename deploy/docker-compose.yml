@@ -1,8 +1,9 @@
-## vault-sync edge: публичный TLS-вход on-za-menya.online → vault-sync (host :8444).
-## Самостоятельный стек проекта vault-sync (без зависимостей от других проектов).
+## vault-sync edge: публичный TLS-вход ${DOMAIN} → vault-sync (host :8444).
+## Самостоятельный стек проекта vault-sync. Поднимается ТОЛЬКО через ./install.sh.
 ##   nginx   — TLS + edge-токен (X-Auth-Token) + роуты /vault-sync/ws, /vault-sync/api/, /vault-mcp
 ##   certbot — автопродление Let's Encrypt (webroot)
-## Запуск на VPS: cd /root/vault-sync/deploy && docker compose up -d
+## Конфиги nginx — штатные шаблоны образа (/etc/nginx/templates/*.template → envsubst на старте),
+## значения DOMAIN / VAULT_SYNC_TOKEN — из deploy/.env (секрет, не в git).
 name: vault-sync-edge
 
 services:
@@ -13,11 +14,11 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN не задан в deploy/.env}
+      VAULT_SYNC_TOKEN: ${VAULT_SYNC_TOKEN:?VAULT_SYNC_TOKEN не задан в deploy/.env}
     volumes:
-      # Каталог целиком (не отдельные файлы): git pull подменяет файлы, а file-bind держал бы
-      # старый inode → после pull хватает `nginx -s reload`. Внутри: vault-sync.conf (роуты) +
-      # 00-edge-token.conf (СЕКРЕТ, не в git, создаётся из 00-edge-token.conf.example).
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/templates:/etc/nginx/templates:ro
       - letsencrypt:/etc/letsencrypt:ro
       - certbot-www:/var/www/certbot
       # access.log читает fail2ban (бан IP при 401 без edge-токена).
@@ -25,7 +26,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # reload раз в 6ч — подхватить продлённые серты без рестарта.
-    command: /bin/sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done & exec nginx -g 'daemon off;'"
+    command: /bin/sh -c "while :; do sleep 6h & wait $${!}; nginx -s reload; done & exec /docker-entrypoint.sh nginx -g 'daemon off;'"
 
   certbot:
     image: certbot/certbot:latest
