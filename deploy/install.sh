@@ -110,13 +110,14 @@ ufw --force enable >/dev/null
 
 log "проверки"
 sleep 3
-code() { curl -s -o /dev/null -w '%{http_code}' --resolve "$DOMAIN:443:127.0.0.1" "$@"; }
+# || true: WS-проверка держит соединение до -m и curl выходит с 28 — код ответа (101) уже получен.
+code() { curl -s -o /dev/null -w '%{http_code}' --resolve "$DOMAIN:443:127.0.0.1" "$@" || true; }
 API=$(code -H "X-Auth-Token: $VAULT_SYNC_TOKEN" "https://$DOMAIN/vault-sync/api/health")
 NOAUTH=$(code "https://$DOMAIN/vault-sync/api/health")
 MCP=$(code "https://$DOMAIN/vault-mcp")
 WS=$(code --http1.1 -m 5 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" \
        -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "https://$DOMAIN/vault-sync/ws?token=$VAULT_SYNC_TOKEN")
-DEC=$(cd "$REPO/server/scripts" && node vault-cli.mjs list "" </dev/null 2>/dev/null | wc -l)
+DEC=$(cd "$REPO/server/scripts" && node vault-cli.mjs list "" </dev/null 2>/dev/null | wc -l || true)
 echo "api=$API (200) noauth=$NOAUTH (401) mcp-noauth=$MCP (401) ws=$WS (101) vault-cli расшифровал путей=$DEC"
 [ "$API" = 200 ] && [ "$NOAUTH" = 401 ] && [ "$MCP" = 401 ] && [ "$WS" = 101 ] && [ "$DEC" -gt 0 ] \
   && echo "OK: vault-sync развёрнут" || { echo "FAIL: проверки не прошли" >&2; exit 1; }
