@@ -34,8 +34,6 @@ for v in DOMAIN VAULT_SYNC_TOKEN VAULT_SYNC_MCP_TOKEN VAULT_PASSPHRASE VAULT_SAL
 done
 
 log "пакеты"
-# /tmp должен быть 1777 (иначе _apt не проверит подписи → устаревшие индексы → 404 на пакетах).
-chmod 1777 /tmp
 export DEBIAN_FRONTEND=noninteractive
 need=()
 for p in git curl openjdk-21-jdk-headless maven nodejs docker.io docker-compose-v2 fail2ban ufw gettext-base; do
