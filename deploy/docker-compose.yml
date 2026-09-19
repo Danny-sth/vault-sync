@@ -1,4 +1,4 @@
-## vault-sync edge: публичный TLS-вход on-za-menya.online → vault-sync (host :8444/:8445).
+## vault-sync edge: публичный TLS-вход on-za-menya.online → vault-sync (host :8444).
 ## Самостоятельный стек проекта vault-sync (без зависимостей от других проектов).
 ##   nginx   — TLS + edge-токен (X-Auth-Token) + роуты /vault-sync/ws, /vault-sync/api/, /vault-mcp
 ##   certbot — автопродление Let's Encrypt (webroot)

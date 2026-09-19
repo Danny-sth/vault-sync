@@ -82,7 +82,7 @@ vault-sync/
 │   │                                        #   креды в ~/.config/vault-sync/
 ├── deploy/                                  # ПРОД-деплой на VPS (самостоятельный, ни от чего не зависит):
 │   ├── docker-compose.yml                   #   edge: vault-sync-nginx (TLS+edge-токен) + vault-sync-certbot
-│   ├── nginx/nginx.conf                     #   /vault-sync/ws, /vault-sync/api/, /vault-mcp, /vault-sync-2-mcp
+│   ├── nginx/nginx.conf                     #   /vault-sync/ws, /vault-sync/api/, /vault-mcp
 │   ├── nginx/edge-token.conf.example        #   шаблон; реальный edge-token.conf — СЕКРЕТ, не в git
 │   ├── fail2ban/                            #   jail+filter vault-sync-edge (бан при 401)
 │   └── systemd/vault-sync.service           #   юнит jar-сервера
