@@ -1,0 +1,15 @@
+# /etc/systemd/system/vault-sync.service
+[Unit]
+Description=Vault Sync Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/vault-sync
+ExecStart=/usr/bin/java -Dorg.apache.tomcat.websocket.textBufferSize=4194304 -Dorg.apache.tomcat.websocket.binaryBufferSize=4194304 -Xmx512m -Xms64m -XX:MaxMetaspaceSize=256m -XX:+UseSerialGC -jar /opt/vault-sync/vault-sync.jar --spring.config.location=/opt/vault-sync/application.yml
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
