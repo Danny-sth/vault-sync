@@ -66,9 +66,25 @@ async function getUpstream() {
   return upstream;
 }
 
+// Сервер перезапустился / сессия протухла (MCP spec: неизвестная сессия → 404, клиент
+// обязан начать новую) или обрыв связи → сбросить клиента и повторить вызов один раз.
+const RECONNECT_RE = /Session not found|\b404\b|\b502\b|\b503\b|fetch failed|ECONNRESET|socket hang up|terminated/i;
+
+async function resetUpstream() {
+  const old = upstream;
+  upstream = null;
+  try { await old?.close(); } catch { /* сессия уже мертва */ }
+}
+
 async function call(name, args) {
-  const client = await getUpstream();
-  const res = await client.callTool({ name, arguments: args });
+  let res;
+  try {
+    res = await (await getUpstream()).callTool({ name, arguments: args });
+  } catch (e) {
+    if (!RECONNECT_RE.test(String(e?.message ?? e))) throw e;
+    await resetUpstream();
+    res = await (await getUpstream()).callTool({ name, arguments: args });
+  }
   const text = res?.content?.[0]?.text;
   if (text == null) throw new Error(`upstream ${name}: empty result`);
   return JSON.parse(text);
