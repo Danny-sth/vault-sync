@@ -18,7 +18,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { deriveKey, encryptBlob, decryptBlob, encryptPath, decryptPath } from '../server/scripts/vault-crypto.mjs';
 
 const CONFIG_DIR = join(homedir(), '.config', 'vault-sync');
-const UPSTREAM_URL = process.env.VAULT_MCP_URL || 'https://on-za-menya.online/vault-mcp';
+const UPSTREAM_URL = process.env.VAULT_MCP_URL || 'https://vault.on-za-menya.online/vault-mcp';
 
 function loadKey() {
   let pass = process.env.VAULT_PASSPHRASE, salt = process.env.VAULT_SALT_B64;

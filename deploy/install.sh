@@ -5,9 +5,10 @@
 #   cp /путь/к/.env /root/vault-sync/deploy/.env        # единственный секрет вне git (копия — вольт Coding/Vault Sync/Creds)
 #   /root/vault-sync/deploy/install.sh [--restore FILE.tar.gz | --restore-from root@OLD_HOST]
 #
+# TLS/edge — не здесь: 80/443 держит стек mallard (vault.on-za-menya.online → этот сервер :8444).
+#
 # Делает: пакеты → git pull → сборка jar → /opt/vault-sync (jar, application.yml, commands) →
-# ключ vault-cli → (перенос данных) → systemd vault-sync → TLS-сертификат (если нет) → edge nginx+certbot →
-# fail2ban → ufw → проверки. Всё, что не секрет, — в git.
+# ключ vault-cli → (перенос данных) → systemd vault-sync → fail2ban → ufw → проверки. Всё, что не секрет, — в git.
 set -euo pipefail
 
 DEPLOY="$(cd "$(dirname "$0")" && pwd)"
@@ -82,23 +83,13 @@ if [ -n "${JAR_CHANGED:-}${CFG_CHANGED:-}" ] || ! systemctl is-active -q vault-s
 for i in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:8444/actuator/health && break; sleep 2; done
 curl -sf -o /dev/null http://127.0.0.1:8444/actuator/health || { journalctl -u vault-sync -n 30 --no-pager; echo "vault-sync не поднялся" >&2; exit 1; }
 
-log "TLS + edge (nginx, certbot)"
-cd "$DEPLOY"
-install -d "$DEPLOY/nginx/log"
-docker compose create -q 2>/dev/null || docker compose create
-if ! docker run --rm -v vault-sync-edge_letsencrypt:/le alpine test -f "/le/live/$DOMAIN/fullchain.pem"; then
-  echo "сертификата для $DOMAIN нет — выпускаю (standalone :80)"
-  docker compose stop nginx >/dev/null 2>&1 || true
-  docker run --rm -p 80:80 -v vault-sync-edge_letsencrypt:/etc/letsencrypt certbot/certbot certonly \
-    --standalone --non-interactive --agree-tos --register-unsafely-without-email -d "$DOMAIN"
-fi
-docker compose up -d --force-recreate --remove-orphans
+# TLS и публичный вход ПЕРЕЕХАЛИ в стек mallard (2026-09-19): домен on-za-menya.online принадлежит
+# Даку, его edge (nginx+certbot) держит 80/443 и обслуживает vault.on-za-menya.online → сюда, :8444.
+# Здесь edge не поднимаем; устройства ходят напрямую ws://<ip>:8444.
 
 log "fail2ban"
 install -m 644 "$DEPLOY/fail2ban/jail.local" /etc/fail2ban/jail.local
-install -m 644 "$DEPLOY/fail2ban/vault-sync-edge.filter.conf" /etc/fail2ban/filter.d/vault-sync-edge.conf
-sed "s#__REPO__#$REPO#" "$DEPLOY/fail2ban/vault-sync-edge.jail.conf" > /etc/fail2ban/jail.d/vault-sync-edge.conf
-touch "$DEPLOY/nginx/log/access.log"
+# Джейл периметра переехал в стек mallard вместе с edge (там же и логи nginx).
 systemctl enable fail2ban >/dev/null 2>&1; systemctl restart fail2ban
 
 log "ufw"
@@ -111,10 +102,11 @@ ufw --force enable >/dev/null
 log "проверки"
 sleep 3
 # || true: WS-проверка держит соединение до -m и curl выходит с 28 — код ответа (101) уже получен.
-code() { curl -s -o /dev/null -w '%{http_code}' --resolve "$DOMAIN:443:127.0.0.1" "$@" || true; }
-API=$(code -H "X-Auth-Token: $VAULT_SYNC_TOKEN" "https://$DOMAIN/vault-sync/api/health")
-NOAUTH=$(code "https://$DOMAIN/vault-sync/api/health")
-MCP=$(code "https://$DOMAIN/vault-mcp")
+EDGE_HOST="vault.$DOMAIN"   # публичный вход держит стек mallard
+code() { curl -s -o /dev/null -w '%{http_code}' --resolve "$EDGE_HOST:443:127.0.0.1" "$@" || true; }
+API=$(code -H "X-Auth-Token: $VAULT_SYNC_TOKEN" "https://$EDGE_HOST/vault-sync/api/health")
+NOAUTH=$(code "https://$EDGE_HOST/vault-sync/api/health")
+MCP=$(code "https://$EDGE_HOST/vault-mcp")
 WS=$(code --http1.1 -m 5 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" \
        -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "https://$DOMAIN/vault-sync/ws?token=$VAULT_SYNC_TOKEN")
 DEC=$(cd "$REPO/server/scripts" && node vault-cli.mjs list "" </dev/null 2>/dev/null | wc -l || true)

@@ -1,7 +1,0 @@
-# Edge-токен периметра: X-Auth-Token == VAULT_SYNC_TOKEN → $edge_ok=1, иначе 0 → 401 → fail2ban.
-# Значение подставляет entrypoint nginx из env (deploy/.env). Грузится раньше vault-sync.conf (алфавит).
-map_hash_bucket_size 128;
-map $http_x_auth_token $edge_ok {
-    default 0;
-    "${VAULT_SYNC_TOKEN}" 1;
-}
