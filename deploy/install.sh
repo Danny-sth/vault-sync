@@ -8,14 +8,13 @@
 # TLS/edge — не здесь: 80/443 держит стек mallard (vault.on-za-menya.online → этот сервер :8444).
 #
 # Делает: пакеты → git pull → сборка jar → /opt/vault-sync (jar, application.yml, commands) →
-# ключ vault-cli → (перенос данных) → systemd vault-sync → fail2ban → ufw → проверки. Всё, что не секрет, — в git.
+# (перенос данных) → systemd vault-sync → fail2ban → ufw → проверки. Всё, что не секрет, — в git.
 set -euo pipefail
 
 DEPLOY="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$DEPLOY")"
 OPT=/opt/vault-sync
 VAULT=/opt/obsidian-vault
-KEYFILE=/root/vault-sync-key.txt
 RESTORE="" ; RESTORE_FROM=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -54,11 +53,10 @@ JAR="$(ls "$REPO"/server/target/vault-sync-server-*.jar | grep -v original | hea
 install -d -m 755 "$OPT" "$OPT/data" "$OPT/commands" "$VAULT"
 if ! cmp -s "$JAR" "$OPT/vault-sync.jar"; then install -m 644 "$JAR" "$OPT/vault-sync.jar"; JAR_CHANGED=1; fi
 
-log "конфиг, commands, ключ vault-cli"
+log "конфиг и commands"
 umask 077
 envsubst '${VAULT_SYNC_TOKEN} ${VAULT_SYNC_MCP_TOKEN}' < "$DEPLOY/application.yml.template" > "$OPT/application.yml.new"
 cmp -s "$OPT/application.yml.new" "$OPT/application.yml" 2>/dev/null && rm "$OPT/application.yml.new" || { mv "$OPT/application.yml.new" "$OPT/application.yml"; CFG_CHANGED=1; }
-printf 'VAULT_PASSPHRASE=%s\nVAULT_SALT_B64=%s\n' "$VAULT_PASSPHRASE" "$VAULT_SALT_B64" > "$KEYFILE"
 umask 022
 rsync -a --delete "$REPO/server/commands/" "$OPT/commands/" 2>/dev/null || { rm -rf "$OPT/commands"; cp -a "$REPO/server/commands" "$OPT/commands"; }
 chmod 755 "$OPT"/commands/*.sh
@@ -109,7 +107,6 @@ NOAUTH=$(code "https://$EDGE_HOST/vault-sync/api/health")
 MCP=$(code "https://$EDGE_HOST/vault-mcp")
 WS=$(code --http1.1 -m 5 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" \
        -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" "https://$EDGE_HOST/vault-sync/ws?token=$VAULT_SYNC_TOKEN")
-DEC=$(cd "$REPO/server/scripts" && node vault-cli.mjs list "" </dev/null 2>/dev/null | wc -l || true)
-echo "api=$API (200) noauth=$NOAUTH (401) mcp-noauth=$MCP (401) ws=$WS (101) vault-cli расшифровал путей=$DEC"
-[ "$API" = 200 ] && [ "$NOAUTH" = 401 ] && [ "$MCP" = 401 ] && [ "$WS" = 101 ] && [ "$DEC" -gt 0 ] \
+echo "api=$API (200) noauth=$NOAUTH (401) mcp-noauth=$MCP (401) ws=$WS (101)"
+[ "$API" = 200 ] && [ "$NOAUTH" = 401 ] && [ "$MCP" = 401 ] && [ "$WS" = 101 ] \
   && echo "OK: vault-sync развёрнут" || { echo "FAIL: проверки не прошли" >&2; exit 1; }

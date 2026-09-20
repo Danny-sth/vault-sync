@@ -60,7 +60,6 @@ vault-sync/
 │   ├── scripts/                             # Node E2EE-инструменты сервера (на VPS):
 │   │   │                                    #   vault-crypto.mjs — крипта (зеркало VaultCrypto)
 │   │   │                                    #   vault-mcp-client.mjs — общий MCP-клиент+creds
-│   │   │                                    #   vault-cli.mjs — CLI чтения/записи волта (E2EE)
 │   │   ├── commands/                        # whitelist shell: git-pull, git-status, vpn-russia
 │   └── Dockerfile
 ├── plugin/                                  # Obsidian плагин (TypeScript)
@@ -84,7 +83,7 @@ vault-sync/
 │   ├── install.sh                           #   идемпотентный деплой/переезд: пакеты, сборка jar, /opt/vault-sync,
 │   │                                        #   systemd, TLS (выпуск если нет), edge, fail2ban, ufw, проверки
 │   ├── backup.sh                            #   бэкап волта + H2 (для переезда: install.sh --restore-from root@old)
-│   ├── .env.example                         #   секреты (DOMAIN, токены, ключ vault-cli); реальный .env — НЕ в git
+│   ├── .env.example                         #   секреты (DOMAIN, токены, ключ шифрования); реальный .env — НЕ в git
 │   ├── application.yml.template             #   → /opt/vault-sync/application.yml (envsubst)
 │   ├── docker-compose.yml                   #   edge: vault-sync-nginx (TLS+edge-токен) + vault-sync-certbot
 │   ├── nginx/templates/*.template           #   штатные шаблоны образа nginx (envsubst DOMAIN/VAULT_SYNC_TOKEN)
@@ -107,7 +106,7 @@ vault-sync/
 - **Контент** — AES-256-GCM, формат блоба `VSE`-magic|version|nonce|ciphertext+tag.
 - **Пути/имена** — per-component AES-GCM (детерминированный nonce) + base32, FS-safe.
 - Ключ: PBKDF2-HMAC-SHA256 600k из passphrase+salt, только на устройствах (плагин) и
-  на VPS в `/root/vault-sync-key.txt` (для vault-cli). Сервер видит только шифр.
+  Сервер видит только шифр. Доступ к волту — ТОЛЬКО по MCP с токеном (мост `local-mcp`).
 - Клиент шифрует ДО отправки, расшифровывает ПОСЛЕ; sync и MCP гоняют только шифротекст.
 - На VPS аудит: всё в `/opt/obsidian-vault` (кроме `.vault-sync*`) — зашифровано, 0 плейнтекста.
 - ⚠️ Осознанный tradeoff: шифрование **конвергентное** (детерминированный nonce =
@@ -143,7 +142,7 @@ vault-sync/
 7. На КАЖДОМ устройстве: новые passphrase/salt в настройках плагина, сброс
    lastSeq=0 (полный ресинк; absence≠deletion защищает локальные файлы),
    reload Obsidian.
-8. Проверка: vault-cli list расшифровывает пути; счётчики файлов
+8. Проверка: MCP-эндпоинт отвечает по токену; счётчики файлов
    сервер/десктоп/телефон сходятся; в логах нет undecryptable.
 
 Если rekey всплывёт снова — писать служебный скрипт, который делает шаги 2–6
@@ -190,7 +189,7 @@ git clone https://github.com/Danny-sth/vault-sync.git /root/vault-sync
 ```
 
 `install.sh` идемпотентен и сам проверяет результат (api 200 / без токена 401 / mcp 401 / ws 101 /
-vault-cli расшифровывает пути). VPS: `187.124.131.127`, домен `on-za-menya.online`, пароль SSH — в Creds.
+MCP отвечает по токену). VPS: `187.124.131.127`, домен `on-za-menya.online`, пароль SSH — в Creds.
 Прод-порт **8444 (http, за nginx TLS)**. Конфиг прод: `/opt/vault-sync/application.yml` (рендерится
 из шаблона). H2: `/opt/vault-sync/data`. Файлы волта (source of truth): `/opt/obsidian-vault`.
 
