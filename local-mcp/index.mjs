@@ -220,21 +220,29 @@ server.registerTool('vault_search', {
   const words = wordsOf(query);
   if (!words.length) return text('no matches');
   const paths = (await listPaths(prefix || '')).filter((p) => p.endsWith('.md'));
-  // Спрашивают фразой, а в заметке написано своими словами: совпадение считаем по числу слов
-  // запроса, а не требуем их все. Лучшие заметки идут первыми — остальное человек отфильтрует сам.
+  // Спрашивают фразой, а в заметке написано своими словами: требовать все слова нельзя. Вместо
+  // этого считаем вес: редкое слово запроса («живёт») говорит о заметке больше, чем частое
+  // («Денис», которое есть почти везде). Поэтому сначала собираем совпадения, потом ранжируем.
   const found = [];
+  const seen = new Map(words.map((w) => [w, 0]));
   for (const real of paths) {
-    const inPath = words.filter((w) => fold(real).includes(w)).length;
-    if (inPath === words.length) { found.push({ score: words.length + 1, lines: [`${real} (path match)`] }); continue; }
-    const r = await call('get_blob', { path: encryptPath(key, real) });
-    if (!r.success) continue;
-    let plain; try { plain = decryptBlob(key, real, Buffer.from(r.blobBase64, 'base64')).toString('utf8'); } catch { continue; }
-    const folded = fold(plain);
-    const score = words.filter((w) => folded.includes(w)).length + inPath;
-    if (!score) continue;
-    const lines = matchLines(plain, words).slice(0, 3).map(({ line }) => `${real}: ${line.slice(0, 200)}`);
-    if (lines.length) found.push({ score, lines });
+    const hit = new Set(words.filter((w) => fold(real).includes(w)));
+    let lines = [];
+    if (hit.size !== words.length) {
+      const r = await call('get_blob', { path: encryptPath(key, real) });
+      if (!r.success) continue;
+      let plain; try { plain = decryptBlob(key, real, Buffer.from(r.blobBase64, 'base64')).toString('utf8'); } catch { continue; }
+      const folded = fold(plain);
+      for (const w of words) if (folded.includes(w)) hit.add(w);
+      if (!hit.size) continue;
+      lines = matchLines(plain, words).slice(0, 3).map(({ line }) => `${real}: ${line.slice(0, 200)}`);
+    }
+    if (!lines.length) lines = [`${real} (path match)`];
+    for (const w of hit) seen.set(w, seen.get(w) + 1);
+    found.push({ words: hit, lines });
   }
+  const weight = (w) => 1 / Math.log(1 + (seen.get(w) || 1));
+  for (const f of found) f.score = [...f.words].reduce((sum, w) => sum + weight(w), 0);
   found.sort((a, b) => b.score - a.score);
   const hits = found.flatMap((f) => f.lines).slice(0, 40);
   return text(hits.length ? hits.join('\n') : 'no matches');
