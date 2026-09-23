@@ -227,22 +227,33 @@ server.registerTool('vault_search', {
   const seen = new Map(words.map((w) => [w, 0]));
   for (const real of paths) {
     const hit = new Set(words.filter((w) => fold(real).includes(w)));
+    const times = new Map([...hit].map((w) => [w, 2]));
     let lines = [];
     if (hit.size !== words.length) {
       const r = await call('get_blob', { path: encryptPath(key, real) });
       if (!r.success) continue;
       let plain; try { plain = decryptBlob(key, real, Buffer.from(r.blobBase64, 'base64')).toString('utf8'); } catch { continue; }
       const folded = fold(plain);
-      for (const w of words) if (folded.includes(w)) hit.add(w);
+      for (const w of words) {
+        const count = folded.split(w).length - 1;
+        if (count) { hit.add(w); times.set(w, count); }
+      }
       if (!hit.size) continue;
       lines = matchLines(plain, words).slice(0, 3).map(({ line }) => `${real}: ${line.slice(0, 200)}`);
     }
     if (!lines.length) lines = [`${real} (path match)`];
     for (const w of hit) seen.set(w, seen.get(w) + 1);
-    found.push({ words: hit, lines });
+    found.push({ words: hit, times, lines });
   }
+  // Слово тем весомее, чем в меньшем числе заметок оно встречается; заметка тем выше, чем чаще
+  // это слово в ней самой — так «живёт во Флорианополисе» обгоняет случайное «живёт» в девлоге.
   const weight = (w) => 1 / Math.log(1 + (seen.get(w) || 1));
-  for (const f of found) f.score = [...f.words].reduce((sum, w) => sum + weight(w), 0);
+  for (const f of found) {
+    f.score = [...f.words].reduce(
+      (sum, w) => sum + weight(w) * (1 + Math.log(f.times.get(w) || 1)),
+      0,
+    );
+  }
   found.sort((a, b) => b.score - a.score);
   const hits = found.flatMap((f) => f.lines).slice(0, 40);
   return text(hits.length ? hits.join('\n') : 'no matches');
