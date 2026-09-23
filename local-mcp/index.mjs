@@ -188,25 +188,55 @@ server.registerTool('vault_list', {
   return text(paths.length ? paths.join('\n') : '(empty)');
 });
 
+// Поиск идёт по словам, а не по точной подстроке: вопрос задают фразой («где Денис живёт»),
+// а в заметке написано иначе («Сейчас живёт во Флорианополисе»). Совпадением считается заметка,
+// где встретились все слова запроса; строки с ними и показываем. Диакритика снимается, чтобы
+// «Florianópolis» и «Florianopolis» были одним словом.
+const CYR = { а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ж: 'zh', з: 'z', и: 'i', й: 'i',
+  к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f', х: 'h',
+  ц: 'c', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya' };
+
+// Одна форма записи для сравнения: без регистра, без диакритики (ё → е, ó → o) и с кириллицей,
+// переписанной латиницей, — тогда «Florianopolis» находит «Флорианополис» и наоборот.
+const fold = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  .replace(/[\u0430-\u044f]/g, (ch) => (ch in CYR ? CYR[ch] : ch));
+const wordsOf = (s) => fold(s).split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 2);
+
+function matchLines(plain, words) {
+  const scored = [];
+  for (const line of plain.split('\n')) {
+    const folded = fold(line);
+    const hits = words.filter((w) => folded.includes(w)).length;
+    if (hits) scored.push({ hits, line: line.trim() });
+  }
+  scored.sort((a, b) => b.hits - a.hits);
+  return scored;
+}
+
 server.registerTool('vault_search', {
-  description: 'Full-text search over vault notes (case-insensitive substring). Optionally limit to a path prefix. Downloads and decrypts each candidate note, so prefer narrow prefixes.',
+  description: 'Full-text search over vault notes by words (case- and accent-insensitive; a note matches when all query words occur in it, in any order or form of the line). Optionally limit to a path prefix. Downloads and decrypts each candidate note, so prefer narrow prefixes.',
   inputSchema: { query: z.string(), prefix: z.string().optional() },
 }, async ({ query, prefix }) => {
-  const q = query.toLowerCase();
+  const words = wordsOf(query);
+  if (!words.length) return text('no matches');
   const paths = (await listPaths(prefix || '')).filter((p) => p.endsWith('.md'));
-  const hits = [];
+  // Спрашивают фразой, а в заметке написано своими словами: совпадение считаем по числу слов
+  // запроса, а не требуем их все. Лучшие заметки идут первыми — остальное человек отфильтрует сам.
+  const found = [];
   for (const real of paths) {
-    if (real.toLowerCase().includes(q)) { hits.push(`${real} (path match)`); continue; }
+    const inPath = words.filter((w) => fold(real).includes(w)).length;
+    if (inPath === words.length) { found.push({ score: words.length + 1, lines: [`${real} (path match)`] }); continue; }
     const r = await call('get_blob', { path: encryptPath(key, real) });
     if (!r.success) continue;
     let plain; try { plain = decryptBlob(key, real, Buffer.from(r.blobBase64, 'base64')).toString('utf8'); } catch { continue; }
-    const idx = plain.toLowerCase().indexOf(q);
-    if (idx >= 0) {
-      const line = plain.slice(plain.lastIndexOf('\n', idx) + 1, (plain.indexOf('\n', idx) + 1 || plain.length + 1) - 1);
-      hits.push(`${real}: ${line.trim().slice(0, 200)}`);
-    }
-    if (hits.length >= 50) break;
+    const folded = fold(plain);
+    const score = words.filter((w) => folded.includes(w)).length + inPath;
+    if (!score) continue;
+    const lines = matchLines(plain, words).slice(0, 3).map(({ line }) => `${real}: ${line.slice(0, 200)}`);
+    if (lines.length) found.push({ score, lines });
   }
+  found.sort((a, b) => b.score - a.score);
+  const hits = found.flatMap((f) => f.lines).slice(0, 40);
   return text(hits.length ? hits.join('\n') : 'no matches');
 });
 
