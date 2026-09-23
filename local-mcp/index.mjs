@@ -3,7 +3,7 @@
 // Bridges Claude Code (stdio) to the remote vault-sync MCP endpoint (streamable HTTP,
 // static bearer): blobs travel encrypted, key never leaves this machine / the VPS.
 //
-// Tools: vault_read / vault_write / vault_edit / vault_append / vault_delete / vault_list / vault_search.
+// Tools: vault_read / vault_write / vault_write_file / vault_edit / vault_append / vault_delete / vault_list / vault_search.
 // Credentials: ~/.config/vault-sync/key.txt (VAULT_PASSPHRASE/VAULT_SALT_B64 lines, same
 // format as /root/vault-sync-key.txt) and ~/.config/vault-sync/mcp-token.
 // Env overrides: VAULT_MCP_URL, VAULT_MCP_TOKEN, VAULT_PASSPHRASE, VAULT_SALT_B64.
@@ -129,6 +129,22 @@ server.registerTool('vault_write', {
   const r = await call('put_blob', { path: encryptPath(key, real), blobBase64: blob.toString('base64') });
   if (!r.success) throw new Error('write failed: ' + (r.error || 'unknown'));
   return text(`ok: ${real} (${Buffer.byteLength(content)} bytes)`);
+});
+
+server.registerTool('vault_write_file', {
+  description: 'Write a binary file (screenshot, image, pdf) into the Obsidian vault. Content is base64 — the caller reads the file itself, so raw bytes never travel through a model context. Encrypted locally like any note and synced to all devices.',
+  inputSchema: {
+    path: z.string().describe('Vault path with extension, e.g. "crypto/mentor/trades/attachments/2026-09-23.jpg"'),
+    content_base64: z.string().describe('File bytes, base64'),
+  },
+}, async ({ path, content_base64 }) => {
+  const real = checkPath(path);
+  const bytes = Buffer.from(content_base64, 'base64');
+  if (!bytes.length) throw new Error('empty file: ' + real);
+  const blob = encryptBlob(key, real, bytes);
+  const r = await call('put_blob', { path: encryptPath(key, real), blobBase64: blob.toString('base64') });
+  if (!r.success) throw new Error('write failed: ' + (r.error || 'unknown'));
+  return text(`ok: ${real} (${bytes.length} bytes)`);
 });
 
 server.registerTool('vault_append', {
