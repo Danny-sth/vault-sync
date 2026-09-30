@@ -96,14 +96,18 @@ function checkPath(p) {
   return p;
 }
 
-async function listPaths(prefix) {
+async function listPaths(prefix, sinceMs) {
   const r = await call('list_blobs', {});
   const out = [];
   for (const b of r.blobs || []) {
+    if (sinceMs && !(b.mtime > sinceMs)) continue;
     let real; try { real = decryptPath(key, b.path); } catch { continue; }
-    if (!prefix || real.startsWith(prefix)) out.push(real);
+    if (prefix && !real.startsWith(prefix)) continue;
+    out.push({ path: real, mtime: b.mtime });
   }
-  return out.sort();
+  // С since — новое сверху (сам факт свежести и есть смысл запроса); без — алфавит, как раньше.
+  out.sort(sinceMs ? (a, b) => b.mtime - a.mtime : (a, b) => a.path.localeCompare(b.path));
+  return out.map((o) => o.path);
 }
 
 const text = (s) => ({ content: [{ type: 'text', text: s }] });
@@ -197,10 +201,12 @@ server.registerTool('vault_delete', {
 });
 
 server.registerTool('vault_list', {
-  description: 'List vault note paths, optionally filtered by a path prefix like "Coding/" or "Daily/".',
-  inputSchema: { prefix: z.string().optional() },
-}, async ({ prefix }) => {
-  const paths = await listPaths(prefix || '');
+  description: 'List vault note paths, optionally filtered by a path prefix like "Coding/" or "Daily/". ' +
+    'With `since` (Unix ms), returns only notes modified after that time, newest first — use this to ' +
+    'see what actually changed instead of re-reading the whole vault.',
+  inputSchema: { prefix: z.string().optional(), since: z.number().optional() },
+}, async ({ prefix, since }) => {
+  const paths = await listPaths(prefix || '', since);
   return text(paths.length ? paths.join('\n') : '(empty)');
 });
 
