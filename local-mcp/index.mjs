@@ -166,7 +166,7 @@ server.registerTool('vault_append', {
 });
 
 server.registerTool('vault_edit', {
-  description: 'Edit a note by EXACT string replacement — changes ONLY the matched fragment, the rest of the note stays intact. This is THE tool for точечные правки existing notes (безопаснее vault_write, который перезаписывает всё). old_string must match the current note text verbatim (read it first with vault_read); if it is not unique, extend it or pass replace_all=true.',
+  description: 'Edit a note by EXACT string replacement — changes ONLY the matched fragment, the rest of the note stays intact. This is THE tool for targeted edits to existing notes (safer than vault_write, which overwrites everything). old_string must match the current note text verbatim (read it first with vault_read); if it is not unique, extend it or pass replace_all=true.',
   inputSchema: {
     path: z.string().describe('Vault path, e.g. "Coding/duq/Roadmap.md"'),
     old_string: z.string().describe('Exact existing fragment to replace (verbatim match)'),
