@@ -17,6 +17,15 @@ spring:
     multipart:
       max-file-size: 100MB
       max-request-size: 100MB
+  mvc:
+    async:
+      # MCP Streamable HTTP держит ответ в async-режиме; если клиент обрывает
+      # соединение не по протоколу (FIN без штатного MCP close), Spring сам
+      # этого не замечает и async-контекст висит вечно — сокет остаётся в
+      # CLOSE_WAIT навсегда (инцидент 2026-10-01: ~1800 таких сокетов забили
+      # Tomcat maxConnections, сервер перестал отвечать даже на localhost).
+      # Таймаут принудительно завершает зависший async-контекст.
+      request-timeout: 60000
 
 vault-sync:
   storage-path: /opt/obsidian-vault

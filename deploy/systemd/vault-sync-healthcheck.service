@@ -1,0 +1,7 @@
+[Unit]
+Description=vault-sync health check (restart on hang)
+After=vault-sync.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/vault-sync/healthcheck.sh

@@ -82,6 +82,13 @@ if [ -n "${JAR_CHANGED:-}${CFG_CHANGED:-}" ] || ! systemctl is-active -q vault-s
 for i in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:8444/actuator/health && break; sleep 2; done
 curl -sf -o /dev/null http://127.0.0.1:8444/actuator/health || { journalctl -u vault-sync -n 30 --no-pager; echo "vault-sync не поднялся" >&2; exit 1; }
 
+log "watchdog (авторестарт при зависании — инцидент 2026-10-01)"
+install -m 755 "$DEPLOY/scripts/healthcheck.sh" "$OPT/healthcheck.sh"
+install -m 644 "$DEPLOY/systemd/vault-sync-healthcheck.service" /etc/systemd/system/vault-sync-healthcheck.service
+install -m 644 "$DEPLOY/systemd/vault-sync-healthcheck.timer" /etc/systemd/system/vault-sync-healthcheck.timer
+systemctl daemon-reload
+systemctl enable --now vault-sync-healthcheck.timer >/dev/null 2>&1
+
 # TLS и публичный вход ПЕРЕЕХАЛИ в стек mallard (2026-09-19): домен on-za-menya.online принадлежит
 # Даку, его edge (nginx+certbot) держит 80/443 и обслуживает vault.on-za-menya.online → сюда, :8444.
 # Здесь edge не поднимаем; устройства ходят напрямую ws://<ip>:8444.
@@ -111,3 +118,11 @@ WS=$(code --http1.1 -m 5 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Se
 echo "api=$API (200) noauth=$NOAUTH (401) mcp-noauth=$MCP (401) ws=$WS (101)"
 [ "$API" = 200 ] && [ "$NOAUTH" = 401 ] && [ "$MCP" = 401 ] && [ "$WS" = 101 ] \
   && echo "OK: vault-sync развёрнут" || { echo "FAIL: проверки не прошли" >&2; exit 1; }
+
+# Инцидент 2026-10-01: накопление CLOSE_WAIT на :8444 забило Tomcat maxConnections и
+# сервер перестал отвечать. spring.mvc.async.request-timeout теперь лечит причину —
+# это просто ранний сигнал, если она вернётся (не валит деплой, только предупреждает).
+CLOSE_WAIT=$(ss -tn "( sport = :8444 or dport = :8444 )" 2>/dev/null | grep -c CLOSE-WAIT || true)
+[ "$CLOSE_WAIT" -gt 200 ] 2>/dev/null \
+  && echo "WARN: $CLOSE_WAIT сокетов в CLOSE_WAIT на :8444 — похоже на утечку соединений (см. инцидент 2026-10-01)" >&2 \
+  || echo "close_wait=$CLOSE_WAIT"

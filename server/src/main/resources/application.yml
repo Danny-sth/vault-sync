@@ -41,6 +41,10 @@ spring:
     virtual:
       enabled: true
 
+  mvc:
+    async:
+      request-timeout: 60000
+
 vault-sync:
   storage-path: ${VAULT_SYNC_STORAGE:/opt/vault-sync/files}
   token: ${VAULT_SYNC_TOKEN:}
