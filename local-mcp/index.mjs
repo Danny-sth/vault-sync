@@ -183,7 +183,9 @@ server.registerTool('vault_edit', {
   const count = content.split(old_string).length - 1;
   if (count === 0) throw new Error(`old_string не найдена в ${real}: ${old_string.slice(0, 60)}…`);
   if (count > 1 && !replace_all) throw new Error(`old_string не уникальна (${count} совпадений) — расширь фрагмент или передай replace_all=true`);
-  const updated = replace_all ? content.split(old_string).join(new_string) : content.replace(old_string, new_string);
+  // Замена функцией: строковый new_string JS трактует как шаблон ($`, $', $&, $1) — 15.10.2026 `$`` в правке
+  // вставил весь текст до совпадения, и заметка Architecture-Now удвоилась.
+  const updated = replace_all ? content.split(old_string).join(new_string) : content.replace(old_string, () => new_string);
   const blob = encryptBlob(key, real, Buffer.from(updated, 'utf8'));
   const r = await call('put_blob', { path: encryptPath(key, real), blobBase64: blob.toString('base64') });
   if (!r.success) throw new Error('edit failed: ' + (r.error || 'unknown'));
