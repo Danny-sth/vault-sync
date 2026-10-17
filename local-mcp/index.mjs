@@ -3,7 +3,7 @@
 // Bridges Claude Code (stdio) to the remote vault-sync MCP endpoint (streamable HTTP,
 // static bearer): blobs travel encrypted, key never leaves this machine / the VPS.
 //
-// Tools: vault_read / vault_write / vault_write_file / vault_edit / vault_append / vault_delete / vault_list / vault_search.
+// Tools: vault_read / vault_write / vault_write_file / vault_read_file / vault_edit / vault_append / vault_delete / vault_list / vault_search.
 // Credentials: ~/.config/vault-sync/key.txt (VAULT_PASSPHRASE/VAULT_SALT_B64 lines, same
 // format as /root/vault-sync-key.txt) and ~/.config/vault-sync/mcp-token.
 // Env overrides: VAULT_MCP_URL, VAULT_MCP_TOKEN, VAULT_PASSPHRASE, VAULT_SALT_B64.
@@ -149,6 +149,16 @@ server.registerTool('vault_write_file', {
   const r = await call('put_blob', { path: encryptPath(key, real), blobBase64: blob.toString('base64') });
   if (!r.success) throw new Error('write failed: ' + (r.error || 'unknown'));
   return text(`ok: ${real} (${bytes.length} bytes)`);
+});
+
+server.registerTool('vault_read_file', {
+  description: 'Read a binary file (image, pdf) from the Obsidian vault as base64 \u2014 the counterpart of vault_write_file. For services that forward the bytes themselves (e.g. send an attachment to a chat); not for model context.',
+  inputSchema: { path: z.string().describe('Vault path with extension, e.g. "crypto/mentor/trades/attachments/2026-09-23.jpg"') },
+}, async ({ path }) => {
+  const real = checkPath(path);
+  const r = await call('get_blob', { path: encryptPath(key, real) });
+  if (!r.success) throw new Error('not found: ' + real);
+  return text(decryptBlob(key, real, Buffer.from(r.blobBase64, 'base64')).toString('base64'));
 });
 
 server.registerTool('vault_append', {
