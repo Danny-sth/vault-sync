@@ -286,10 +286,12 @@ export default class VaultSyncPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const { settings, save } = resolveSettings(await this.loadData());
+    const stored = await this.loadData();
+    const { settings, save } = resolveSettings(stored);
     this.settings = settings;
     if (save) {
       await this.saveSettings();
+      if (stored?.deviceId) new Notice(`Vault Sync: Device ID «${stored.deviceId}» → ${settings.deviceId}`);
     }
   }
 
@@ -387,8 +389,15 @@ class VaultSyncSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Device ID')
-      .setDesc('Unique identifier for this device (UUID, assigned automatically)')
-      .addText((text) => text.setValue(this.plugin.settings.deviceId).setDisabled(true));
+      .setDesc('Unique identifier for this device — UUID; any other value is replaced with a new UUID on the next start')
+      .addText((text) =>
+        text
+          .setValue(this.plugin.settings.deviceId)
+          .onChange(async (value) => {
+            this.plugin.settings.deviceId = value;
+            await this.plugin.saveSettings();
+          })
+      );
 
     new Setting(containerEl)
       .setName('Device Name')
