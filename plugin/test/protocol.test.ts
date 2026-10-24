@@ -354,3 +354,45 @@ describe('конфликты и resurrection', () => {
     a.stop(); b.stop();
   });
 });
+
+describe('устаревшая выгрузка файла без базы (баг 2026-10-23: телефон затёр Daily-заметки Дака)', () => {
+  // Файл создан на устройстве, пока оно было офлайн (шаблон Daily), а на сервере по этому
+  // пути уже лежит более новая версия. У устройства нет базового хэша, и выгрузка уходит
+  // раньше, чем догонялка скачает серверную версию (отложенная операция или вотчер).
+  const paths = ['Daily/2026-10-22.md', 'note.md', 'deep/nested/dir/file.txt'];
+
+  for (const path of paths) {
+    for (const via of ['watcher', 'pending-queue'] as const) {
+      it(`${via}: ${path} — серверная версия цела, локальная уходит в conflict-копию`, async () => {
+        const phone = await bootDevice('phone');
+        const duq = await bootDevice('duq');
+        phone.stomp.disconnect(); // телефон офлайн
+        await phone.writeLocal(path, 'шаблон телефона');
+
+        await duq.writeLocal(path, 'записи Дака за день');
+        await duq.scan();
+        const serverHash = server.files.get(path)!.hash;
+
+        if (via === 'watcher') {
+          phone.stomp.goOnline(); // онлайн, но догонялка ещё не скачала дельту
+          await phone.scan();
+        } else {
+          await phone.scan(); // офлайн → pending-операция
+          phone.stomp.goOnline();
+          await (phone.sm as any).processPendingOperations(); // очередь раньше дельты
+        }
+
+        expect(server.files.get(path)!.hash).toBe(serverHash);
+        expect(new TextDecoder().decode(server.files.get(path)!.content)).toBe('записи Дака за день');
+
+        await phone.connectAndSync();
+        expect(await phone.readLocal(path)).toBe('записи Дака за день');
+        const copy = phone.localPaths().find(p => p.includes('(conflict'));
+        expect(copy).toBeDefined();
+        expect(await phone.readLocal(copy!)).toBe('шаблон телефона');
+        expect(new TextDecoder().decode(server.files.get(path)!.content)).toBe('записи Дака за день');
+        phone.stop(); duq.stop();
+      });
+    }
+  }
+});

@@ -151,6 +151,16 @@ WantedBy=multi-user.target
    - Other `.obsidian/*`: Local wins
    - Vault files: Newest wins (mtime)
 
+### Upload-time concurrency (server, `POST /api/upload-finalize`)
+
+An upload is accepted only if the server's current version is the one the device last saw
+(`X-Base-Hash`) or already equals the uploaded content. An **empty base** is not a free pass:
+it means "the device never saw this path" (e.g. a Daily note created offline from a template).
+If the path already exists on the server with different content the upload gets HTTP 409, the
+plugin adopts the server version and keeps its own as a `(conflict …)` copy. This covers every
+upload route — file watcher, pending-operations queue, catch-up — so a stale or late device can
+never overwrite a newer server version (incident 2026-10-23: phone overwrote Duq's Daily notes).
+
 ## Security
 
 - Token-based authentication (constant-time comparison)

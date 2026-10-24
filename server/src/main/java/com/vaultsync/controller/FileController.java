@@ -126,9 +126,14 @@ public class FileController {
             }
 
             FileRecord existing = fileStorageService.getFileInfo(path);
-            if (existing != null && baseHash != null && !baseHash.isBlank()) {
+            // Empty base = the device never saw this path (e.g. a note created offline from a
+            // template while the server moved on). That is a creation, not an edit: it must not
+            // silently replace a different version already stored — reject, the client then
+            // adopts the server copy and keeps its own as a conflict copy.
+            if (existing != null) {
                 String incomingHash = HashUtil.sha256(tmp);
-                if (!existing.getHash().equals(incomingHash) && !existing.getHash().equals(baseHash)) {
+                String base = baseHash == null ? "" : baseHash;
+                if (!existing.getHash().equals(incomingHash) && !existing.getHash().equals(base)) {
                     log.warn("Upload conflict for {} by {}: base={} but server={} — rejected",
                             path, deviceId, baseHash, existing.getHash());
                     Files.deleteIfExists(tmp);

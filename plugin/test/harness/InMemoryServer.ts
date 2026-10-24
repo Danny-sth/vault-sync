@@ -50,7 +50,10 @@ export class InMemoryServer {
       }
     }
     const existing = this.files.get(path);
-    if (existing && baseHash !== '') {
+    // Пустая база = «я не видел этот путь»: это создание, а не правка. Если путь уже есть
+    // на сервере с другим содержимым, молча перезаписывать нельзя (устройство могло
+    // создать файл офлайн, пока сервер ушёл вперёд) — клиент сверится и сохранит свою копию.
+    if (existing) {
       if (existing.hash !== hash && existing.hash !== baseHash) {
         return { status: 409, error: 'conflict', currentHash: existing.hash };
       }
