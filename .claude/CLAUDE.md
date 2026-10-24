@@ -189,7 +189,7 @@ git clone https://github.com/Danny-sth/vault-sync.git /root/vault-sync
 ```
 
 `install.sh` идемпотентен и сам проверяет результат (api 200 / без токена 401 / mcp 401 / ws 101 /
-MCP отвечает по токену). VPS: `187.124.131.127`, домен `on-za-menya.online`, пароль SSH — в Creds.
+MCP отвечает по токену). VPS: `187.124.131.127`, домен `on-za-menya.online`, вход по SSH-ключу ~/.ssh/id_ed25519 (пароль отключён 10.10.2026).
 Прод-порт **8444 (http, за nginx TLS)**. Конфиг прод: `/opt/vault-sync/application.yml` (рендерится
 из шаблона). H2: `/opt/vault-sync/data`. Файлы волта (source of truth): `/opt/obsidian-vault`.
 
