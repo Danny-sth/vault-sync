@@ -79,8 +79,7 @@ export class SyncApiClient {
     const CHUNK_SIZE = 1024 * 1024; // 1 MiB
     const CONCURRENCY = 4; // parallel chunk uploads — bounded so memory stays small
     const total = Math.max(1, Math.ceil(content.byteLength / CHUNK_SIZE));
-    const uploadId = `${this.settings.deviceId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-      .replace(/[^A-Za-z0-9_.-]/g, '-');
+    const uploadId = crypto.randomUUID();
 
     // Upload chunks concurrently — each is written at its byte offset, so order doesn't
     // matter. A shared cursor hands out the next chunk index to each worker.

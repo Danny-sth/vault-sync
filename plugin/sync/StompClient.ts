@@ -221,7 +221,7 @@ export class StompClient {
         return;
       }
 
-      const requestId = this.generateRequestId();
+      const requestId = crypto.randomUUID();
 
       const timeout = setTimeout(() => {
         this.pendingRequests.delete(requestId);
@@ -241,9 +241,5 @@ export class StompClient {
 
       console.debug(`[VaultSync] Sent sync request ${requestId} (lastSeq=${lastSeq})`);
     });
-  }
-
-  private generateRequestId(): string {
-    return `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
   }
 }

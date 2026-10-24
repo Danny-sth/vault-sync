@@ -85,7 +85,7 @@ export interface VaultSyncSettings {
 export const DEFAULT_SETTINGS: VaultSyncSettings = {
   serverUrl: '',
   token: '',
-  deviceId: `device-${Math.random().toString(36).substring(2, 10)}`,
+  deviceId: '',
   deviceName: '',
   autoConnect: true,
   syncOnStart: true,

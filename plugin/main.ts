@@ -7,6 +7,7 @@ import { PdfProgress } from './pdf/PdfProgress';
 import { DailyNotes } from './daily/DailyNotes';
 import { ReadingDashboard } from './pdf/ReadingDashboard';
 import { VaultSyncSettings, DEFAULT_SETTINGS } from './types';
+import { resolveSettings } from './settings';
 
 export default class VaultSyncPlugin extends Plugin {
   settings: VaultSyncSettings = DEFAULT_SETTINGS;
@@ -285,12 +286,9 @@ export default class VaultSyncPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const stored = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, stored);
-    // DEFAULT_SETTINGS generates a random deviceId per plugin load — persist the first
-    // one immediately, otherwise the id changes on every restart until the user happens
-    // to save settings, breaking self-echo filtering and conflict-copy attribution.
-    if (!stored?.deviceId) {
+    const { settings, save } = resolveSettings(await this.loadData());
+    this.settings = settings;
+    if (save) {
       await this.saveSettings();
     }
   }
@@ -389,15 +387,8 @@ class VaultSyncSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Device ID')
-      .setDesc('Unique identifier for this device')
-      .addText((text) =>
-        text
-          .setValue(this.plugin.settings.deviceId)
-          .onChange(async (value) => {
-            this.plugin.settings.deviceId = value;
-            await this.plugin.saveSettings();
-          })
-      );
+      .setDesc('Unique identifier for this device (UUID, assigned automatically)')
+      .addText((text) => text.setValue(this.plugin.settings.deviceId).setDisabled(true));
 
     new Setting(containerEl)
       .setName('Device Name')
