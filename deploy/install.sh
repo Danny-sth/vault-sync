@@ -37,12 +37,14 @@ done
 log "пакеты"
 export DEBIAN_FRONTEND=noninteractive
 need=()
-for p in git curl openjdk-21-jdk-headless maven nodejs docker.io docker-compose-v2 fail2ban ufw gettext-base; do
+for p in git curl openjdk-21-jdk-headless maven nodejs fail2ban ufw gettext-base; do
   dpkg -s "$p" >/dev/null 2>&1 || need+=("$p")
 done
 # nodejs может стоять не из apt (nodesource) — тогда не трогаем
 command -v node >/dev/null && need=("${need[@]/nodejs}")
 if [ -n "$(echo "${need[@]:-}" | tr -d ' ')" ]; then apt-get update -qq && apt-get install -y -qq ${need[@]}; fi
+# Docker не из apt-пакетов docker.io/docker-compose-v2 (они конфликтуют с docker-ce хоста Duq): его ставит deploy/install-host.sh Duq.
+command -v docker >/dev/null || { echo "нет docker: поставь docker-ce (sh deploy/install-host.sh в клоне Duq) и повтори" >&2; exit 1; }
 systemctl enable --now docker >/dev/null
 
 log "код (git pull)"
